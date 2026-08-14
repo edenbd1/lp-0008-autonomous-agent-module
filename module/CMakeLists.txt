@@ -26,4 +26,6 @@ logos_module(
         src/agent_module_interface.h
         src/agent_module_plugin.h
         src/agent_module_plugin.cpp
+        src/messaging_skills.h
+        src/messaging_skills.cpp
 )
