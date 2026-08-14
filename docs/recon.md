@@ -66,3 +66,43 @@ Everything else is work; these two are the ones that decide it.
 
 Both are on-chain, publicly checkable, and neither can be faked with a localnet
 recording. They set the shape of the whole build.
+
+## Building a module without Nix
+
+The blessed path is `logos-module-builder`, a Nix flake library. Nix is not
+installed here, and it does not have to be: the generated `CMakeLists.txt` looks
+for the helper in three places, and the environment variable comes first.
+
+```cmake
+if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
+    include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/LogosModule.cmake")
+    ...
+```
+
+So pointing `LOGOS_MODULE_BUILDER_ROOT` at a checkout of the builder makes plain
+CMake work. Confirmed available locally: cmake 4.1.2, qmake 3.1, Qt via
+Homebrew. No ninja, no nix.
+
+### The four files a module is
+
+```
+metadata.json     name, version, type "core", category, main plugin, deps
+CMakeLists.txt    include LogosModule.cmake, then logos_module(NAME .. SOURCES ..)
+src/<n>_interface.h
+src/<n>_plugin.h      class <N>ModuleImpl : public LogosModuleContext
+src/<n>_plugin.cpp
+```
+
+`metadata.json` also carries a `nix` section — build/runtime packages, external
+libraries with a `vendor_path`, and extra CMake include dirs and link libraries.
+That is where Logos Storage and Logos Delivery get wired in, the way the
+migrated Waku example vendors `waku` from `lib/`.
+
+### Where this leaves the risk
+
+The unknown is no longer "can we build a module" — it is which of Storage's and
+Delivery's C ABIs we have to drive, and their lifecycles. Delivery's is already
+documented in its plugin header: `createNode` once, `start` before any message
+operation, completion by event, `entryLayer` choosing how much of the stack
+mounts.
