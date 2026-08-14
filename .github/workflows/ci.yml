@@ -89,7 +89,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake nlohmann-json3-dev \
+            build-essential clang cmake nlohmann-json3-dev \
             qt6-base-dev qt6-remoteobjects-dev
 
       # The builder is a Nix flake, but its CMake helper is located from
@@ -126,6 +126,13 @@ jobs:
           LOGOS_MODULE_BUILDER_ROOT: ${{ github.workspace }}/_external/logos-module-builder
           LOGOS_MODULE_ROOT: ${{ github.workspace }}/_external/logos-module
           LOGOS_CPP_SDK_ROOT: ${{ github.workspace }}/_external/logos-cpp-sdk
+          # The SDK's ScopedQArg does not compile under GCC 13 — an overload GCC
+          # rejects and Clang accepts. It is upstream's code, not ours, and the
+          # dev machine builds it with Apple Clang, which is why this only ever
+          # showed on Linux. Use the compiler the source is known to work with
+          # rather than patching a vendored dependency.
+          CC: clang
+          CXX: clang++
         run: |
           cmake -S module -B build
           cmake --build build
