@@ -18,13 +18,13 @@ shadowing another's `wallet.send` is not a hypothetical.
 | Blockchain | `wallet.balance`, `wallet.history` | reads over JSON-RPC |
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet |
 | Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
-| Storage | `storage.*` | interface defined, binding not written |
+| Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
 
 The last two rows are the honest part. The messaging skills are written against
 Delivery's real signatures — `send(contentTopic, payload)`, `subscribe`,
 `channelCreate` — and they compile, but "compiles" is not "works": nothing here
-claims they deliver a message until one has been sent and seen. Storage's ABI has
-not been read.
+claims they deliver a message until one has been sent and seen. Both ABIs have now been read off their
+module headers rather than guessed.
 
 Two things the messaging code does that a stub would not. It **refuses** when the
 node is not started rather than returning success, because `start` returns as
@@ -34,8 +34,15 @@ into a node that may not be up. And `create_group` opens a **reliable channel**
 rather than a bare topic, since group traffic that silently drops messages is
 worse than a group that fails to open.
 
-The `DeliveryPort` indirection is there so the skills can be exercised against a
-fake, and so the agent module does not link Delivery directly.
+Storage makes one point of its own. Content addressing means `storage.share` has
+nothing to copy and no permission to grant — sharing is *sending someone the
+address*, which is a messaging act. So it takes both ports and reports which half
+failed, rather than pretending a delivery failure is a storage failure.
+`storage.download` asks `exists` first, so an unknown address is reported as
+unknown instead of as a download that failed for unstated reasons.
+
+The `DeliveryPort` and `StoragePort` indirections are there so the skills can be
+exercised against a fake, and so the agent module does not link either directly.
 
 ## What binding them needs
 

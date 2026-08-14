@@ -28,4 +28,6 @@ logos_module(
         src/agent_module_plugin.cpp
         src/messaging_skills.h
         src/messaging_skills.cpp
+        src/storage_skills.h
+        src/storage_skills.cpp
 )
