@@ -1,0 +1,7 @@
+target/
+.demo*/
+*.mov
+*.mp4
+artifacts/e2e/dist*/
+.DS_Store
+build/

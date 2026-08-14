@@ -1,0 +1,68 @@
+# The stack this has to sit in
+
+Written before any code, from the upstream repositories rather than from the
+prize text, because the five closed LP-0008 submissions failed on evidence and
+integration, not on agent logic.
+
+## What the four moving parts actually are
+
+| Prize wording | Real component | Language | Last touched |
+|---|---|---|---|
+| Logos Core module | `logos-co/logos-module-loader-qt` | C++ | 2026-08-11 |
+| Logos Storage | `logos-co/logos-storage-module` | C++ | 2026-08-13 |
+| Logos Messaging | `logos-co/logos-delivery-module` (wraps `liblogosdelivery`) | C++ | 2026-08-08 |
+| Headless deploy | `logos-co/logos-logoscore-cli` | C++ | 2026-08-12 |
+
+All four are alive — every one updated within a week of 2026-08-14. That matters:
+the API can move under us, so anything we pin needs a recorded revision, the way
+`vendor/spel` is pinned in LP-0002 and LP-0003.
+
+## The module contract
+
+A Logos Core module is a plugin pair plus a handler:
+
+```
+src/<name>_module_plugin.h      class <Name>ModuleImpl : public LogosModuleContext
+src/<name>_module_plugin.cpp
+src/api_call_handler.h
+```
+
+- Includes `logos_module_context.h` and `logos_result.h`.
+- Asynchronous events are declared in `logos_events:` sections; codegen emits the
+  bodies, which route through `LogosModuleContext::emitEventImpl_`.
+- Messaging has a lifecycle to respect: `createNode` once per context, `start`
+  before any message operation, `stop` before shutdown. `start`/`stop` are
+  dispatch-and-return; completion arrives as `nodeStarted` / `nodeStopped`
+  events.
+- `entryLayer` selects how much of the delivery stack is mounted: `kernel`
+  (transport only), `messaging` (kernel + client), `channels` (adds reliable
+  channels, the default).
+- Content topics follow <https://lip.logos.co/messaging/informational/23/topics.html>.
+
+## Why the previous five were closed
+
+Not for the agent being weak. Quoted from the threads:
+
+- **#99 duongja** — "there is no visible proof of agents activity on the
+  testnet"; "the video in application showcases **localnet only**"; "e2e
+  integration tests doesn't seem to run at all"; "`demo.sh` doesn't run".
+- **#88 retraca** — "Please include a video walkthrough in line with the
+  requirements."
+- **#81, #85 retraca** — closed the same day on failing submission validation.
+- **#34 Beach-Bum** — closed without comment.
+
+Every one of those is an evidence failure. The reviewers check the public
+testnet, they check that CI genuinely runs, and they watch the video for the
+terminal. That is the part to build first, not last.
+
+## The two hardest criteria
+
+Everything else is work; these two are the ones that decide it.
+
+1. **Three agents deployed on LEZ testnet**, one per skill category (Storage,
+   Messaging, Blockchain), each with reproducible deployment and evidence.
+2. **Two agents discover each other via Agent Cards, run an A2A task lifecycle,
+   and transfer LEZ payment autonomously** — no owner in the loop.
+
+Both are on-chain, publicly checkable, and neither can be faked with a localnet
+recording. They set the shape of the whole build.
