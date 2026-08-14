@@ -95,14 +95,27 @@ jobs:
       # LOGOS_MODULE_BUILDER_ROOT first, so checkouts are enough and CI does not
       # need Nix. Pinned revisions, not default branches: these move weekly, and
       # an upstream commit should not turn this red without a change of ours.
+      # Pinned revisions, not default branches. These four move weekly, and an
+      # upstream commit must not turn this red without a change of ours — which
+      # is exactly what happened on the first run: a newer builder introduced a
+      # dependency on logos-qt-sdk that the local checkout did not have.
       - name: Check out the Logos module toolchain
+        env:
+          BUILDER_REV: 9d3b7cc1f5a283d056e21c077bafb49f1b00e24f
+          MODULE_REV:  9812dc8c69cfbfed3eea06510a5c1ff33c1fcf7f
+          CPP_SDK_REV: e3744fb84ceff2dc7cb1630a1301bb93c64d7a8a
+          QT_SDK_REV:  c6be61d0ba3f1c06c1a5ff7ad6d42f3eda254877
         run: |
-          git clone --filter=blob:none https://github.com/logos-co/logos-module-builder _external/logos-module-builder
-          git clone --filter=blob:none https://github.com/logos-co/logos-module          _external/logos-module
-          git clone --filter=blob:none https://github.com/logos-co/logos-cpp-sdk         _external/logos-cpp-sdk
-          for d in logos-module-builder logos-module logos-cpp-sdk; do
-            echo "$d at $(git -C _external/$d rev-parse --short HEAD)"
-          done
+          set -e
+          clone() {
+            git clone --filter=blob:none "https://github.com/logos-co/$1" "_external/$1"
+            git -C "_external/$1" checkout --quiet "$2"
+            echo "$1 at $(git -C _external/$1 rev-parse --short HEAD)"
+          }
+          clone logos-module-builder "$BUILDER_REV"
+          clone logos-module          "$MODULE_REV"
+          clone logos-cpp-sdk         "$CPP_SDK_REV"
+          clone logos-qt-sdk          "$QT_SDK_REV"
 
       - name: Build the module
         env:
