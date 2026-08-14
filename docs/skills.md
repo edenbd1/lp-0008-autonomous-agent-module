@@ -75,3 +75,29 @@ Every closed LP-0008 submission fell on evidence rather than on features — no
 visible testnet activity, a video showing localnet, e2e that never ran. Skills
 that cannot be checked from outside the repository do not answer that. A spend
 that the chain refused above the threshold does.
+
+## What actually blocks a running node
+
+Checked rather than assumed, by cloning the module and reading its manifest.
+
+`logos-delivery-module`'s `metadata.json` declares two `external_libraries`:
+`logosdelivery` and `rln`. Neither is vendored in the repository — they are
+supplied by the Nix flake, and `nix` is not installed here. The C++ wrapper is
+small (1.8 MB checked out) and would build in minutes; the C libraries under it
+are the blocker. `logos-storage-module` is the same shape and considerably
+larger.
+
+So the gap between "the skills compile and their behaviour is tested" and "a
+message went out" is not more code. It is one of:
+
+- install Nix and build both modules through their flakes, which is the path
+  upstream supports;
+- obtain prebuilt `liblogosdelivery` and `librln` and vendor them under `lib/`,
+  the way the migrated Waku example vendors `waku`;
+- run the modules from a Logos Core distribution that already ships them, and
+  drive them over Qt Remote Objects rather than linking.
+
+The third is closest to how the agent will actually run — Logos Core loads
+wallet, storage and messaging alongside the agent module — and is the one to try
+first. `scripts/exercise-nodes.sh` records what that run has to do and exits
+non-zero until it does it.
