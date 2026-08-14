@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to avoid an email flood.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Policy primitive and its adversarial tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # `--locked` throughout. Without it cargo re-resolves to the newest
+      # compatible dependencies and ignores the committed lock, which is how a
+      # build that was green yesterday goes red today on an upstream release
+      # rather than on a change of ours.
+      - name: Build
+        run: cargo build --workspace --release --locked
+
+      - name: Test
+        run: cargo test --workspace --release --locked
+
+  binaries:
+    name: The committed program matches its recorded ImageID
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The guest is content-addressed and committed under artifacts/programs/.
+      # Rebuilding it needs the risc0 docker toolchain and is done locally;
+      # docs/DEPLOYMENT.md records the reproduction. This asserts the committed
+      # binary still hashes to the deployed transaction, so a tampered binary
+      # fails CI without a full guest rebuild.
+      - name: Deploy hash matches the live transaction
+        run: |
+          set -e
+          got=$(python3 -c "
+          import hashlib,struct
+          b=open('artifacts/programs/agent_verifier.bin','rb').read()
+          print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
+          want=1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c
+          if [ "$got" != "$want" ]; then
+            echo "deploy hash drifted: got $got, expected $want"; exit 1
+          fi
+          echo "OK $got"
+
+      # The deployed program is only evidence while it is actually on chain, so
+      # ask the sequencer rather than trusting the hash alone. A cannot-exist
+      # hash is the control: if the RPC answered non-null to everything, the
+      # check above it would be meaningless.
+      - name: The program is live on the public testnet
+        run: |
+          set -e
+          q() {
+            curl -s -m 30 -X POST https://testnet.lez.logos.co \
+              -H 'Content-Type: application/json' \
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"
+          }
+          real=$(q 1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c)
+          ctrl=$(q dededededededededededededededededededededededededededededededede)
+          echo "$real" | grep -q '"result":\[' || { echo "deploy not on chain: $real"; exit 1; }
+          echo "$ctrl" | grep -q '"result":null' || { echo "control did not return null: $ctrl"; exit 1; }
+          echo "OK deploy present, control null"
+
+  module:
+    name: The agent module builds as a Logos Core plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake qt6-base-dev nlohmann-json3-dev
+
+      # The builder is a Nix flake, but its CMake helper is located from
+      # LOGOS_MODULE_BUILDER_ROOT first, so checkouts are enough and CI does not
+      # need Nix. Pinned revisions, not default branches: these move weekly, and
+      # an upstream commit should not turn this red without a change of ours.
+      - name: Check out the Logos module toolchain
+        run: |
+          git clone --filter=blob:none https://github.com/logos-co/logos-module-builder _external/logos-module-builder
+          git clone --filter=blob:none https://github.com/logos-co/logos-module          _external/logos-module
+          git clone --filter=blob:none https://github.com/logos-co/logos-cpp-sdk         _external/logos-cpp-sdk
+          for d in logos-module-builder logos-module logos-cpp-sdk; do
+            echo "$d at $(git -C _external/$d rev-parse --short HEAD)"
+          done
+
+      - name: Build the module
+        env:
+          LOGOS_MODULE_BUILDER_ROOT: ${{ github.workspace }}/_external/logos-module-builder
+          LOGOS_MODULE_ROOT: ${{ github.workspace }}/_external/logos-module
+          LOGOS_CPP_SDK_ROOT: ${{ github.workspace }}/_external/logos-cpp-sdk
+        run: |
+          cmake -S module -B build
+          cmake --build build
+          find build \( -name '*.so' -o -name '*.dylib' \) -print -quit | grep . \
+            || { echo "no plugin artefact produced"; exit 1; }
