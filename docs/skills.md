@@ -97,7 +97,17 @@ message went out" is not more code. It is one of:
 - run the modules from a Logos Core distribution that already ships them, and
   drive them over Qt Remote Objects rather than linking.
 
-The third is closest to how the agent will actually run — Logos Core loads
-wallet, storage and messaging alongside the agent module — and is the one to try
-first. `scripts/exercise-nodes.sh` records what that run has to do and exits
+All three were checked on this machine, not reasoned about:
+
+- **Nix** — not installed.
+- **Vendored libraries** — `lib/` does not exist in either module's repository.
+- **A Logos Core distribution** — `LogosBasecamp.app` 0.2.2 ships exactly one
+  module, `capability_module`. No delivery, no storage. The two matching dylibs
+  in the bundle are Qt's own (`libqmldbg_messages`, `libqmllocalstorageplugin`),
+  not Logos libraries.
+
+So the shortest path is the first: install Nix, build both modules through their
+flakes, and point the skills at the running nodes. That is a setup step, not a
+design question — the ports are already there and their behaviour is already
+tested. `scripts/exercise-nodes.sh` records what that run has to do and exits
 non-zero until it does it.
