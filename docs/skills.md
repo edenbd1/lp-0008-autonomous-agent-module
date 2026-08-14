@@ -143,7 +143,24 @@ not run, which is the standard applied to everything else in this repository.
 
 ### Storage
 
-Same shape: `libstorage` comes from
+Same shape, same answer: `libstorage` comes from
 [`logos-storage/logos-storage-nim`](https://github.com/logos-storage/logos-storage-nim)
-at `v0.4.4`, also Nim, also buildable from source. It is the larger of the two
-(247 MB checked out).
+at `v0.4.4`, also Nim, also buildable from source with no privileged step.
+
+```
+git clone --depth 1 --recurse-submodules --shallow-submodules -b v0.4.4 \
+    https://github.com/logos-storage/logos-storage-nim _external/logos-storage-nim
+cd _external/logos-storage-nim
+export PATH="$HOME/.nimble/bin:$PATH"
+make libstorage
+```
+
+It is the larger of the two (247 MB checked out, and it builds the Nim compiler
+and LevelDB on the way) and produces `build/libstorage.dylib` (21 MB).
+
+Upload is a session rather than a single call: `storage_upload_init` on a path
+returns a session id, and `storage_upload_file` on that session returns the
+content address. The assertion that carries weight is not the return code but
+the manifest — `storage_download_manifest` on the returned CID must name the
+file that went in. A stub can return `RET_OK`; it cannot return a content
+address that resolves back to the right filename and byte count.

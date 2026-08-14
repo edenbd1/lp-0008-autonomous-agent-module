@@ -49,16 +49,45 @@ cc -o "$BIN" module/tests/delivery_node_drive.c \
   || die "the driver did not compile"
 echo "  $BIN"
 
-say "[3/3] run it against the live network"
+say "[3/4] run it against the live network"
 # Every step in the driver is an assertion and the exit code is the result, so
 # a node that silently failed to start cannot produce a passing transcript.
 LOG="${TMPDIR:-/tmp}/lp0008_delivery_drive.log"
 "$BIN" > "$LOG" 2>&1; rc=$?
 grep -E "^[0-9]\.|^  (ok|FAIL|<-|event)|failure|confirmed" "$LOG"
-echo
-if [ $rc -ne 0 ]; then
-  echo "FAILED — full log at $LOG" >&2
-  exit 1
+[ $rc -eq 0 ] || { echo "FAILED — full log at $LOG" >&2; exit 1; }
+
+say "[4/4] the same, for Storage"
+STORAGE_SRC="${STORAGE_SRC:-$ROOT/_external/logos-storage-nim}"
+SLIB="$STORAGE_SRC/build/libstorage.dylib"
+[ -f "$SLIB" ] || SLIB="$STORAGE_SRC/build/libstorage.so"
+if [ ! -f "$SLIB" ]; then
+  cat >&2 <<TXT
+  not built at $SLIB
+
+  git clone --depth 1 --recurse-submodules --shallow-submodules -b v0.4.4 \\
+      https://github.com/logos-storage/logos-storage-nim $STORAGE_SRC
+  cd $STORAGE_SRC && export PATH="\$HOME/.nimble/bin:\$PATH" && make libstorage
+TXT
+  die "build the Storage library first, or set STORAGE_SRC"
 fi
-echo "A real node started, joined the network, published a message that the"
-echo "network propagated back, and shut down. Full log: $LOG"
+SBIN="${TMPDIR:-/tmp}/lp0008_storage_drive"
+cc -o "$SBIN" module/tests/storage_node_drive.c \
+   -I"$STORAGE_SRC/library" -L"$STORAGE_SRC/build" \
+   -lstorage -Wl,-rpath,"$STORAGE_SRC/build" \
+  || die "the Storage driver did not compile"
+
+# It writes a repo and an upload into the working directory, so give it one of
+# its own rather than scattering a datastore through the checkout.
+SLOG="${TMPDIR:-/tmp}/lp0008_storage_drive.log"
+SRUN="${TMPDIR:-/tmp}/lp0008-storage-run"; mkdir -p "$SRUN"
+( cd "$SRUN" && "$SBIN" ) > "$SLOG" 2>&1; src=$?
+grep -E "^[0-9]\.|^  (ok|FAIL|<-)|failure|confirmed" "$SLOG"
+echo
+[ $src -eq 0 ] || { echo "FAILED — full log at $SLOG" >&2; exit 1; }
+
+echo "Both nodes are real. Delivery started, joined the network, published a"
+echo "message the network propagated back. Storage started, took a file, and"
+echo "returned a content address whose manifest names that file."
+echo "Logs: $LOG"
+echo "      $SLOG"
