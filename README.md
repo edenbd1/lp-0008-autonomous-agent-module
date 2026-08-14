@@ -29,11 +29,30 @@ submissions were closed on evidence rather than on design. So these come first:
   skipping it.
 - **A recorded walkthrough against the public testnet**, not a localnet.
 
+## Try it
+
+From a clean clone, with a Rust toolchain and nothing else — no funded account,
+no keys, no local sequencer:
+
+```
+./scripts/demo.sh
+```
+
+It runs the policy tests, recomputes the deployed program's hash from the
+committed binary, and asks the public testnet whether that transaction is really
+there — with a hash that cannot exist as the control, so a passing check means
+something.
+
 ## Layout
 
 ```
-docs/recon.md     what the Logos module contract is, and why the previous
-                  five submissions were closed
+crates/agent-policy-core        the spending policy and its derivations
+crates/agent-verifier-spel      the SPEL program that enforces it on chain
+module/                         the Logos Core plugin
+scripts/demo.sh                 the whole thing, from a clean clone
+docs/DEPLOYMENT.md              what is deployed, and how to re-verify it
+docs/recon.md                   the Logos module contract, and why the previous
+                                five submissions were closed
 ```
 
 More lands here as it is built and verified. The repository is deliberately
