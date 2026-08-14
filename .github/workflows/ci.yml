@@ -93,8 +93,8 @@ jobs:
 
       # The builder is a Nix flake, but its CMake helper is located from
       # LOGOS_MODULE_BUILDER_ROOT first, so checkouts are enough and CI does not
-      # need Nix. Pinned revisions, not default branches: these move weekly, and
-      # an upstream commit should not turn this red without a change of ours.
+      # need Nix.
+      #
       # Pinned revisions, not default branches. These four move weekly, and an
       # upstream commit must not turn this red without a change of ours — which
       # is exactly what happened on the first run: a newer builder introduced a
@@ -122,6 +122,7 @@ jobs:
           LOGOS_MODULE_BUILDER_ROOT: ${{ github.workspace }}/_external/logos-module-builder
           LOGOS_MODULE_ROOT: ${{ github.workspace }}/_external/logos-module
           LOGOS_CPP_SDK_ROOT: ${{ github.workspace }}/_external/logos-cpp-sdk
+          LOGOS_QT_SDK_ROOT: ${{ github.workspace }}/_external/logos-qt-sdk
         run: |
           cmake -S module -B build
           cmake --build build
