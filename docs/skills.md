@@ -127,6 +127,20 @@ message that never left: **the name you register with is not the name that comes
 back.** You subscribe to `onMessageSent`, and the event payload carries
 `"eventType":"message_sent"`. Matching the registration name never fires.
 
+### Why this is not in CI
+
+Deliberately. Building the library from scratch takes tens of minutes — it
+builds the Nim compiler first — and the run itself needs live peers on a public
+network, so a green result depends on someone else's uptime.
+
+A job like that goes amber on a bad afternoon, and an amber job teaches everyone
+to ignore it. The e2e sequencer job in CI is different: it talks to a service
+this project can reason about, and it fails for reasons that are ours.
+
+So this one is a local command whose output is quoted here, and CI checks the
+things it can check honestly. A skipped or perpetually-flaky CI step counts as
+not run, which is the standard applied to everything else in this repository.
+
 ### Storage
 
 Same shape: `libstorage` comes from

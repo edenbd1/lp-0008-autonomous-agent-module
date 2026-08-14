@@ -50,10 +50,23 @@ crates/agent-policy-core        the spending policy and its derivations
 crates/agent-verifier-spel      the SPEL program that enforces it on chain
 module/                         the Logos Core plugin
 scripts/demo.sh                 the whole thing, from a clean clone
+scripts/exercise-nodes.sh       drives a real Delivery node and asserts on it
 docs/DEPLOYMENT.md              what is deployed, and how to re-verify it
+docs/skills.md                  building the node libraries from source, and the
+                                event-name trap that fails silently
 docs/recon.md                   the Logos module contract, and why the previous
                                 five submissions were closed
 ```
+
+## Running a real node
+
+`./scripts/exercise-nodes.sh` builds a driver against `liblogosdelivery` and runs
+it. A green run starts a node, has it report its own peer id, publishes a
+message, and waits for the network to propagate it back — every step an
+assertion, with the exit code as the result.
+
+Building the library needs no Nix and no privileged step; `docs/skills.md` has
+the two commands and the one snag (`nimble` is installed outside `PATH`).
 
 More lands here as it is built and verified. The repository is deliberately
 empty of claims until each one has evidence behind it.
