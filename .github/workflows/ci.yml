@@ -89,7 +89,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake qt6-base-dev nlohmann-json3-dev
+            build-essential cmake nlohmann-json3-dev \
+            qt6-base-dev qt6-remoteobjects-dev
 
       # The builder is a Nix flake, but its CMake helper is located from
       # LOGOS_MODULE_BUILDER_ROOT first, so checkouts are enough and CI does not
