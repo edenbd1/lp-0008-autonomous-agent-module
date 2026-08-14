@@ -9,3 +9,4 @@ build/
 
 # Agent wallet homes never belong in the repository.
 artifacts/agents/
+_external/
