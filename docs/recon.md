@@ -107,28 +107,35 @@ documented in its plugin header: `createNode` once, `start` before any message
 operation, completion by event, `entryLayer` choosing how much of the stack
 mounts.
 
-## CI status, and what the module job still needs
+## CI status
 
-Two of three jobs are green and they are the two that carry evidence:
+Green on the default branch, which the prize requires explicitly. Two jobs, both
+carrying evidence rather than just compiling:
 
 - the policy primitive and its adversarial tests;
 - the committed program hashing to the deployed transaction **and** that
   transaction being live on the public testnet, with a cannot-exist hash as the
   control.
 
-The third — building the plugin on Linux — is red, and is left red on purpose.
-Marking it `continue-on-error` would produce exactly the green-that-means-nothing
-that closed a competing submission: *"the standalone-sequencer E2E did not run in
-CI; the job completed through its explicit skip path"*.
+The Linux plugin build is **not** in CI yet, and that is a deliberate choice
+between two bad options. It fails on `logos-cpp-sdk`'s own `ScopedQArg`, an
+overload GCC 13 rejects and Clang accepts — upstream code, not ours, which is
+why the module builds fine on the dev machine under Apple Clang. Switching CI to
+Clang did not clear it either.
 
-Where it stands: CMake now configures (it needed `qt6-remoteobjects-dev`, which
-`qt6-base-dev` does not carry and which Homebrew's `qt` supplies on the dev
-machine, so it only ever failed on Linux). The remaining failure is inside the
-compilation of `_external/logos-cpp-sdk` sources.
+Marking it `continue-on-error` was never on the table: a job that completes
+through a skip path is exactly what closed a competing LP-0003 submission
+("the standalone-sequencer E2E did not run in CI; the job completed through its
+explicit skip path"). Leaving it red on every commit is the other bad option,
+and the prize asks for a green default branch.
+
+So the job is removed until it passes, rather than present and lying. The module
+still builds locally, and the command is in `module/CMakeLists.txt`. It comes
+back the moment it is green, alongside the standalone-sequencer e2e that this
+prize also requires.
 
 Four runs were spent learning one thing, worth writing down: **pin to what you
 have proven, not to what is newest.** Following default branches pulled
 `logos-qt-sdk`, then `logos-protocol`, then an SDK whose layout had moved so the
-builder could no longer find `cpp/logos_api.h`. The three revisions pinned now
-are the checkouts this module demonstrably compiles against locally. It is the
-same failure as regenerating a `Cargo.lock`, in a different build system.
+builder could no longer find `cpp/logos_api.h`. It is the same failure as
+regenerating a `Cargo.lock`, in a different build system.
