@@ -1,0 +1,27 @@
+{
+  "protocolVersion": "0.3.0",
+  "name": "logos-storage-agent",
+  "description": "Encrypts and stores a file on Logos Storage, returns its content address",
+  "url": "logos-messaging://26tmxC9X8dywy5x7oyr1VeBUyR1vPxksrtbA3PJKPP7t",
+  "preferredTransport": "logos-messaging",
+  "provider": { "organization": "LP-0008 reference agent" },
+  "version": "0.1.0",
+  "capabilities": { "streaming": true },
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "storage.upload",
+      "name": "storage.upload",
+      "description": "Encrypt and upload a file, returning a content address",
+      "tags": ["storage"],
+      "inputModes": ["application/json"],
+      "outputModes": ["application/json"]
+    }
+  ],
+  "x-logos": {
+    "lezAccount": "26tmxC9X8dywy5x7oyr1VeBUyR1vPxksrtbA3PJKPP7t",
+    "pricePerTask": 25,
+    "settlement": "lez-shielded-transfer"
+  }
+}
