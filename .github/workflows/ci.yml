@@ -78,3 +78,6 @@ jobs:
           echo "$real" | grep -q '"result":\[' || { echo "deploy not on chain: $real"; exit 1; }
           echo "$ctrl" | grep -q '"result":null' || { echo "control did not return null: $ctrl"; exit 1; }
           echo "OK deploy present, control null"
+
+      - name: demo.sh runs from a clean clone
+        run: ./scripts/demo.sh
