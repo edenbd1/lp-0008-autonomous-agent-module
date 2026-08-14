@@ -17,12 +17,25 @@ shadowing another's `wallet.send` is not a hypothetical.
 | Blockchain | `program.call` | **on chain** — same path, same threshold |
 | Blockchain | `wallet.balance`, `wallet.history` | reads over JSON-RPC |
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet |
-| Storage | `storage.*` | interface defined, C ABI binding not written |
-| Messaging | `messaging.*` | interface defined, C ABI binding not written |
+| Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
+| Storage | `storage.*` | interface defined, binding not written |
 
-The last two rows are the honest part. The module builds and the interface is
-real, but nothing here claims Storage or Delivery work until a call to them has
-run and been shown. Stubs that return success are worse than an empty row.
+The last two rows are the honest part. The messaging skills are written against
+Delivery's real signatures — `send(contentTopic, payload)`, `subscribe`,
+`channelCreate` — and they compile, but "compiles" is not "works": nothing here
+claims they deliver a message until one has been sent and seen. Storage's ABI has
+not been read.
+
+Two things the messaging code does that a stub would not. It **refuses** when the
+node is not started rather than returning success, because `start` returns as
+soon as the request is dispatched and completion only arrives later as a
+`nodeStarted` event — a skill that sends immediately after `start` is sending
+into a node that may not be up. And `create_group` opens a **reliable channel**
+rather than a bare topic, since group traffic that silently drops messages is
+worse than a group that fails to open.
+
+The `DeliveryPort` indirection is there so the skills can be exercised against a
+fake, and so the agent module does not link Delivery directly.
 
 ## What binding them needs
 
