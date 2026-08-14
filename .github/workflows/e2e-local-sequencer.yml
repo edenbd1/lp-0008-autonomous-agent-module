@@ -1,0 +1,93 @@
+name: e2e vs local sequencer
+
+# The whole LP-0008 policy lifecycle against a REAL LEZ sequencer in standalone
+# mode, with RISC0_DEV_MODE=0: deploy the program, anchor an agent's envelope,
+# spend inside it unattended, and be refused outside it.
+#
+# Separate from ci.yml on purpose. That one is a few minutes and gates every
+# push; this builds the whole logos-execution-zone workspace, so it runs on a
+# schedule and on demand. Both are CI; only one of them can be fast.
+#
+# It does not have a skip path. A competing submission was closed with "the
+# standalone-sequencer E2E did not run in CI; the job completed through its
+# explicit skip path", so if this cannot run it fails.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 5 * * *'
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The revision this was developed against. Floating HEAD would turn an
+  # upstream change into a red build with no change of ours.
+  LEZ_REV: 47eba25
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: policy lifecycle vs standalone sequencer
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out logos-execution-zone
+        run: |
+          git clone --filter=blob:none https://github.com/logos-blockchain/logos-execution-zone _external/lez
+          git -C _external/lez checkout "$LEZ_REV"
+          echo "LEZ at $(git -C _external/lez rev-parse --short HEAD)"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the LEZ build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            _external/lez/target
+          key: lez-${{ runner.os }}-${{ env.LEZ_REV }}-${{ hashFiles('_external/lez/Cargo.lock') }}
+          restore-keys: lez-${{ runner.os }}-${{ env.LEZ_REV }}-
+
+      - name: Install r0vm
+        run: |
+          curl -L https://risczero.com/install | bash
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+          "$HOME/.risc0/bin/rzup" install r0vm 3.0.5
+
+      # v0.2.4 builds lez/keycard_wallet, which links against PC/SC. Taken from
+      # LEZ's own ci.Dockerfile rather than assembled one package per failure.
+      - name: System libraries LEZ needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang libclang-dev libssl-dev pkg-config \
+            libpcsclite-dev curl git jq python3-dev netcat-openbsd
+
+      # `--locked`: cargo install ignores the committed lock without it, which
+      # is how a green build goes red on an upstream release rather than on a
+      # change of ours.
+      - name: Build the vendored spel
+        run: |
+          cargo install --path vendor/spel/spel-cli --locked
+          command -v spel
+
+      - name: Build the standalone sequencer and the wallet
+        working-directory: _external/lez
+        run: |
+          cargo build --release --features standalone -p sequencer_service
+          cargo build --release -p wallet
+
+      - name: Full lifecycle against it
+        env:
+          RISC0_DEV_MODE: 0
+          LEZ_SRC: ${{ github.workspace }}/_external/lez
+        run: ./scripts/e2e-local-sequencer.sh
+
+      - name: Sequencer log on failure
+        if: failure()
+        run: find /tmp -name 'sequencer.log' -newermt '-2 hours' -exec tail -100 {} \; 2>/dev/null || true
