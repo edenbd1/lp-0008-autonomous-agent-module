@@ -76,38 +76,60 @@ visible testnet activity, a video showing localnet, e2e that never ran. Skills
 that cannot be checked from outside the repository do not answer that. A spend
 that the chain refused above the threshold does.
 
-## What actually blocks a running node
+## Running a Delivery node, without Nix
 
-Checked rather than assumed, by cloning the module and reading its manifest.
+`logos-delivery-module`'s `metadata.json` declares two `external_libraries`,
+`logosdelivery` and `rln`, and vendors neither. An earlier version of this
+document concluded from that — plus "`nix` is not installed here" — that a
+running node needed a Nix install, and listed three blocked paths. That was
+wrong, and wrong in an instructive way: it enumerated ways to *obtain* the
+libraries without ever asking where they are *built*.
 
-`logos-delivery-module`'s `metadata.json` declares two `external_libraries`:
-`logosdelivery` and `rln`. Neither is vendored in the repository — they are
-supplied by the Nix flake, and `nix` is not installed here. The C++ wrapper is
-small (1.8 MB checked out) and would build in minutes; the C libraries under it
-are the blocker. `logos-storage-module` is the same shape and considerably
-larger.
+They are built from source, with no privileged step:
 
-So the gap between "the skills compile and their behaviour is tested" and "a
-message went out" is not more code. It is one of:
+- `liblogosdelivery` is an ordinary Nim project at
+  [`logos-messaging/logos-delivery`](https://github.com/logos-messaging/logos-delivery)
+  with a `liblogosdelivery` make target. Two submodules, shallow-clonable.
+- `librln` is an ordinary cargo build of `vendor/zerokit`, driven by that same
+  Makefile. The flake warns that zerokit v2.0.2 ships a stale `cargoHash`, but
+  `cargoHash` is a Nix concept and does not apply to a plain `cargo build`.
 
-- install Nix and build both modules through their flakes, which is the path
-  upstream supports;
-- obtain prebuilt `liblogosdelivery` and `librln` and vendor them under `lib/`,
-  the way the migrated Waku example vendors `waku`;
-- run the modules from a Logos Core distribution that already ships them, and
-  drive them over Qt Remote Objects rather than linking.
+```
+git clone --depth 1 --recurse-submodules --shallow-submodules \
+    https://github.com/logos-messaging/logos-delivery _external/logos-delivery
+cd _external/logos-delivery
+export PATH="$HOME/.nimble/bin:$PATH"     # `make` installs nimble here and does
+make liblogosdelivery                     # not put it on PATH itself
+```
 
-All three were checked on this machine, not reasoned about:
+The one snag is that last point: the build installs Nim and nimble into `~/.nim`
+and `~/.nimble`, then fails at `nimble setup` because nimble is not on `PATH`.
+Exporting it is the whole fix.
 
-- **Nix** — not installed.
-- **Vendored libraries** — `lib/` does not exist in either module's repository.
-- **A Logos Core distribution** — `LogosBasecamp.app` 0.2.2 ships exactly one
-  module, `capability_module`. No delivery, no storage. The two matching dylibs
-  in the bundle are Qt's own (`libqmldbg_messages`, `libqmllocalstorageplugin`),
-  not Logos libraries.
+That produces `build/liblogosdelivery.dylib` (42 MB) and `librln_v2.0.2.a`.
+`scripts/exercise-nodes.sh` builds `module/tests/delivery_node_drive.c` against
+them and runs it.
 
-So the shortest path is the first: install Nix, build both modules through their
-flakes, and point the skills at the running nodes. That is a setup step, not a
-design question — the ports are already there and their behaviour is already
-tested. `scripts/exercise-nodes.sh` records what that run has to do and exits
-non-zero until it does it.
+### What the run proves
+
+Every step in the driver is an assertion and the exit code is the result. The
+shipped C example prints what each call returned and exits 0 either way, which
+is fine for a tutorial and useless as evidence — a node that never started would
+produce a transcript that reads like success.
+
+A green run creates a node, registers listeners, starts it and waits for the
+node to confirm rather than for `start_node` to return, asks the running node
+for its own peer id, subscribes, publishes, waits for the network to propagate
+the message back, then stops and destroys the context.
+
+One trap is worth recording, because it fails silently and looks exactly like a
+message that never left: **the name you register with is not the name that comes
+back.** You subscribe to `onMessageSent`, and the event payload carries
+`"eventType":"message_sent"`. Matching the registration name never fires.
+
+### Storage
+
+Same shape: `libstorage` comes from
+[`logos-storage/logos-storage-nim`](https://github.com/logos-storage/logos-storage-nim)
+at `v0.4.4`, also Nim, also buildable from source. It is the larger of the two
+(247 MB checked out).

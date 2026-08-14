@@ -133,12 +133,22 @@ if [ -z "$TX" ]; then
   exit 1
 fi
 echo "  settlement $TX"
-for _ in $(seq 1 25); do
+LANDED=0
+for _ in $(seq 1 50); do
   sleep 6
   curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$TX\"]}" \
-    | grep -qE '"result":\[' && { echo "  landed"; break; }
+    | grep -qE '"result":\[' && { echo "  landed"; LANDED=1; break; }
 done
+# A submitted hash is not a settlement. Writing the manifest either way would
+# record a payment the chain never accepted — which is the precise shape of the
+# evidence failure that closed five earlier submissions, so refuse to write it
+# and leave any previous, confirmed manifest intact.
+if [ "$LANDED" -eq 0 ]; then
+  echo "  NOT CONFIRMED after 300s — $TX never landed" >&2
+  echo "  the manifest is left untouched: an unconfirmed hash is not evidence" >&2
+  exit 1
+fi
 
 printf 'task_id\tclient\tserver\tskill\tprice\tnonce\tsettlement_tx\n' > "$OUT"
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
