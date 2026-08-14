@@ -5,3 +5,4 @@ target/
 artifacts/e2e/dist*/
 .DS_Store
 build/
+build/
