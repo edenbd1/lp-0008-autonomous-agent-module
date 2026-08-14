@@ -107,9 +107,8 @@ jobs:
       - name: Check out the Logos module toolchain
         env:
           BUILDER_REV: 539651325f46eea635576034775a0c209ce4d884
-          MODULE_REV:  9812dc8c69cfbfed3eea06510a5c1ff33c1fcf7f
-          CPP_SDK_REV: e3744fb84ceff2dc7cb1630a1301bb93c64d7a8a
-          QT_SDK_REV:  c6be61d0ba3f1c06c1a5ff7ad6d42f3eda254877
+          MODULE_REV:  194778491ef4dd36967ac40cc2fec6b8a8b1d660
+          CPP_SDK_REV: c87f3437e38616436df6e475570f9d25abf9b36f
         run: |
           set -e
           clone() {
@@ -120,14 +119,12 @@ jobs:
           clone logos-module-builder "$BUILDER_REV"
           clone logos-module          "$MODULE_REV"
           clone logos-cpp-sdk         "$CPP_SDK_REV"
-          clone logos-qt-sdk          "$QT_SDK_REV"
 
       - name: Build the module
         env:
           LOGOS_MODULE_BUILDER_ROOT: ${{ github.workspace }}/_external/logos-module-builder
           LOGOS_MODULE_ROOT: ${{ github.workspace }}/_external/logos-module
           LOGOS_CPP_SDK_ROOT: ${{ github.workspace }}/_external/logos-cpp-sdk
-          LOGOS_QT_SDK_ROOT: ${{ github.workspace }}/_external/logos-qt-sdk
         run: |
           cmake -S module -B build
           cmake --build build
