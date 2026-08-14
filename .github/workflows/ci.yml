@@ -95,13 +95,18 @@ jobs:
       # LOGOS_MODULE_BUILDER_ROOT first, so checkouts are enough and CI does not
       # need Nix.
       #
-      # Pinned revisions, not default branches. These four move weekly, and an
-      # upstream commit must not turn this red without a change of ours — which
-      # is exactly what happened on the first run: a newer builder introduced a
-      # dependency on logos-qt-sdk that the local checkout did not have.
+      # Pinned revisions, not default branches. These move weekly, and an
+      # upstream commit must not turn this red without a change of ours.
+      #
+      # The builder is pinned to the revision this module is actually known to
+      # build against. Later builders pull a deeper dependency chain —
+      # logos-qt-sdk, then logos-protocol — and chasing it one clone at a time
+      # is how you end up vendoring someone else's build system by accident.
+      # Moving to a newer builder is a deliberate commit with a green run behind
+      # it, not a default.
       - name: Check out the Logos module toolchain
         env:
-          BUILDER_REV: 9d3b7cc1f5a283d056e21c077bafb49f1b00e24f
+          BUILDER_REV: 539651325f46eea635576034775a0c209ce4d884
           MODULE_REV:  9812dc8c69cfbfed3eea06510a5c1ff33c1fcf7f
           CPP_SDK_REV: e3744fb84ceff2dc7cb1630a1301bb93c64d7a8a
           QT_SDK_REV:  c6be61d0ba3f1c06c1a5ff7ad6d42f3eda254877
