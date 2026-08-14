@@ -106,3 +106,29 @@ Delivery's C ABIs we have to drive, and their lifecycles. Delivery's is already
 documented in its plugin header: `createNode` once, `start` before any message
 operation, completion by event, `entryLayer` choosing how much of the stack
 mounts.
+
+## CI status, and what the module job still needs
+
+Two of three jobs are green and they are the two that carry evidence:
+
+- the policy primitive and its adversarial tests;
+- the committed program hashing to the deployed transaction **and** that
+  transaction being live on the public testnet, with a cannot-exist hash as the
+  control.
+
+The third — building the plugin on Linux — is red, and is left red on purpose.
+Marking it `continue-on-error` would produce exactly the green-that-means-nothing
+that closed a competing submission: *"the standalone-sequencer E2E did not run in
+CI; the job completed through its explicit skip path"*.
+
+Where it stands: CMake now configures (it needed `qt6-remoteobjects-dev`, which
+`qt6-base-dev` does not carry and which Homebrew's `qt` supplies on the dev
+machine, so it only ever failed on Linux). The remaining failure is inside the
+compilation of `_external/logos-cpp-sdk` sources.
+
+Four runs were spent learning one thing, worth writing down: **pin to what you
+have proven, not to what is newest.** Following default branches pulled
+`logos-qt-sdk`, then `logos-protocol`, then an SDK whose layout had moved so the
+builder could no longer find `cpp/logos_api.h`. The three revisions pinned now
+are the checkouts this module demonstrably compiles against locally. It is the
+same failure as regenerating a `Cargo.lock`, in a different build system.
