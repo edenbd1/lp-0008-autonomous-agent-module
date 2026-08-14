@@ -81,3 +81,21 @@ jobs:
 
       - name: demo.sh runs from a clean clone
         run: ./scripts/demo.sh
+
+  skills:
+    name: The skills behave, against fake ports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JSON header
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nlohmann-json3-dev
+      # No Logos node here on purpose. A node is needed to prove a message
+      # arrives; it is not needed to prove a skill refuses when the node is
+      # down, blames the right half of a share, or does not throw on a
+      # malformed payload — which is what a stub would get wrong.
+      - name: Exercise the skills
+        run: |
+          clang++ -std=c++17 module/tests/skills_test.cpp \
+            module/src/messaging_skills.cpp module/src/storage_skills.cpp \
+            -o skills_test
+          ./skills_test
