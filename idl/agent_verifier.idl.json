@@ -1,0 +1,258 @@
+{
+  "version": "0.1.0",
+  "name": "agent_verifier",
+  "instructions": [
+    {
+      "name": "create_policy",
+      "accounts": [
+        {
+          "name": "policy",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "policy_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "owner_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "agent_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "per_tx",
+          "type": "u128"
+        },
+        {
+          "name": "per_period",
+          "type": "u128"
+        },
+        {
+          "name": "period_blocks",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "approve_spend",
+      "accounts": [
+        {
+          "name": "approval",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "marker_seed"
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "policy_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "marker_seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "recipient",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "spend",
+      "accounts": [
+        {
+          "name": "policy",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "policy_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "approval",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "marker_seed"
+              }
+            ]
+          }
+        },
+        {
+          "name": "agent",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "owner_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "agent_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "per_tx",
+          "type": "u128"
+        },
+        {
+          "name": "per_period",
+          "type": "u128"
+        },
+        {
+          "name": "period_blocks",
+          "type": "u64"
+        },
+        {
+          "name": "recipient",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "spent_this_period",
+          "type": "u128"
+        },
+        {
+          "name": "marker_seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
