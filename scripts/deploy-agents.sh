@@ -38,8 +38,14 @@ confirmed() {
 # A fresh private account per agent. The agent signs with its own shielded
 # identity — the prize requires it to be "indistinguishable on-chain from any
 # other account holder", which a shared key would not be.
+#
+# The home is persistent and lives OUTSIDE the repository: an agent that cannot
+# sign again is not an agent, and its key must never be committed. AGENT_HOMES
+# defaults under $HOME for that reason.
+AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
 new_agent() {
-  local home; home=$(mktemp -d)
+  local home="$AGENT_HOMES/$1"
+  mkdir -p "$home"
   printf '{ "sequencers": [{ "sequencer_addr": "%s" }], "seq_poll_timeout": "30s", "seq_tx_poll_max_blocks": 15, "seq_poll_max_retries": 10, "seq_block_poll_max_amount": 100, "calibration_limit": 100 }\n' "$RPC" > "$home/wallet_config.json"
   LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
     "$WALLET" account new private </dev/null >/dev/null 2>&1
@@ -60,9 +66,10 @@ echo
 deploy_agent() { # category per_tx per_period period_blocks
   local cat="$1" per_tx="$2" per_period="$3" period="$4"
   echo "[$cat] new shielded account"
-  local agent; agent=$(new_agent)
+  local agent; agent=$(new_agent "$cat")
   if [ -z "$agent" ]; then echo "  FAILED to create an account" >&2; return 1; fi
   echo "  agent $agent"
+  echo "  keys  $AGENT_HOMES/$cat  (outside the repository, never committed)"
 
   local agent_hex; agent_hex=$(python3 -c "
 import hashlib,sys
