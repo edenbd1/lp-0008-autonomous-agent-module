@@ -1,0 +1,13 @@
+[package]
+name = "agent-policy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The agent's spending policy and the derivations that anchor it on chain"
+
+[dependencies]
+sha2 = { workspace = true }
+
+[features]
+default = []
+std = ["sha2/std"]
