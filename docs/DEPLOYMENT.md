@@ -271,17 +271,28 @@ repository could not produce before.
 
 | | first | second |
 |---|---|---|
-| task | `53d4db43…8322d29d` | `b68c9e51…34b6a0a2` |
+| task | `671bb087…eceed0e8` | `8c6eac7a…8159d19f` |
 | client (pays, shielded) | `9KdQSJ2t…VXicNe` | same |
 | server (paid, public) | `5Sa13NyN…dHtjnZ` | same |
 | skill / price | `storage.upload` at 25 LEZ | same |
-| settlement | [`c45d3f24…94cf7275`](https://explorer.testnet.lez.logos.co/transaction/c45d3f2441cf1d19d69ae4cc70cfd50308fc2f0ed89ec40310c5ea2a94cf7275) | [`8d7aba60…bb7502fb`](https://explorer.testnet.lez.logos.co/transaction/8d7aba60786d812d6e596624518a38813e7b9f4573d20b6efe802ac4bb7502fb) |
-| block | 8605 | 8624 |
-| kind / size | PrivacyPreserving, 270,566 bytes | PrivacyPreserving, 270,566 bytes |
-| server balance | 0 → 25 | 25 → 50 |
-| client balance | 100 → 75 | 75 → 50 |
+| settlement | [`5a488f28…aa00c554`](https://explorer.testnet.lez.logos.co/transaction/5a488f287857e7f77204547360c710b295bfd1a269ea26f89bb34021aa00c554) | [`f780df62…54ae8969`](https://explorer.testnet.lez.logos.co/transaction/f780df6273ce4ace4da8d9e91fee011d101cb81972e668a1e03f3c6254ae8969) |
+| block | 8677 | 8686 |
+| period declared | 8000, valid in blocks 8000–8999 | same |
+| server balance | 50 → 75 | 75 → 100 |
+| policy ledger after | 25 spent in period 8000 | 50 spent in period 8000 |
 
-Manifest: [`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv).
+That last row is the second defect's fix, measured rather than described: the
+policy account's data was empty when it was anchored at block 8652, held
+`period 8000, spent 25` after the first settlement, and holds `period 8000,
+spent 50` now. Nothing the agent sends can lower it, and at 1000 — the anchored
+`per_period` — `spend` starts refusing with 6006 until block 9000.
+
+Manifest: [`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv). It also carries
+the two settlements made under the previous program, `c45d3f24…` and
+`8d7aba60…`, which are real transactions on the same chain and the reason the
+server's balance starts at 50 rather than 0. They were made against a policy
+account that no longer exists: redeploying moved every policy PDA, which is the
+whole reason the anchors above were redone.
 
 Balances read from the chain, not from the script's own output:
 
