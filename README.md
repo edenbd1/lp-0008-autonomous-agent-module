@@ -7,8 +7,11 @@ encrypted Logos Messaging. Agent-to-agent coordination is **A2A-compatible** —
 Agent Cards follow the A2A schema and tasks follow the A2A lifecycle — with
 Logos Messaging as the transport A2A leaves open and LEZ transfers as the
 payment layer A2A deliberately omits. The spending threshold is not an `if` in
-the agent's code but the *address* of a policy account derived from the owner's
-limits, so an agent whose process has been taken cannot raise its own ceiling.
+the agent's code but a policy account on chain — **one per agent**, at an
+address seeded by the agent id alone, its limits written once by the owner and
+writable afterwards by nothing but this program. An agent whose process has been
+taken cannot raise its own ceiling: there is no second address to anchor a
+larger one at, and the write itself is refused.
 
 > Built for [λPrize LP-0008](https://github.com/logos-co/lambda-prize/blob/master/prizes/LP-0008.md).
 > Nothing here is claimed that has not been reproduced, and what does not work
@@ -64,6 +67,11 @@ The exit code is the result; a failing test suite fails the script.
 
 ## 2. Read the live deployment back yourself
 
+`python3` and `curl`, plus **`spel` on `PATH`** for the address derivation at
+the end of this section — the same binary §3 needs, pinned in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Everything above that runs without
+it.
+
 The program this checkout deploys, derived from the committed binary:
 
 ```sh
@@ -74,12 +82,37 @@ print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
 echo "$PROG"
 ```
 
-What is anchored under *exactly* that program — the ledger is keyed by
-`(program, policy_hash)`, because a redeploy moves every policy to an address
-that has never been initialised:
+Every manifest below is read **by column name**. Paste this first — the rest of
+the section uses it, and it exits non-zero rather than printing the wrong field
+when a column it names is not there:
 
 ```sh
-awk -F'\t' -v p="$PROG" 'NR==1 || $1==p' artifacts/anchored.tsv | column -t
+col() {   # col <file> <column> [<category>] — one field, or the whole column
+  awk -F'\t' -v want="$2" -v key="${3-}" '
+    NR==1 { for (i=1;i<=NF;i++) if ($i==want) c=i
+            if (!c) { print "no \"" want "\" column in " FILENAME > "/dev/stderr"; exit 2 }
+            next }
+    key=="" { print $c; next }
+    $1==key { print $c; exit }' "$1"
+}
+```
+
+These manifests gain and lose columns as the program changes — `agents.tsv`
+carried a `policy_hash` where it now carries `policy_account` — so a `$4` that
+was right last deployment silently reads a different field this one. Three
+false results published from this repository came from exactly that. Reading by
+position is the bug; the helper is the fix, and it is used everywhere below.
+
+What is anchored under *exactly* that program — the ledger is keyed by
+`(program, agent_id)`, because a redeploy moves every policy to an address that
+has never been initialised:
+
+```sh
+awk -F'\t' -v p="$PROG" '
+  NR==1 { for (i=1;i<=NF;i++) if ($i=="program") c=i
+          if (!c) { print "no \"program\" column" > "/dev/stderr"; exit 2 }
+          print; next }
+  $c==p' artifacts/anchored.tsv | column -t
 ```
 
 The three agents, one per default skill category, and each one's envelope:
@@ -92,34 +125,80 @@ Every anchor in that manifest, checked against the chain rather than against
 this file:
 
 ```sh
-while IFS=$'\t' read -r cat _ _ _ _ _ _ tx _; do
-  [ "$cat" = category ] && continue
+for cat in $(col artifacts/agents.tsv category); do
+  tx=$(col artifacts/agents.tsv create_tx "$cat")
   printf '%-11s %s… ' "$cat" "${tx:0:12}"
   curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$tx\"]}" \
   | grep -q '"result":\[' && echo "on chain" || echo "MISSING"
-done < artifacts/agents.tsv
+done
 ```
 
-And the part that matters most, because it is what makes a limit a limit: the
-policy account's *address* is derived from the envelope, and the chain says
-that account belongs to this program. Both sides are computed here — the
-address from the manifest's policy hash, the program id from the committed
+And the part that matters most, because it is what makes a limit a limit. Each
+agent has exactly **one** policy account, at `PDA(program, ["agent-policy/v1",
+agent_id])` — the agent and nothing else. Both sides are computed here — the
+address from the agent id in the manifest, the program id from the committed
 binary — and the chain supplies the middle:
 
 ```sh
-HASH=$(awk -F'\t' '$1=="blockchain"{print $4}' artifacts/agents.tsv)
+AGENT=$(col artifacts/agents.tsv agent_id blockchain)
+AGENT_HEX=$(python3 -c "
+import sys
+A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+n=0
+for ch in sys.argv[1]: n = n*58 + A.index(ch)
+print(n.to_bytes(32,'big').hex())" "$AGENT")
 PDA=$(spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
-        pda policy --policy-hash "$HASH" | tail -1)
+        pda policy --agent-id "$AGENT_HEX" | tail -1)
 echo "policy account $PDA"
+[ "$PDA" = "$(col artifacts/agents.tsv policy_account blockchain)" ] \
+  && echo "               and that is the address the manifest records" \
+  || echo "               MANIFEST DISAGREES"
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
   -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$PDA\"]}" \
-  | python3 -c "import json,sys; print('owned by', json.load(sys.stdin)['result']['program_owner'])"
+| python3 -c "
+import json,sys
+r=json.load(sys.stdin)
+if 'result' not in r: sys.exit('the RPC returned no result: %s' % r)
+print('owned by', r['result']['program_owner'])"
 spel program-id artifacts/programs/agent_verifier.bin | grep decimal
 ```
 
-The last two lines print the same eight numbers. An uninitialised account —
-which is what a raised limit names — answers `[0,0,0,0,0,0,0,0]` instead.
+The last two lines print the same eight numbers: the chain agrees that this
+address belongs to the program these bytes build. An address no `create_policy`
+ever reached answers `[0,0,0,0,0,0,0,0]` instead — which is what every policy
+account becomes the moment the guest is rebuilt.
+
+The limits are **not** in that address. They are the account's *data*, written
+once by `create_policy` and afterwards only by `spend`, which is what advances
+the running period total. Read the record back and compare it to the manifest —
+the chain is the authority here, `agents.tsv` is only a note of what was sent:
+
+```sh
+curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$PDA\"]}" \
+| python3 -c "
+import json,sys
+d=bytes(json.load(sys.stdin)['result']['data'])
+if len(d)!=97 or d[0]!=1: sys.exit('not a record this program wrote: %r' % d)
+n=lambda a,b: int.from_bytes(d[a:b],'little')   # version|owner|per_tx|per_period|period|window|spent
+print('chain    per_tx %d  per_period %d  period %d blocks  (window %d, spent %d)'
+      % (n(33,49), n(49,65), n(65,73), n(73,81), n(81,97)))"
+printf 'manifest per_tx %s  per_period %s  period %s blocks\n' \
+  "$(col artifacts/agents.tsv per_tx blockchain)" \
+  "$(col artifacts/agents.tsv per_period blockchain)" \
+  "$(col artifacts/agents.tsv period_blocks blockchain)"
+```
+
+That is the whole difference from the previous design, and it is the reason
+this one holds. The limits used to be folded into the address, so raising one
+*named a different account* — and anchoring a fresh, unlimited policy at that
+address was always available to whoever held the agent's key. Now there is one
+address per agent, `init` gives it to whoever writes first, and the owner writes
+it when it creates the agent. A raised limit is no longer a different address;
+it is a write this program refuses. The attack, the transaction that proves the
+old program accepted it, and why the fix was not another comparison are in
+[`docs/limitations.md`](docs/limitations.md).
 
 Explorer links, the deploy reproduction and the settlement record are in
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The explorer indexes roughly an
@@ -149,8 +228,9 @@ For each agent the script creates a fresh **private** account in its own wallet
 home, funds it with an `auth-transfer` to its keys, finds the account that ended
 up holding the balance (a shielded transfer creates a new note under the same
 keys rather than crediting an existing account, so funding must come before
-anchoring), opens and claims a **public** receiving account, derives the policy
-hash with the same Rust code the on-chain guest runs, and submits
+anchoring), opens and claims a **public** receiving account, resolves that
+agent's one policy account with `spel` from the published IDL — the same seeds
+the guest declares, rather than a second implementation of them — and submits
 `create_policy`.
 
 | Variable | Default | What it is |
@@ -195,7 +275,7 @@ own error text, is in [`docs/limitations.md`](docs/limitations.md).
 
 Anchoring is single-use by construction: `create_policy` is declared
 `#[account(init, …)]` and `init` refuses to overwrite. An agent's identity is
-stable once funded, so a second run derives the *same* policy hash and is
+stable once funded, so a second run resolves the *same* policy account and is
 correctly refused — which looks exactly like a failure. `artifacts/anchored.tsv`
 is what tells the two apart; the script reports a refused re-anchor as
 already-anchored and leaves the manifest intact.
@@ -214,20 +294,33 @@ Configuration is three numbers, fixed when the agent is deployed:
 | `per_period` | the largest total it may move in one window |
 | `period_blocks` | the window, in blocks |
 
-They are not stored anywhere the agent can reach. `compute_policy_hash` folds
-(owner account, agent account, all three limits) into one digest, and the
-account a spend must present is the PDA seeded by that digest. Raising a limit
-does not edit an account — it names a *different* account, which
-`create_policy` never initialised, and the spend is refused before the program
-body runs. Reconfiguring is therefore a new policy and a new anchor, not a
-setting.
+They are not stored anywhere the agent can reach. Each agent has exactly **one**
+policy account, at `PDA(program, ["agent-policy/v1", agent_id])` — seeded by the
+agent id and nothing else — and the three numbers are that account's data, which
+only this program may write (LEZ rule 6, `UnauthorizedDataModification`).
+
+`create_policy` declares that account `#[account(init, …)]`, so the owner writes
+it once, when it creates the agent, and there is nowhere to put a second one.
+The owner it records is the account that *signed* — there is no `owner_id`
+argument — so the claim and the fact cannot differ, and `approve_spend` later
+compares its signer against that recorded owner rather than against anything the
+caller supplies.
+
+Raising a limit is therefore not a different address an attacker anchors afresh
+— that was the previous design and it is why this one exists — it is a write the
+program refuses. And `spend` takes no `agent_id` at all: the policy account's
+address is derived from the *paying* account, so the ceiling a payment is
+measured against is whatever that account says, not what the caller typed.
+Reconfiguring an agent means deploying a new one.
 
 Above `per_tx` the agent must present an approval account seeded by the exact
-payment — policy, recipient, amount, nonce — and owned by this program. What
+payment — agent, recipient, amount, nonce — and owned by this program. What
 each of these buys and what it does not is
 [`docs/security-model.md`](docs/security-model.md).
 
-On the module side the same binding is one call, accepted once:
+On the module side the same binding is one call, accepted once. Its second
+argument is 64 hex characters: the policy account's 32-byte PDA seed, which is
+now the agent's own account id. The parameter keeps its older name.
 
 ```
 configure(ownerAddress, policyHashHex)   // then start()
@@ -309,11 +402,19 @@ Point `DELIVERY_SRC` and `STORAGE_SRC` at your checkouts if they are not under
 ## 7. Load the module in the Logos app (Basecamp)
 
 The loadable asset is committed: `module/agent.lgx`, one `darwin-arm64`
-variant. Check it against itself rather than trusting this page — `lgx` is the
-packager Basecamp's own packages are built with,
-[`docs/basecamp.md`](docs/basecamp.md) says where to get it:
+variant. Check it against itself rather than trusting this page.
+
+**This step needs `lgx`, and nothing installs it for you** — it is not on a
+reviewer's `PATH` and it is not in this repository. It is the packager
+Basecamp's own packages are built with, `logos-co/logos-package` pinned at
+`18b0075`; build it and either put it on `PATH` or point `$LGX_BIN` at
+`logos-package/build/lgx`. [`docs/basecamp.md`](docs/basecamp.md) has the build.
+The rest of §7 does not need it.
 
 ```sh
+git clone https://github.com/logos-co/logos-package && \
+  git -C logos-package checkout 18b0075     # then build it — docs/basecamp.md
+
 lgx verify   module/agent.lgx     # contents match the manifest hashes
 lgx manifest module/agent.lgx     # type: core, main: agent_plugin.dylib
 ```
@@ -395,24 +496,31 @@ there rather than described here as done.
 ## 9. Tests and CI
 
 ```sh
-cargo test --workspace --release --locked      # the policy crate, 19 tests
+cargo test --workspace --release --locked      # the policy crate, 18 tests
 ```
 
 The module's C++ suites need no node, no network, no key and no model — which
 is the point, since a real dependency cannot be made to fail on demand and a
-fake can:
+fake can. They do need the SDK headers, which are not vendored here:
+`logos-co/logos-cpp-sdk` at `c87f343` (CI clones exactly that, and
+[`docs/basecamp.md`](docs/basecamp.md) has it in the pinned table):
 
 ```sh
-clang++ -std=c++17 -I<logos-cpp-sdk>/cpp -I/opt/homebrew/include \
+git clone https://github.com/logos-co/logos-cpp-sdk _external/logos-cpp-sdk && \
+  git -C _external/logos-cpp-sdk checkout c87f343
+
+clang++ -std=c++17 -I_external/logos-cpp-sdk/cpp -I/opt/homebrew/include \
   module/tests/skills_test.cpp module/src/*.cpp -o skills_test && ./skills_test
 ```
 
-The other five suites (`inference`, `wallet_skills`, `program_skills`,
-`agent_skills`, `owner_channel`) each compile against their own translation
-unit; [`.github/workflows/ci.yml`](.github/workflows/ci.yml) carries every
-line, one step per suite so a red X names the suite that broke. That workflow
-also runs `demo.sh` from a clean clone and asserts the committed binary still
-hashes to the live deploy transaction.
+The other six suites (`inference`, `wallet_skills`, `program_skills`,
+`agent_skills`, `owner_channel`, `task_persistence`) each compile against their
+own translation unit; [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+carries every line, one step per suite so a red X names the suite that broke,
+and accounts for every file under `module/tests/` so that a suite absent from
+CI cannot be mistaken for one that passed. That workflow also runs `demo.sh`
+from a clean clone and asserts the committed binary still hashes to the live
+deploy transaction.
 
 [`.github/workflows/e2e-local-sequencer.yml`](.github/workflows/e2e-local-sequencer.yml)
 runs the whole policy lifecycle against a real standalone LEZ sequencer with
@@ -441,10 +549,10 @@ not in that file, it is an omission rather than a decision.
 ## Layout
 
 ```
-crates/agent-policy-core          the policy hash, the spend reference, the
-                                  approval marker — compiled into the guest and
-                                  into the host scripts, so the address a script
-                                  computes is the address the chain derives
+crates/agent-policy-core          the policy record and its period ledger, the
+                                  spend reference, the approval marker — the one
+                                  decision every spend turns on, in the crate the
+                                  adversarial tests exercise
 crates/agent-verifier-spel        the SPEL program that enforces the envelope
 crates/agent-verifier-adversarial the hostile calls, run against the committed
                                   binary, each paired with the honest call it
