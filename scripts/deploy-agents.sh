@@ -133,8 +133,13 @@ fund_agent() { # category seed_account amount
   rm -f "$keys"
 
   # Give the sequencer a moment, then take whichever account holds the most.
+  # Twenty rounds was not enough: a funding transfer landed and the agent it
+  # created showed up minutes after the poll gave up, so the run reported a
+  # failure that had actually succeeded and left the money stranded under keys
+  # nothing referenced. The pre-check above now recovers those, and this waits
+  # long enough not to create them.
   local i have
-  for i in $(seq 1 20); do
+  for i in $(seq 1 60); do
     sleep 6
     LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
       "$WALLET" account sync-private </dev/null >/dev/null 2>&1
