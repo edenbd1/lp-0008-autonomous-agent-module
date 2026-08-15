@@ -2,48 +2,48 @@
 
 What does not work, stated before anyone has to discover it.
 
-## Anyone can anchor a policy for anybody's agent
+## Closed: anyone could anchor a policy for anybody's agent
 
-**The most serious open defect in the program, and the one to read before
-believing anything else in this repository about ceilings.**
+Kept because this was the most serious defect in the program, and because the
+shape of the fix is the interesting part.
 
-`create_policy` now checks that the signer is the `owner_id` the policy commits
-to (6012), and `spend` now checks that the account paying is the `agent_id` it
-commits to (6013). Both were missing until the current deployment and both are
-real improvements. Neither closes the hole, because `agent_id` is still a
-caller-supplied argument that is never compared to anything:
+`create_policy` checked that the signer was the `owner_id` the policy committed
+to, and `spend` checked that the payer was the `agent_id` it committed to. Both
+were real improvements and neither closed the hole, because `agent_id` was a
+caller-supplied argument compared to nothing. An attacker holding the agent's
+key anchored a policy naming an account it controlled as owner, the compromised
+agent as agent, and `per_tx = per_period = u128::MAX`. Both checks passed — the
+signer really was the owner it named, the payer really was the agent. Executed
+against the deployed binary at the time, both halves halted 0.
 
-1. An attacker holding the agent's key calls `create_policy`, signing with an
-   account they control, naming that account as `owner_id`, the compromised
-   agent as `agent_id`, and `per_tx = per_period = u128::MAX`. The owner check
-   passes — the signer really is the owner it names.
-2. They call `spend` with the agent's key. The agent check passes — the payer
-   really is the agent that policy names. `per_tx` is `u128::MAX`, so every
-   payment is autonomous and the approval path is never reached.
+**The fix is not another comparison.** There was no id left to compare. The
+policy account's address now derives from the agent alone, so an agent has
+exactly one policy account and `init` refuses a second. A hostile anchor is not
+detected and rejected; it has nowhere to go. The limits moved out of the address
+and into the account's data, beside the period ledger — which trades the pure
+address commitment for a record this program writes once, and is why the
+ImageID, the program and every anchor moved with it.
 
-Both halves are accepted at halt 0 by the deployed binary; `cargo run --release`
-in `crates/agent-verifier-adversarial` is the second row of its table. The two
-accounts may be the same one, so a single stolen key is enough.
+Demonstrated by execution rather than by absence, against
+`artifacts/programs/agent_verifier.bin` — the bytes that hash to the deployed
+program `a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e` — in `crates/agent-verifier-adversarial`:
 
-The predecessor of this defect is on chain rather than merely asserted:
-`c0b21ba6…`, a `create_policy` with `per_tx = per_period = u128::MAX` naming an
-owner nobody controls, was **accepted** by program `b028eabf…` at block 8652.
-The identical call to the current program was submitted as `30c93c61…` and never
-included. Absence is not evidence — a refused hash, a pending one and a hash
-nobody sent all read `null` — so the refusal is demonstrated against the binary,
-not inferred from the chain.
+```
+ok  refused [AccountAlreadyInitialized]: an attacker anchors an UNLIMITED policy
+    over that agent, naming itself as owner
+ok  refused [AccountAlreadyInitialized]: the compromised agent itself anchors,
+    as both owner and agent
+ok  the compromised agent itself: the anchor refused, and the follow-up spend of
+    the whole balance refused [6005] against the owner's own policy
+ok  a separate account the attacker controls: same
+ok  the agent's own public pay account: same
+```
 
-The fix is not another comparison; there is no id left in the instruction to
-compare. It is to make the policy account's address depend on the agent alone,
-so an agent has exactly **one** policy account and `init` refuses a second — the
-limits moving out of the address and into the account's data, next to the
-ledger. That trades the pure address commitment the design is built on for a
-record this program writes once, and it changes the ImageID, the program and
-every anchor. It is named here rather than half-made.
-
-Until then: **the ceiling binds an honest agent and an outsider, not an attacker
-who holds the agent's key.** Everything else in `security-model.md` §6 is
-downstream of that sentence.
+The three attack shapes are refused at the anchor, and the spend that follows is
+refused again against the honest policy that is already there. The predecessor
+is on chain rather than asserted: `c0b21ba6…`, a `create_policy` with
+`per_tx = u128::MAX` naming an owner nobody controls, was **accepted** by program
+`b028eabf…` at block 8652.
 
 ## Anchors die with every guest change, and the guest is effectively frozen
 
@@ -348,7 +348,7 @@ python3 -c "
 import hashlib,struct
 b=open('artifacts/programs/agent_verifier.bin','rb').read()
 print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())"
-# 8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe
+# a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e
 ```
 
 ## The node runs are local, not CI
