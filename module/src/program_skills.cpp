@@ -203,6 +203,28 @@ bool flagsFromParams(const json &p, std::vector<std::string> &args, std::string 
                 + "' must be a string, number or boolean: spel takes flags, not nested values";
             return false;
         }
+
+        // The value is checked for the same reason the name is, and the name
+        // check alone was not enough. A value lands in argv immediately after
+        // its flag, and `spel` reads argv positionally: `{"amount":
+        // "--bin-auth-transfer"}` passed the name check, then pushed exactly the
+        // flag the name check exists to keep out — the one that decides which
+        // program's ELF is admitted into the proof. Anything starting with '-'
+        // is refused rather than escaped, because there is no escaping in argv:
+        // the token either is a flag or is not one.
+        if (!value.empty() && value[0] == '-') {
+            err = "the value of '" + name + "' starts with '-', so spel would read it as another "
+                  "flag rather than as this one's value: " + value;
+            return false;
+        }
+        // An embedded NUL is not representable in argv: everything after it is
+        // silently dropped, so the command that runs is not the command that was
+        // checked.
+        if (value.find('\0') != std::string::npos) {
+            err = "the value of '" + name + "' carries a NUL byte, which argv cannot represent";
+            return false;
+        }
+
         args.push_back(flag);
         args.push_back(value);
     }

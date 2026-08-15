@@ -253,6 +253,34 @@ int main()
         check(!okOf(c.invoke(
                   R"({"program_id":"p.bin","instruction":"i","params":{"a b":"1"}})")),
               "a param name that would smuggle a second flag is refused");
+
+        // THE NAME CHECK ALONE WAS NOT ENOUGH.
+        //
+        // A value lands in argv immediately after its flag and spel reads argv
+        // positionally, so a value that looks like a flag *is* one. Measured
+        // before the fix: `{"amount":"--bin-auth-transfer"}` passed the name
+        // check and pushed `[--amount] [--bin-auth-transfer]` — putting the flag
+        // that decides which program's ELF is admitted into the proof onto the
+        // command line the caller never asked for.
+        seen.clear();
+        const auto smuggled = c.invoke(
+            R"({"program_id":"p.bin","instruction":"spend",)"
+            R"("params":{"amount":"--bin-auth-transfer"}})");
+        check(!okOf(smuggled), "a param value that is itself a flag is refused");
+        check(parsed(smuggled).value("error", std::string{}).find("--bin-auth-transfer") !=
+                  std::string::npos,
+              "and the refusal quotes the value, so an operator sees what was attempted");
+        check(seen.empty(), "spel is never invoked, so the flag never reaches argv");
+
+        check(!okOf(c.invoke(
+                  R"({"program_id":"p.bin","instruction":"i","params":{"amount":-5}})")),
+              "a negative number is refused for the same reason: argv cannot tell it from a flag");
+        check(!okOf(c.invoke(
+                  R"({"program_id":"p.bin","instruction":"i","params":{"a":"-"}})")),
+              "and so is a bare dash");
+        check(okOf(c.invoke(
+                  R"({"program_id":"p.bin","instruction":"i","params":{"a":"x-y","b":"5"}})")),
+              "while a dash inside a value is ordinary text and still goes through");
     }
     {
         // The failure this repository actually hit. spel prints tx_hash the
