@@ -312,12 +312,13 @@ Every figure in this section was fetched by `./scripts/submission-evidence.py` a
 | block | 8839 |
 | on the wire | 440,881 bytes |
 | bytes found in block | 8839, and in neither 8838 nor 8840 |
-| ImageID recomputed from the committed binary | `778a9341a00de46c4c056ac63a66f63156b068e61cce7f155a2b495e670c4661` |
-| ProgramId owning every policy account below | `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647` |
+| the deployed bytes | the transaction embeds this repository's copy of `agent_verifier.bin` verbatim |
+| shipped ImageID, read off the on-chain `storage` anchor | `778a9341a00de46c4c056ac63a66f63156b068e61cce7f155a2b495e670c4661` |
+| its ProgramId | `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647` |
 
-The ImageID recomputed from the committed ELF and the `program_owner` the chain reports for the anchored policy accounts agree. The binary in this repository is the program enforcing these envelopes on chain.
+Every step of that is a chain fact, and none of it depends on a tool being installed. The deploy transaction is *derived* from the committed bytes rather than quoted, it resolves, and it contains those bytes — so the file in this repository is the program that was deployed. The anchor transaction that created these policy accounts names the ImageID it called, and `getAccount` reports that same ProgramId as the `program_owner` of every one of them. **The binary in this repository is the program enforcing these envelopes on chain.**
 
-`spend` moves no balance itself — LEZ rule 5 refuses any post-state that decreases the balance of an account the executing program does not own — so it chains a call into the authenticated transfer program, which does own them. `artifacts/programs/authenticated_transfer.bin` is committed because the circuit resolves the callee by ImageID; it is not deployed by this repository. Its ImageID recomputes to `583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078`, and `getProgramIds` reports `authenticated_transfer` as `583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078` — the same program.
+`spend` moves no balance itself — LEZ rule 5 refuses any post-state that decreases the balance of an account the executing program does not own — so it chains a call into the authenticated transfer program, which does own them. `artifacts/programs/authenticated_transfer.bin` is committed because the circuit resolves the callee by ImageID; it is not deployed by this repository. `getProgramIds` reports `authenticated_transfer` as `583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078`, and that is exactly the `program_owner` the chain gives every agent's receiving account — which is why the policy program cannot move those balances itself and has to chain the call.
 
 Read out of the shipped `idl/agent_verifier.idl.json` rather than described — the address derivation is the security argument, so it is quoted from the interface the repository actually ships:
 
