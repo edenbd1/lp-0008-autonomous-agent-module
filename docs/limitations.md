@@ -2,38 +2,43 @@
 
 What does not work, stated before anyone has to discover it.
 
-## Why a second create_policy from one signer is always dropped
+## Why a second create_policy from a fresh signer is dropped
 
-Found in the sequencer source rather than guessed. `validate_execution` rule 7,
-`lee/state_machine/core/src/program/mod.rs:730-738`:
+Reproduced against a local sequencer with `RISC0_DEV_MODE=0`, so this is the
+sequencer's own log rather than an inference:
 
-```rust
-if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
-    return Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { .. })
-}
+```
+Transaction with hash 17d50d31… failed execution check with error:
+  InvalidProgramBehavior(DeclaredAccountMissingFromOutput {
+      account_id: NtWrSMxC4xDk6WSYtb6XA4ZqPXHaMzmohVHFH7CVKFX })
+  , skipping it
 ```
 
-`create_policy` returns `owner` with no claim, so its post-state keeps the
-default program owner. Every signed public transaction bumps its signer's nonce
-(`lee/state_machine/src/state/mod.rs:217-221`), so after the first anchor the
-signer's pre-state is no longer `Account::default()` and rule 7 rejects every
-later one — permanently, for that account.
+The chain of events is not the obvious one. LEZ rule 7
+(`lee/state_machine/core/src/program/mod.rs:730-738`) rejects a post-state that
+keeps the default program owner when the pre-state is no longer
+`Account::default()` — and a signer's nonce goes 0 → 1 on its first transaction.
+But the sequencer never actually emits that error, because the vendored SPEL
+macro **filters the signer out of the output first**
+(`vendor/spel/spel-framework-macros/src/lib.rs:304-328`), precisely to dodge
+rule 7. `create_policy` still *declares* `owner`, so the state machine rejects
+it for being declared and missing instead. The workaround converts one
+rejection into another.
 
-Nothing reports it because the sequencer drops a failing transaction at
-block-build time and moves on (`lez/sequencer/core/src/lib.rs:680-688`); the
-only trace is an `error!` line in the sequencer's own log, and `getTransaction`
-cannot distinguish "dropped" from "not yet processed".
+**The precondition matters, and it is narrower than it looks.** This only bites
+a signer that still has the **default** program owner. An account already owned
+by another program is exempt — `DumJ4LCB…`, funded and therefore owned by the
+authenticated transfer program, holds two landed anchors on the public testnet,
+and a locally claimed signer anchored three in a row.
 
-That is the whole explanation for the four hypotheses eliminated above. It is a
-chain rule, not a wallet problem: a correctly built second transaction fails
-just the same.
+Also falsified here: stale local wallet state is not a factor. spel refetches
+from the chain; an anchor still landed with an older wallet snapshot restored
+underneath it.
 
-**Fix**: stop declaring `owner` at all. Signers come from the witness set
-rather than `message.account_ids`
-(`lee/state_machine/src/validated_state_diff/mod.rs:498`, `63`), and a
-`Claim::Pda` needs no authorisation, so `create_policy` never actually reads
-the account it declares. Declaring it buys nothing and costs the signer its
-future.
+**Fix**: stop declaring `owner`. Signers come from the witness set rather than
+`message.account_ids` (`lee/state_machine/src/validated_state_diff/mod.rs:498`,
+`:63`), so the instruction never reads the account it declares — declaring it
+buys nothing and is the sole cause of both rejections.
 
 ## Why `spend` cannot move balance the way it does now
 
