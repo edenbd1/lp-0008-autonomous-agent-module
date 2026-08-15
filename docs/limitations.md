@@ -2,6 +2,36 @@
 
 What does not work, stated before anyone has to discover it.
 
+## The settlement authorises a payment; it does not move tokens
+
+This is the significant one, and it was overstated here and in
+`docs/DEPLOYMENT.md` before being caught.
+
+`spend` checks that the anchored policy permits an amount and returns the
+accounts unchanged: `SpelOutput::execute(vec![...], vec![])` with an empty
+chained-call vector, and the recipient's account is not among the accounts it
+declares. Nothing in the instruction can therefore move value. The transaction
+on chain is a real privacy-preserving proof that the policy authorises 25 LEZ —
+it is not a transfer of 25 LEZ, and calling it "the payment" was wrong.
+
+The prize asks that agents "transfer LEZ payment autonomously". That is not
+met today.
+
+### What it takes to meet it
+
+LEZ's own `authenticated_transfer` program
+(`lez/programs/authenticated_transfer/src/main.rs:22-59`) shows the shape: a
+program moves value by returning post-states with modified balances —
+`checked_sub` on the sender, `checked_add` on the recipient, and
+`Claim::Authorized` on the recipient when its `program_owner` is still the
+default. `SpelOutput::execute` accepts `(Account, AutoClaim)` pairs, so this is
+expressible directly rather than through a chained call.
+
+So `spend` must declare the recipient account as well as `policy` and `agent`,
+and return all three with the sender debited and the recipient credited. The
+policy check is then what it always claimed to be: a gate in front of a real
+transfer rather than a substitute for one.
+
 ## A repeat A2A settlement does not land
 
 `scripts/a2a-task.sh` produced one settlement that is on chain
