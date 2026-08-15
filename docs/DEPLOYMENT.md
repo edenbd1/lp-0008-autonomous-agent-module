@@ -89,7 +89,7 @@ own anchored policy.
 |---|---|---|---|---|---|---|
 | storage | `7o9PT8uE…PGPEUM6` | `5Sa13NyN…dHtjnZ` | `610135ad…86047ac3` | 50 / 500 per 1000 blocks | [`d3a0fc9b…988db74b`](https://explorer.testnet.lez.logos.co/transaction/d3a0fc9b75d71440686ec55503172b7a81a0897e02cae47c8a982242988db74b) | 8649 |
 | messaging | `GpRdooEW…Zpe5FS` | `Dxh7ZLHF…fpEwD` | `2a1e2940…815d3a60` | 25 / 250 per 1000 blocks | [`b0c78a6e…dcfe40ec`](https://explorer.testnet.lez.logos.co/transaction/b0c78a6e26e3f854386c7d1262e27cc03681ace18032fa92c1cba7ebdcfe40ec) | 8651 |
-| blockchain | `9KdQSJ2t…VXicNe` | `BzYks91a…H2wLnu` | `1a317aae…c6e7c356` | 200 / 1000 per 1000 blocks | [`e68411fa…f218513c10`](https://explorer.testnet.lez.logos.co/transaction/e68411fa8aec0c8a3fff4d428a0e8705fbb7dc368e367fc8d2da96f218513c10) | 8652 |
+| blockchain | `9KdQSJ2t…VXicNe` | `BzYks91a…H2wLnu` | `1a317aae…c6e7c356` | 200 / 1000 per 1000 blocks | [`e68411fa…18513c10`](https://explorer.testnet.lez.logos.co/transaction/e68411fa8aec0c8a3fff4d428a0e8705fbb7dc368e367fc8d2da96f218513c10) | 8652 |
 
 Manifest, with the full ids and the account that anchored each policy:
 [`artifacts/agents.tsv`](../artifacts/agents.tsv).
