@@ -949,10 +949,20 @@ answer for an unwired port, and it is not a refund mechanism.
 
 ### 6.7 The spending envelope bounds all of it
 
-A task payment is a spend, and a spend is bounded by an account address rather
-than by a branch: the policy account is a PDA whose seed is the hash of (owner,
-agent, per-tx, per-period, period-blocks). An agent wanting a larger ceiling
-would have to present an account nobody created.
+A task payment is a spend, and a spend is bounded by the chain rather than by a
+branch. Each agent has exactly one policy account, at
+`PDA(program, ["agent-policy/v1", agent_id])` — seeded by the agent id alone —
+and the limits are that account's *data*, which only the policy program may
+write. An agent wanting a larger ceiling cannot name a different address,
+because the address does not depend on the limits; it would have to make a write
+the program refuses.
+
+This paragraph previously said the seed was "the hash of (owner, agent, per-tx,
+per-period, period-blocks)". That was the superseded design, and it is worth
+naming rather than quietly correcting: under it, raising a limit named a
+*different* account, and anchoring a fresh unlimited policy at that address was
+available to whoever held the agent's key. `docs/limitations.md` carries the
+attack and the transaction that proves the previous program accepted it.
 
 So `max_price` in `agent.task` and any price check in a client are *advisory* —
 they save proving time on a transaction the chain would refuse. The ceiling is
@@ -1186,20 +1196,27 @@ A checklist for someone writing a peer, in the order the work has to happen.
 
 ## Where the code is
 
+Symbols, not line numbers. Line citations into `agent_skills.cpp` drifted by
+between +87 and +324 lines over a single refactor of this file — so a table of
+line numbers was not merely stale, it was stale by a *different amount* in every
+row, which is the kind of wrong that survives a spot-check. `scripts/check-docs.py`
+verifies that every symbol named here is in the file it is attributed to.
+
 | Thing | File |
 |---|---|
-| Task states, transitions, topic derivation, base64url | `module/src/agent_skills.cpp:113-235` |
-| `TaskStore` — create, advance, applyUpdate, recordPayment, snapshot, restore | `module/src/agent_skills.cpp:241-461` |
-| `validateAgentCard` | `module/src/agent_skills.cpp:467-601` |
-| `agent.card` | `module/src/agent_skills.cpp:607-754` |
-| `agent.discover` | `module/src/agent_skills.cpp:760-829` |
-| `agent.task` | `module/src/agent_skills.cpp:835-1019` |
-| `agent.subscribe` | `module/src/agent_skills.cpp:1025-1061` |
-| `agent.cancel` | `module/src/agent_skills.cpp:1067-1129` |
-| Ports (`CardPort`, `DiscoveryPort`, `TaskPort`) | `module/src/agent_skills.h:186-241` |
-| Content topics | `module/src/messaging_skills.cpp:12-20` |
-| Reliable channels vs bare topics | `module/src/messaging_skills.cpp:122-166`, `module/src/owner_channel.h:43-56` |
-| Where the ports are handed in | `module/src/agent_module_plugin.h:43-111` |
+| Task states and legal transitions | `enum class TaskState` and `canTransition`, `module/src/agent_skills.h` |
+| Topic derivation, base64url | `taskTopic` and `base64Url`, `module/src/agent_skills.cpp` |
+| The task store — create, advance, applyUpdate, recordPayment, snapshot, restore | `class TaskStore`, `module/src/agent_skills.cpp` |
+| Agent Card validation | `validateAgentCard`, `module/src/agent_skills.cpp` |
+| `agent.card` | `CardSkill`, `module/src/agent_skills.cpp` |
+| `agent.discover` | `DiscoverSkill`, `module/src/agent_skills.cpp` |
+| `agent.task` | `TaskSkill`, `module/src/agent_skills.cpp` |
+| `agent.subscribe` | `SubscribeSkill`, `module/src/agent_skills.cpp` |
+| `agent.cancel` | `CancelSkill`, `module/src/agent_skills.cpp` |
+| Ports (`CardPort`, `DiscoveryPort`, `TaskPort`) | the `struct …Port` declarations in `module/src/agent_skills.h` |
+| Content topics | `discoveryTopic`, `module/src/messaging_skills.cpp` |
+| Reliable channels vs bare topics | `CreateGroupSkill`, `module/src/messaging_skills.cpp`; `OwnerChannel`, `module/src/owner_channel.h` |
+| Where the ports are handed in | `struct SkillPorts`, `module/src/agent_module_plugin.h` |
 | Card signing, as published | `scripts/sign-agent-card.py` |
 | The end-to-end evidence path | `scripts/a2a-task.sh` |
 | Lifecycle and card unit tests | `module/tests/agent_skills_test.cpp` |

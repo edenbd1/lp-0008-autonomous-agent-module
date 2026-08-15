@@ -101,10 +101,10 @@ struct SkillPorts {
     /// decimal integer becomes zero — every spend then goes to the owner, and
     /// every offer is declined, which is the safe direction.
     ///
-    /// Neither copy is the authority. The limits are the PDA seed of the policy
-    /// account (`crates/agent-policy-core`), so editing them here changes what
-    /// this process bothers asking about and nothing about what the chain
-    /// accepts.
+    /// Neither copy is the authority. The limits are the *data* of the agent's
+    /// one policy account (`crates/agent-policy-core`), which only the policy
+    /// program may write, so editing them here changes what this process
+    /// bothers asking about and nothing about what the chain accepts.
     SpendEnvelope envelope;
 
     /// Where the A2A task lifecycle is kept. Null means the module uses its own,

@@ -1567,7 +1567,8 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
     // The keys that are anchored on chain rather than held here. Accepting one
     // updates the local mirror — what the agent asks the owner about — and
     // changes nothing about what the chain will let it spend, because those
-    // numbers are in the PDA seed of the policy account.
+    // numbers are the policy account's data and only the policy program writes
+    // there.
     const bool anchored = key == "per_tx" || key == "per_period" || key == "period_blocks";
 
     if (key == "owner_address" || key == "discovery_topic") {

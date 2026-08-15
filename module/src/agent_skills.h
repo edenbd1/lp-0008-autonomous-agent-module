@@ -455,9 +455,10 @@ private:
 ///
 /// Only known keys, each validated for its own shape. The envelope keys
 /// (`per_tx`, `per_period`, `period_blocks`) are accepted but reported as *not
-/// effective*: those limits live in the PDA seed of the anchored policy
-/// account, so writing a larger number here changes what the agent asks the
-/// owner about and changes nothing about what the chain will let it spend.
+/// effective*: those limits are the data of the anchored policy account, which
+/// only the policy program may write, so writing a larger number here changes
+/// what the agent asks the owner about and changes nothing about what the chain
+/// will let it spend.
 class ConfigureSkill final : public ISkill {
 public:
     explicit ConfigureSkill(ConfigPort port) : port_(std::move(port)) {}

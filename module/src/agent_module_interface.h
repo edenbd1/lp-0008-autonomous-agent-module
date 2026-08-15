@@ -20,15 +20,22 @@
  * implemented one, so it claimed more than the absent code did.
  *
  * The envelope is real, and the authority over it is not C++. It is defined in
- * `crates/agent-policy-core` (`SpendPolicy::is_autonomous`,
- * `compute_policy_hash`) and *enforced* by the anchored policy account in
- * `crates/agent-verifier-spel`, whose address is derived from the limits
- * themselves. A check in this process would be advisory at best: the agent
- * holds its own keys, so whoever controls the process controls the spending,
- * and a limit it can edit is a comment. The agent cannot raise its own ceiling
- * because the ceiling is the *name* of the account it must present, not data it
- * can write — and an above-threshold spend that never reaches the owner has
- * nothing to present, so it does not execute.
+ * `crates/agent-policy-core` (`SpendPolicy::authorize`) and *enforced* by the
+ * anchored policy account in `crates/agent-verifier-spel`. That account is at
+ * `PDA(program, ["agent-policy/v1", agent_id])` — seeded by the agent alone —
+ * and the limits are its *data*, writable only by that program. A check in this
+ * process would be advisory at best: the agent holds its own keys, so whoever
+ * controls the process controls the spending, and a limit it can edit is a
+ * comment. The agent cannot raise its own ceiling because raising it is a write
+ * the program refuses, not a different account to occupy — and an
+ * above-threshold spend that never reaches the owner has nothing to present, so
+ * it does not execute.
+ *
+ * An earlier version of this comment said the address "is derived from the
+ * limits themselves" and named a `compute_policy_hash` the crate no longer has.
+ * That was the superseded design, under which raising a limit named a different
+ * account and anchoring an unlimited policy there was available to whoever held
+ * the agent's key.
  *
  * WHERE THE TWO DELETED TYPES WENT
  *

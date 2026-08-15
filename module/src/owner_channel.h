@@ -20,8 +20,8 @@
  * WHAT THIS CHANNEL IS NOT
  *
  * It is not the authority. An `approve` message arriving here does not let the
- * agent spend a penny more than its anchored ceiling. The ceiling is the *name*
- * of the policy account (`compute_policy_hash` over owner, agent and limits), and
+ * agent spend a penny more than its anchored ceiling. The ceiling is the data
+ * of the agent's one policy account, which only the policy program may write, and
  * an above-threshold payment goes through `spend_approved`, which requires an
  * approval account at a PDA seeded by `compute_approval_marker(compute_spend_ref(
  * policy_hash, recipient, amount, nonce))` — an account only the owner's own
