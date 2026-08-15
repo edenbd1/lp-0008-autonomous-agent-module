@@ -1,0 +1,10 @@
+# Running an ELF in the executor needs no GPU kernels; building them needs a
+# Metal or CUDA toolchain, and on a Mac without the Metal component installed
+# the build fails outright with "Could not build metal kernels". This check
+# never proves anything — it executes — so the kernels are skipped rather than
+# made a prerequisite for reading the evidence.
+#
+# In cargo config rather than in a shell wrapper so that `cargo run` inside this
+# directory behaves the same as the one demo.sh performs.
+[env]
+RISC0_SKIP_BUILD_KERNELS = "1"

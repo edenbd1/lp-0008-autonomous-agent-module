@@ -59,6 +59,25 @@ CLIENT_OWNER=$(field $CLIENT_CAT 9)
 [ -n "$SERVER_PAY" ] || { echo "the server agent has no receiving account in $AGENTS" >&2; exit 1; }
 [ -n "$CLIENT_OWNER" ] || { echo "no owner recorded for $CLIENT_CAT in $AGENTS" >&2; exit 1; }
 
+# An account id, base58 as the wallet prints it, as the 32 raw bytes the chain
+# holds. The policy hash commits to the owner and the agent by account id, and
+# the program compares both against the accounts in front of it — the signer for
+# the owner, the payer for the agent — so these have to be the accounts
+# themselves and not a hash of how they are printed.
+id_hex() {
+  python3 -c "
+import sys
+A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+s=sys.argv[1]
+n=0
+for c in s:
+    n = n*58 + A.index(c)
+b = n.to_bytes((n.bit_length()+7)//8,'big')
+b = b'\x00'*(len(s)-len(s.lstrip('1'))) + b
+assert len(b)==32, 'not a 32-byte account id: %r' % s
+print(b.hex())" "$1"
+}
+
 # Read a balance straight off the chain. Only public accounts are readable this
 # way — a private account is a commitment in the private state and `getAccount`
 # answers with the default account for it — which is exactly why the agent being
@@ -73,10 +92,23 @@ PRICE=25                       # inside the client's per-transaction limit of 20
 
 rule() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
-rule "1. the server agent publishes an A2A Agent Card"
+rule "1. the server agent publishes a signed A2A Agent Card"
 # A2A Agent Cards declare identity, skills and their schemas. The LEZ price per
 # task is the field vanilla A2A has no answer for — the protocol deliberately
 # leaves payment out, which is the gap this fills.
+#
+# Two things this file used to get wrong, both of which the module's own card
+# validator now rejects (module/src/agent_skills.cpp, `validateCard`):
+#
+#   `provider` carried an organization and no url. A2A makes the object optional
+#   and both of its fields required, and a name with no URL leaves a reader with
+#   something to read and nothing to check.
+#
+#   The card was unsigned. It advertises the account to send money to, so an
+#   unsigned one is a document anyone on the discovery topic can rewrite — the
+#   payment account included. It is signed below by the key that owns that very
+#   account, so the reader checks the card against the thing the card is asking
+#   them to trust.
 cat > "$CARDS/$SERVER_CAT.json" <<JSON
 {
   "protocolVersion": "0.3.0",
@@ -84,9 +116,16 @@ cat > "$CARDS/$SERVER_CAT.json" <<JSON
   "description": "Encrypts and stores a file on Logos Storage, returns its content address",
   "url": "logos-messaging://$SERVER_ID",
   "preferredTransport": "logos-messaging",
-  "provider": { "organization": "LP-0008 reference agent" },
+  "provider": {
+    "organization": "LP-0008 reference agent",
+    "url": "https://github.com/logos-co/lambda-prize"
+  },
   "version": "0.1.0",
-  "capabilities": { "streaming": true },
+  "capabilities": {
+    "streaming": true,
+    "stateTransitionHistory": true,
+    "pushNotifications": false
+  },
   "defaultInputModes": ["application/json"],
   "defaultOutputModes": ["application/json"],
   "skills": [
@@ -107,8 +146,24 @@ cat > "$CARDS/$SERVER_CAT.json" <<JSON
   }
 }
 JSON
+# RFC 7515 JWS with a detached payload, the construction the module produces and
+# its discovery path verifies: `protected` and `signature`, over the card
+# without its own signatures. The key is the server agent's own account key —
+# BIP-340 Schnorr over secp256k1, which is what a LEZ account key is — so `kid`
+# is the account being advertised for payment.
+AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
+SIGNED=$(python3 scripts/sign-agent-card.py \
+  --wallet-home "$AGENT_HOMES/$SERVER_CAT" --account "$SERVER_PAY" \
+  < "$CARDS/$SERVER_CAT.json") || {
+  echo "  the card could not be signed, so it is not published" >&2; exit 1; }
+printf '%s\n' "$SIGNED" > "$CARDS/$SERVER_CAT.json"
 echo "  published $CARDS/$SERVER_CAT.json"
-python3 -c "import json;d=json.load(open('$CARDS/$SERVER_CAT.json'));print('  skill:',d['skills'][0]['id'],' price:',d['x-logos']['pricePerTask'],'LEZ',' pay to:',d['x-logos']['paymentAccount'])"
+python3 -c "
+import json
+d=json.load(open('$CARDS/$SERVER_CAT.json'))
+print('  skill:',d['skills'][0]['id'],' price:',d['x-logos']['pricePerTask'],'LEZ',' pay to:',d['x-logos']['paymentAccount'])
+print('  provider:',d['provider']['organization'],'<'+d['provider']['url']+'>')
+print('  signed:',d['signatures'][0]['signature'][:16]+'…','by',json.loads(__import__('base64').urlsafe_b64decode(d['signatures'][0]['protected']+'==').decode())['kid'])"
 
 rule "2. the client agent discovers it and accepts the price"
 echo "  client  $CLIENT_ID  ($CLIENT_CAT, per-tx limit $CLIENT_PER_TX)"
@@ -152,16 +207,41 @@ rule "5. settlement on chain, by the client agent, unattended"
 # does not consume an approval, so the same call shape works either side of the
 # threshold.
 NONCE=$(python3 -c "import random;print(random.randrange(1,2**63))")
-OWNER_HEX=$(python3 -c "
-import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$CLIENT_OWNER")
-AGENT_HEX=$(python3 -c "
-import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$CLIENT_ID")
-RECIP_HEX=$(python3 -c "
-import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$SERVER_ID")
+OWNER_HEX=$(id_hex "$CLIENT_OWNER")
+AGENT_HEX=$(id_hex "$CLIENT_ID")
+# The account that is actually paid, not the server's shielded identity. An
+# approval commits to the recipient the chain will hand the money to, and
+# `spend_approved` compares it against that account's own id — so a marker
+# derived from anything else names a payment that cannot happen.
+RECIP_HEX=$(id_hex "$SERVER_PAY")
 MARKER=$(cargo run --quiet --release -p agent-policy-core --example spend-marker -- \
   "$CLIENT_POLICY" "$RECIP_HEX" "$PRICE" "$NONCE")
 echo "  nonce  $NONCE"
 echo "  marker $MARKER"
+
+# The period this spend is accounted against. `spent_this_period` used to be an
+# argument here, and the argument was 0 — every settlement declared that the
+# agent had spent nothing, so the per-period ceiling bounded one transaction and
+# nothing else. The total now lives in the policy account, and what the caller
+# supplies instead is which period it is spending in: the guest refuses anything
+# that is not a multiple of period_blocks, and pins the transaction's block
+# validity window to [window_start, window_start + period_blocks), so naming a
+# period is not a claim the chain takes on trust.
+HEIGHT=$(curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getLastBlockId","params":[]}' \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['result'])")
+[ -n "$HEIGHT" ] || { echo "  could not read the chain height" >&2; exit 1; }
+WINDOW=$(cargo run --quiet --release -p agent-policy-core --example window-start -- \
+  "$HEIGHT" "$CLIENT_PERIOD")
+WINDOW_START=${WINDOW%% *}; WINDOW_END=${WINDOW##* }
+echo "  block  $HEIGHT, period [$WINDOW_START, $WINDOW_END)"
+# A settlement submitted in the last blocks of a period can miss it: the
+# transaction is only includable inside the window it names, and the next period
+# is not reachable yet. Say so rather than let it look like a network fault.
+if [ $((WINDOW_END - HEIGHT)) -lt 3 ]; then
+  echo "  WARNING: fewer than 3 blocks left in this period; a settlement that" >&2
+  echo "  slips past block $WINDOW_END will be refused as out of its window." >&2
+fi
 
 # The balance that has to move, read off the chain before anything is signed.
 BEFORE=$(balance_of "$SERVER_PAY")
@@ -198,7 +278,7 @@ OUT_TXT=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
   -- spend --agent "Private/$CLIENT_ID" --recipient "Public/$SERVER_PAY" \
   --policy-hash "$CLIENT_POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
   --per-tx "$CLIENT_PER_TX" --per-period "$CLIENT_PER_PERIOD" --period-blocks "$CLIENT_PERIOD" \
-  --amount "$PRICE" --spent-this-period 0 2>&1)
+  --amount "$PRICE" --window-start "$WINDOW_START" 2>&1)
 TX=$(echo "$OUT_TXT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
 if [ -z "$TX" ]; then
   echo "  NO TRANSACTION — the settlement did not submit:" >&2
