@@ -535,13 +535,15 @@ The explorer indexes roughly an hour and three quarters behind the sequencer, so
 
 Read from `artifacts/agents.tsv` **by column name**, then checked against the chain. Limits below are the ones the state machine holds, not the ones the manifest claims; where they differed this section would say so and the generator would exit non-zero.
 
-| category | agent | policy account | per-tx | per-period | period | window | spent | `create_policy` |
-|---|---|---|---|---|---|---|---|---|
-| storage | `9Xpkkvos…` | `6FscNXjN…` | 50 | 500 | 1,000 blocks | 0 | 0 | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4), block 8868 |
-| messaging | `GpRdooEW…` | `7HH46tXh…` | 25 | 250 | 1,000 blocks | 8,000 | 50 | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918), block 8876 |
-| blockchain | `A7UBoMbS…` | `2RK4dPwz…` | 200 | 1,000 | 1,000 blocks | 0 | 0 | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda), block 8884 |
+| category | agent | policy account | per-tx | per-period | period | `create_policy` |
+|---|---|---|---|---|---|---|
+| storage | `9Xpkkvos…` | `6FscNXjN…` | 50 | 500 | 1,000 blocks | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4), block 8868 |
+| messaging | `GpRdooEW…` | `7HH46tXh…` | 25 | 250 | 1,000 blocks | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918), block 8876 |
+| blockchain | `A7UBoMbS…` | `2RK4dPwz…` | 200 | 1,000 | 1,000 blocks | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda), block 8884 |
 
-Each `create_policy` above was confirmed present in the block named and absent from both neighbours. The limits are the chain's own copy: the address of a policy account is `PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so raising a limit does not edit this record — it names a different address that `create_policy` never initialised, and the state machine rejects the spend before the program body runs. `window` and `spent` are the halves only the owning program may write.
+Each `create_policy` above was confirmed present in the block named and absent from both neighbours. The limits are the chain's own copy: the address of a policy account is `PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so raising a limit does not edit this record — it names a different address that `create_policy` never initialised, and the state machine rejects the spend before the program body runs.
+
+The ledger's *running total* — `window_start` and `spent`, the halves only the owning program may write — is deliberately **not** in that table, and the reason is the same one that keeps `getAccount` out of the settlement balances. Those two fields move every time an agent spends. Reading them with `getAccount` puts a number in this document that is current only until the next settlement, so `--check` would fail on ordinary agent activity with nothing in the repository changed — a gate that cries wolf is one people learn to skip, and it drifted under this document once already, from 50 to 55, while it was being written. The limits above are safe to state because they are anchored and the manifest records them, so a disagreement is a real defect rather than the clock. The running total appears in the settlement table below instead, taken from each transaction's own committed post-state, where it is immutable.
 
 `artifacts/anchored.tsv` records every `(program, anchor)` pair this repository has ever written, keyed on the program, which is why a redeploy shows up in it rather than overwriting it. Under the program deployed above there are 6:
 

@@ -53,9 +53,22 @@ What makes each number safe to print
 
   * TSVs are read BY HEADER NAME and a missing column is fatal. Positional reads
     have produced three separate false results in this repository, and the
-    columns really do move: `anchored.tsv` has renamed `create_tx` to `tx` and
-    grown a `what` column, and `agents.tsv` has grown `claim_account`,
-    `claim_tx` and `record_prefix` since the last regeneration.
+    columns really do move: `anchored.tsv` renamed `create_tx` to `tx` and grew
+    a `what` column, `agents.tsv` grew `claim_account`, `claim_tx` and
+    `record_prefix`, and `a2a-task.tsv` gained a `program` column AT POSITION 1
+    — which shifted every other column by one, so a positional read of
+    `settlement_tx` now returns the nonce. That happened mid-task, under this
+    script, and changed nothing about its output.
+
+  * Nothing that moves with ordinary use is printed into a checked document.
+    The ledger's `window_start` and `spent` change on every settlement, so
+    stating them from `getAccount` would make --check fail on agent activity
+    with nothing in the repository changed. A gate that cries wolf is one people
+    learn to skip. They drifted from 50 to 55 while this was being written,
+    which is how the rule was found. The anchored LIMITS are still stated and
+    still compared against the manifest, because those are recorded in
+    `agents.tsv` and a disagreement is a real defect; the running total is shown
+    per settlement instead, out of that transaction's immutable post-state.
 
   * Nothing may be left blank. `render` refuses to emit "TBD", "TODO", a
     placeholder or an empty table cell — that pattern is quoted verbatim in the
@@ -236,11 +249,21 @@ def parse_updates(b):
     return out
 
 
-def policy_record(data):
-    """The 97 bytes an anchored policy account holds, or None if it holds
-    something else. `record_owner`, not `owner`: the account already has an
-    owner -- the program allowed to write it -- and conflating the two is how a
-    previous reading of this record went wrong."""
+def ledger_record(data):
+    """The 97 bytes an anchored ledger account holds, or None if it holds
+    something else.
+
+    Named `ledger_*` to match scripts/use-cases/settlement-facts.py, which the
+    use-case scripts consume: its `ledger_account`, `ledger_spent`,
+    `ledger_window_start`, `ledger_per_tx`, `ledger_per_period` and
+    `ledger_record_owner` are this dict's keys under that prefix. Two decoders
+    of the same bytes that disagree about what to call them is a smaller
+    problem than two that disagree about the bytes, but it is still a problem.
+
+    `record_owner`, not `owner`: the account already has an owner -- the
+    program allowed to write it -- and conflating the two is how a previous
+    reading of this record went wrong.
+    """
     if len(data) != 97 or data[0] != 1:
         return None
     le = lambda a, b: int.from_bytes(data[a:b], "little")
@@ -556,8 +579,8 @@ def section_agents(chain, root, agents, anchors):
       "ones the manifest claims; where they differed this section would say so "
       "and the generator would exit non-zero.")
     d()
-    d("| category | agent | policy account | per-tx | per-period | period | window | spent | `create_policy` |")
-    d("|---|---|---|---|---|---|---|---|---|")
+    d("| category | agent | policy account | per-tx | per-period | period | `create_policy` |")
+    d("|---|---|---|---|---|---|---|")
 
     disagreements = []
     for a in agents:
@@ -568,7 +591,7 @@ def section_agents(chain, root, agents, anchors):
             raise Fatal("policy account %s (%s) has no owner on chain — it was "
                         "never anchored, or the manifest names the wrong address"
                         % (a["policy_account"], a["category"]))
-        rec = policy_record(data)
+        rec = ledger_record(data)
         if rec is None:
             raise Fatal("policy account %s (%s) holds %d bytes, not a 97-byte v1 "
                         "policy record" % (a["policy_account"], a["category"], len(data)))
@@ -578,10 +601,9 @@ def section_agents(chain, root, agents, anchors):
                     "%s: the chain holds %s = %d, the manifest says %s"
                     % (a["category"], field, rec[field], a[field]))
         c = confirm(chain, a["create_tx"])
-        d("| %s | `%s…` | `%s…` | %s | %s | %s blocks | %s | %s | %s, block %d |"
+        d("| %s | `%s…` | `%s…` | %s | %s | %s blocks | %s, block %d |"
           % (a["category"], a["agent_id"][:8], a["policy_account"][:8],
              fmt(rec["per_tx"]), fmt(rec["per_period"]), fmt(rec["period_blocks"]),
-             fmt(rec["window_start"]), fmt(rec["spent"]),
              link(a["create_tx"]), c["block"]))
     d()
 
@@ -595,8 +617,21 @@ def section_agents(chain, root, agents, anchors):
       "`PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so "
       "raising a limit does not edit this record — it names a different address "
       "that `create_policy` never initialised, and the state machine rejects the "
-      "spend before the program body runs. `window` and `spent` are the halves "
-      "only the owning program may write.")
+      "spend before the program body runs.")
+    d()
+    d("The ledger's *running total* — `window_start` and `spent`, the halves only "
+      "the owning program may write — is deliberately **not** in that table, and "
+      "the reason is the same one that keeps `getAccount` out of the settlement "
+      "balances. Those two fields move every time an agent spends. Reading them "
+      "with `getAccount` puts a number in this document that is current only "
+      "until the next settlement, so `--check` would fail on ordinary agent "
+      "activity with nothing in the repository changed — a gate that cries wolf "
+      "is one people learn to skip, and it drifted under this document once "
+      "already, from 50 to 55, while it was being written. The limits above are "
+      "safe to state because they are anchored and the manifest records them, so "
+      "a disagreement is a real defect rather than the clock. The running total "
+      "appears in the settlement table below instead, taken from each "
+      "transaction's own committed post-state, where it is immutable.")
     d()
 
     # anchored.tsv is the full history including superseded programs. Its value
@@ -667,41 +702,50 @@ def section_settlements(chain, root, agents, tasks):
                 % (t["settlement_tx"],
                    ",".join(str(x) for x in program_id_words(hit["owner"]))))
 
-        # The policy account this settlement charged, found STRUCTURALLY: the
-        # update whose data decodes as a 97-byte v1 policy record. Resolving it
-        # through agents.tsv instead would make a settlement under a superseded
-        # program look like a missing manifest row -- which is how the last two
-        # regenerations lost track of which deployment the evidence belonged to.
-        # The manifest is then used only to cross-check the address, and a
-        # disagreement is fatal rather than cosmetic.
-        pols = [u for u in updates if policy_record(u["data"])]
-        if len(pols) > 1:
-            raise Fatal("%s writes %d policy records; a settlement charges one "
-                        "envelope" % (t["settlement_tx"], len(pols)))
-        pol = under = pol_addr = None
-        if pols:
-            pol = policy_record(pols[0]["data"])
-            under = program_id_words(pols[0]["owner"])
-            pol_addr = b58encode(pols[0]["account"])
+        # The ledger account this settlement charged, found STRUCTURALLY: the
+        # update whose data decodes as a 97-byte v1 record. It is NOT looked up
+        # by address, and that is load-bearing rather than stylistic.
+        #
+        # A ledger address is PDA(program, agent_id), so a redeploy moves it.
+        # artifacts/a2a-task.tsv now spans two programs, and its four rows
+        # therefore straddle two different ledger accounts for the same agents.
+        # Naming the address out of agents.tsv would look up the CURRENT PDA in
+        # a transaction that charged the OLD one: measured against the live
+        # manifest, two of the four rows find nothing. A check that finds
+        # nothing does not fail -- it quietly stops testing anything, and
+        # reports the remaining rows as a clean pass. Finding the record by its
+        # shape instead means a redeploy cannot silently shrink the check.
+        #
+        # The manifest is then used only to cross-check the address, and only
+        # for rows under the current program, where a disagreement is real.
+        ledgers = [u for u in updates if ledger_record(u["data"])]
+        if len(ledgers) > 1:
+            raise Fatal("%s writes %d ledger records; a settlement charges one "
+                        "envelope" % (t["settlement_tx"], len(ledgers)))
+        ledger = under = ledger_account = None
+        if ledgers:
+            ledger = ledger_record(ledgers[0]["data"])
+            under = program_id_words(ledgers[0]["owner"])
+            ledger_account = b58encode(ledgers[0]["account"])
             client = by_agent.get(t["client"])
             # Only a settlement under the CURRENT program has to match the
             # manifest. One under a superseded program charges a PDA the
             # redeploy moved, so its address differs for a reason the chain
             # states -- that gets written down below, not treated as a bug.
             if (client and ident and under == ident["words"]
-                    and client["policy_account"] != pol_addr):
+                    and client["policy_account"] != ledger_account):
                 mismatches.append(
                     "%s charges policy account %s under the current program, but "
                     "artifacts/agents.tsv gives client %s the policy account %s"
-                    % (t["settlement_tx"], pol_addr, t["client"],
+                    % (t["settlement_tx"], ledger_account, t["client"],
                        client["policy_account"]))
 
         others = [b58encode(u["account"]) for u in updates
                   if u["account"] != payee_raw
-                  and b58encode(u["account"]) != pol_addr]
+                  and b58encode(u["account"]) != ledger_account]
 
-        rows.append({"t": t, "c": c, "payee": hit["balance"], "pol": pol,
-                     "under": under, "pol_addr": pol_addr, "others": others,
+        rows.append({"t": t, "c": c, "payee": hit["balance"], "ledger": ledger,
+                     "under": under, "ledger_account": ledger_account, "others": others,
                      "updates": len(updates)})
 
     if mismatches:
@@ -721,13 +765,13 @@ def section_settlements(chain, root, agents, tasks):
     d("|---|---|---|---|---|---|---|---|")
     for i, r in enumerate(rows, 1):
         t = r["t"]
-        pol = ("`%s…` at %s / %s"
-               % (r["pol_addr"][:8], fmt(r["pol"]["window_start"]),
-                  fmt(r["pol"]["spent"]))
-               if r["pol"] else "this transaction writes no policy record")
+        ledger = ("`%s…` at %s / %s"
+                  % (r["ledger_account"][:8], fmt(r["ledger"]["window_start"]),
+                     fmt(r["ledger"]["spent"]))
+                  if r["ledger"] else "this transaction writes no ledger record")
         d("| %d | %s | %d | %s bytes | `%s` | %s LEZ | %s | %s |"
           % (i, link(t["settlement_tx"]), r["c"]["block"], fmt(r["c"]["bytes"]),
-             t["skill"], t["price"], fmt(r["payee"]), pol))
+             t["skill"], t["price"], fmt(r["payee"]), ledger))
     d()
 
     for i, r in enumerate(rows, 1):
@@ -745,7 +789,7 @@ def section_settlements(chain, root, agents, tasks):
             notes.append(
                 "  The envelope it charged, `%s`, is owned by ProgramId `%s`, "
                 "which %s the program this repository ships. %s"
-                % (r["pol_addr"], ",".join(str(x) for x in r["under"]),
+                % (r["ledger_account"], ",".join(str(x) for x in r["under"]),
                    "is" if same else "is **not**",
                    "The anchor and the settlement are under the same deployment."
                    if same else
@@ -761,7 +805,7 @@ def section_settlements(chain, root, agents, tasks):
                 "the committed ELF on this run; "
                 "`spel program-id artifacts/programs/agent_verifier.bin` "
                 "compares them."
-                % (r["pol_addr"], ",".join(str(x) for x in r["under"])))
+                % (r["ledger_account"], ",".join(str(x) for x in r["under"])))
         else:
             notes.append(
                 "  Its post-state contains no 97-byte policy record, so the "
