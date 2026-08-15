@@ -56,6 +56,9 @@ A settlement costs real testnet balance and the funder holds 10 LEZ. So:
 ## Running them
 
 ```bash
+# spel is vendored but not built: that path does not exist in a fresh clone.
+# Build it once (about five minutes), then point at it.
+cargo build --release --locked -p spel --manifest-path vendor/spel/Cargo.toml
 export SPEL_BIN=$PWD/vendor/spel/target/release/spel   # or any spel on PATH
 ./scripts/use-cases/02-services-marketplace.sh
 ./scripts/use-cases/03-spending-threshold.sh

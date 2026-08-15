@@ -104,6 +104,7 @@ echo "[2/5] compile agent-console, linking the agent module unmodified"
     -I"$repo/module/src" -I"$SDK/cpp" -I"$NLOHMANN_INCLUDE" \
     "$here/console.cpp" \
     "$repo/module/src/agent_module_plugin.cpp" \
+    "$repo/module/src/delivery_runtime.cpp" \
     "$repo/module/src/messaging_skills.cpp" \
     "$repo/module/src/storage_skills.cpp" \
     "$repo/module/src/inference.cpp" \

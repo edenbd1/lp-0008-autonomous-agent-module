@@ -52,6 +52,16 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 . scripts/use-cases/lib.sh
 
 SPEL="${SPEL_BIN:-spel}"
+# Without this, a missing spel is not an error: every derivation below returns
+# the empty string, lib.sh swallows the failure, and the script goes on to
+# report "the chain says per_tx , the manifest says 200" -- which reads like the
+# chain disagreeing with us rather than like a tool that was never built. Script
+# 03 has had this guard; 02 and 05 did not, and a reviewer following the docs on
+# a fresh clone met five confident FAILs instead of one clear sentence.
+command -v "$SPEL" >/dev/null 2>&1 || [ -x "$SPEL" ] \
+  || { echo "error: no spel on PATH. Build it once:" >&2; \
+       echo "  cargo build --release --locked -p spel --manifest-path vendor/spel/Cargo.toml" >&2; \
+       echo "then re-run, or set SPEL_BIN=\$PWD/vendor/spel/target/release/spel" >&2; exit 1; }
 WALLET="${WALLET_BIN:-wallet}"
 IDL=idl/agent_verifier.idl.json
 PROGRAM=artifacts/programs/agent_verifier.bin

@@ -741,14 +741,23 @@ jobs:
           hit = 0
           out = tarfile.open("module/agent.lgx", "w:gz", format=tarfile.GNU_FORMAT)
           for m, data in members:
-              if data is not None and m.name.endswith((".dylib", ".so")):
+              # The PLUGIN specifically, not any shared library in the package.
+              # This used to match every .dylib, which was true until the
+              # package started carrying liblogosdelivery beside the plugin --
+              # and then the assertion below died on two hits before the control
+              # ever ran, leaving "a swapped binary is detected" unverified
+              # rather than merely untested. A control that stops working when
+              # the thing it guards grows is worse than no control, because it
+              # goes red for a reason that is not the property.
+              if data is not None and m.name.endswith(("agent_plugin.dylib",
+                                                       "agent_plugin.so")):
                   # One byte, deep in __TEXT. Same length, so the size and the
                   # manifest's own idea of the file are untouched.
                   data = data[:0x40000] + bytes([data[0x40000] ^ 0xFF]) + data[0x40001:]
                   hit += 1
               out.addfile(m, io.BytesIO(data)) if data is not None else out.addfile(m)
           out.close()
-          assert hit == 1, "expected exactly one plugin binary in the package, found %d" % hit
+          assert hit == 1, "expected exactly one agent_plugin binary in the package, found %d" % hit
           print("one byte flipped in the packaged plugin; the archive is otherwise identical")
           PY
           set +e
