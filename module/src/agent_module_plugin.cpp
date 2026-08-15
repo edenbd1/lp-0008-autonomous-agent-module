@@ -132,25 +132,55 @@ StdLogosResult AgentModuleImpl::registerSkill(std::shared_ptr<logos::agent::ISki
 
 std::string AgentModuleImpl::skills() const
 {
+    // Copy what we need out from under the lock. Everything below this block
+    // calls into third-party code, and the mutex is not recursive: asking a
+    // skill for its schema while holding it deadlocked the module against any
+    // skill that called back in.
     std::vector<std::pair<std::string, std::shared_ptr<logos::agent::ISkill>>> registered;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!started_) {
+            // Not `[]`: an empty array is a valid, empty Agent Card, and a
+            // caller cannot tell it from an agent that has no skills.
             return dumpSafe(json{{"error", "agent is not started"}});
         }
         registered.assign(skills_.begin(), skills_.end());
     }
-    std::string out = "[";
-    bool first = true;
+
+    json card = json::array();
     for (const auto &entry : registered) {
-        if (!first) out += ",";
-        first = false;
+        // The registered name, not a second call into `name()`: it is the key
+        // `invoke()` dispatches on, so publishing anything else would advertise
+        // a skill nobody can call. Built through the JSON library, so a name
+        // carrying quotes or braces is escaped instead of forging the document
+        // it is spliced into.
+        json item{{"name", entry.first}};
+
         std::string schema;
-        try { schema = entry.second->parameterSchema(); } catch (...) { schema = "{}"; }
-        out += "{\"name\":\"" + entry.first + "\",\"parameters\":" + schema + "}";
+        try {
+            schema = entry.second->parameterSchema();
+        } catch (const std::exception &e) {
+            item["error"] = std::string("parameterSchema() threw: ") + e.what();
+            card.push_back(std::move(item));
+            continue;
+        } catch (...) {
+            item["error"] = "parameterSchema() threw";
+            card.push_back(std::move(item));
+            continue;
+        }
+
+        // One skill's bad schema costs that skill its parameters. Spliced in as
+        // raw text it cost every skill the whole document — `""` alone produced
+        // `"parameters":` with no value.
+        auto parsed = json::parse(schema, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            item["error"] = "parameter schema is not a JSON object";
+        } else {
+            item["parameters"] = std::move(parsed);
+        }
+        card.push_back(std::move(item));
     }
-    out += "]";
-    return out;
+    return dumpSafe(card);
 }
 
 std::string AgentModuleImpl::invoke(const std::string &name, const std::string &paramsJson)

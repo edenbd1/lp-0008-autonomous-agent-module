@@ -252,10 +252,20 @@ int main()
     {
         AgentModuleImpl m;
         check(!m.start().success, "start before configure is refused");
+        // Registered but not startable: the skill exists, so a refusal here is
+        // the lifecycle refusing rather than a name that was never registered.
+        bool called = false;
+        auto early = std::make_shared<Fake>("early", "{}");
+        early->onInvoke = [&called](const std::string &) {
+            called = true;
+            return std::string(R"({"ok":true})");
+        };
+        m.registerSkill(early);
         const auto before = json::parse(m.skills(), nullptr, false);
         check(!before.is_discarded() && before.is_object() && before.contains("error"),
               "skills() before start is an error, not an empty card");
-        check(!okOf(m.invoke("storage.upload", "{}")), "and invoke before start is refused");
+        check(!okOf(m.invoke("early", "{}")) && !called,
+              "and invoke before start refuses without reaching the skill");
     }
 
     std::printf("skills document\n");
@@ -355,7 +365,10 @@ int main()
         m->configure("owner-1", anchored);
         m->start();
         auto reentrant = std::make_shared<Fake>("reentrant.schema", "{}");
-        reentrant->onSchema = [m] { m->status(); return std::string("{}"); };
+        reentrant->onSchema = [m] {
+            m->registerSkill(std::make_shared<Fake>("added.while.answering", "{}"));
+            return std::string("{}");
+        };
         m->registerSkill(reentrant);
         check(completes([m] { m->skills(); }),
               "a skill that calls back into the module does not deadlock skills()");
@@ -364,9 +377,20 @@ int main()
         m2->configure("owner-1", anchored);
         m2->start();
         auto reentrantName = std::make_shared<Fake>("reentrant.name", "{}");
-        reentrantName->onName = [m2] { m2->status(); return std::string("reentrant.name"); };
+        reentrantName->onName = [m2] { m2->skills(); return std::string("reentrant.name"); };
         check(completes([m2, reentrantName] { m2->registerSkill(reentrantName); }),
               "nor registerSkill()");
+
+        auto *m3 = new AgentModuleImpl();
+        m3->configure("owner-1", anchored);
+        m3->start();
+        auto reentrantInvoke = std::make_shared<Fake>("reentrant.invoke", "{}");
+        reentrantInvoke->onInvoke = [m3](const std::string &) {
+            m3->skills();
+            return std::string(R"({"ok":true})");
+        };
+        m3->registerSkill(reentrantInvoke);
+        check(completes([m3] { m3->invoke("reentrant.invoke", "{}"); }), "nor invoke()");
     }
 
     std::printf("module invoke\n");
