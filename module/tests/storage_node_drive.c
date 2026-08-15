@@ -69,19 +69,30 @@ int main(void) {
   printf("\n4. upload a file, as a session\n");
   const char *path = "lp0008-upload.txt";
   FILE *f = fopen(path, "w");
-  if (f) { fputs("lp-0008 agent storage skill\n", f); fclose(f); }
+  if (!f) { printf("  FAIL  could not create %s\n", path); failures++; goto shutdown; }
+  fputs("lp-0008 agent storage skill\n", f);
+  fclose(f);
+
+  // Every step below bails out on timeout instead of carrying on. Continuing
+  // is not merely untidy: the callbacks carry no correlation, so a late reply
+  // to a timed-out call satisfies the *next* wait. An upload_init that answers
+  // slowly would hand its session id to the cid check, which would then pass
+  // while nothing had been uploaded at all.
   arm();
   storage_upload_init(ctx, path, 65536, (StorageCallback)cb, NULL);
-  CHECK(settled(60), "upload_init opened a session");
+  if (!settled(60)) { printf("  FAIL  upload_init opened a session\n"); failures++; goto shutdown; }
+  printf("  ok    upload_init opened a session\n");
   char session[512]; snprintf(session, sizeof session, "%s", reply);
   printf("  <-    session: %s\n", session);
 
   arm();
   storage_upload_file(ctx, session, (StorageCallback)cb, NULL);
-  int uploaded = settled(120);
+  if (!settled(120)) { printf("  FAIL  the upload completed\n"); failures++; goto shutdown; }
   char cid[512]; snprintf(cid, sizeof cid, "%s", reply);
   printf("  <-    cid: %s\n", cid);
-  CHECK(uploaded && cid[0], "the node returned a content address");
+  // Not merely "some non-empty string": a Logos content address is base58 and
+  // starts with 'z'. Asserting non-emptiness would accept the session id.
+  CHECK(cid[0] == 'z' && strlen(cid) > 40, "the node returned a content address");
 
   printf("\n5. ask the node for it back\n");
   arm();
