@@ -186,15 +186,26 @@ fi
 # committed binary against both steps of the attack.
 if [ -s artifacts/adversarial.tsv ]; then
   LIVE_PROG=$DEPLOY_TX
-  while IFS=$'\t' read -r step what prog signer agent limits tx outcome; do
-    [ "$step" = step ] && continue
+  # By header name. This was eight positional variables against a file whose
+  # first column is `step` and repeats, so `field` had nothing to key on — see
+  # `row_of` in lib.sh. What each row SAYS about how much moved stays a recorded
+  # description and is labelled as one: the checkable part is whether the chain
+  # still holds the transaction, and that is what is checked.
+  N_ADV=$(rows_of artifacts/adversarial.tsv)
+  ADV_I=1
+  while [ "$ADV_I" -le "$N_ADV" ]; do
+    R=$(row_of artifacts/adversarial.tsv "$ADV_I")
+    ADV_I=$((ADV_I + 1))
+    what=$(kv "$R" what); prog=$(kv "$R" program)
+    tx=$(kv "$R" tx); outcome=$(kv "$R" outcome)
     [ -n "$tx" ] || continue
     case "$outcome" in
       accepted*) if [ "$prog" = "$LIVE_PROG" ]; then
                    bad "  $tx is recorded as accepted by the LIVE program"
                  elif tx_live "$tx"; then
-                   note "the superseded program accepted $what"
-                   printf '         %s\n' "$tx"
+                   note "recorded, of the superseded program: $what"
+                   printf '         %s  in block %s\n' "$tx" \
+                     "$(kv "$(settlement_facts "$tx")" block)"
                  else
                    bad "  a recorded accepted attack, $tx, is not on chain"
                  fi ;;
@@ -206,7 +217,7 @@ if [ -s artifacts/adversarial.tsv ]; then
                     ok "  $tx: submitted, never included"
                   fi ;;
     esac
-  done < artifacts/adversarial.tsv
+  done
 else
   note "no artifacts/adversarial.tsv to check the recorded attacks against"
 fi
@@ -226,15 +237,23 @@ else
   # reported a price of "skill" as being over the ceiling and a transaction hash
   # of "70" as not on chain. Two confident wrong answers from a file that was
   # perfectly correct.
-  n=0; landed=0
+  #
+  # And the AMOUNT each settlement moved is decoded out of the settlement rather
+  # than differenced from two columns of this file. `getAccount` answers with
+  # current state and this chain has no historical-state RPC, so the balance as
+  # it stood at the settlement's block cannot be fetched — but the transaction
+  # commits to its own post-state, and `getTransaction` returns it. A ceiling is
+  # only demonstrated by a payment that actually happened, and `balance_before`
+  # minus `balance_after` compared against `price` is three fields of one file
+  # agreeing with each other. See scripts/use-cases/settlement-facts.py.
+  n=0; landed=0; prev_spent=; prev_window=; prev_ledger=; total=0
   mkdir -p "$WORK"
   paste -d'\t' \
     <(column_of "$SETTLEMENTS" price) \
     <(column_of "$SETTLEMENTS" settlement_tx) \
-    <(column_of "$SETTLEMENTS" balance_before) \
-    <(column_of "$SETTLEMENTS" balance_after) > "$WORK/settlements.tsv" \
+    <(column_of "$SETTLEMENTS" server_pay_account) > "$WORK/settlements.tsv" \
     || die "$SETTLEMENTS is missing a column this script needs"
-  while IFS=$'\t' read -r price tx before after; do
+  while IFS=$'\t' read -r price tx pay; do
     [ -n "$tx" ] || continue
     n=$((n + 1))
     printf '  %s LEZ  %s\n' "$price" "$tx"
@@ -243,17 +262,62 @@ else
     else
       bad "  a settled price of $price is ABOVE the anchored ceiling of $PER_TX"
     fi
-    if tx_live "$tx"; then ok "  the chain holds it"; landed=$((landed + 1))
-    else bad "  getTransaction returns null — this is not evidence of a payment"; fi
-    if [ "$((after - before))" -eq "$price" ]; then
-      ok "  the recipient went $before -> $after, exactly the price"
+    f=$(settlement_facts "$tx" "$pay" "$POLICY")
+    if [ "$(kv "$f" found)" = "1" ] && [ "$(kv "$f" hash_ok)" = "1" ]; then
+      ok "  the chain holds it, in block $(kv "$f" block), and its bytes hash to it"
+      landed=$((landed + 1))
     else
-      bad "  recorded $before -> $after for a price of $price"
+      bad "  getTransaction returns null — this is not evidence of a payment"
+      continue
     fi
+    # The ledger this settlement charged, discovered in its own post-state
+    # rather than named: the ledger account is a PDA of the program, so the
+    # settlements in this manifest span two of them, and only totals from the
+    # same account are comparable.
+    ledger=$(kv "$f" ledger_account)
+    spent=$(kv "$f" ledger_spent); window=$(kv "$f" ledger_window_start)
+    # What the ceiling is actually about: the running total this program keeps.
+    # Every settlement has to charge it by exactly the price, or the ceiling is
+    # bounding a number that does not track the spending.
+    if [ -n "$prev_spent" ] && [ "$ledger" = "$prev_ledger" ] && [ "$window" = "$prev_window" ]; then
+      d=$((spent - prev_spent))
+      if [ "$d" -eq "$price" ]; then
+        ok "  it charged the anchored ledger $d, exactly the price"
+      else
+        bad "  it charged the ledger $d for a price of $price"
+      fi
+    elif [ -n "$spent" ] && [ "$spent" -eq "$price" ]; then
+      ok "  period $window opened at zero and its ledger reads $spent after this"
+    else
+      bad "  the ledger reads ${spent:-<none>} after the first settlement of period ${window:-?}, for a price of $price"
+    fi
+    [ "$ledger" = "$prev_ledger" ] || total=0
+    prev_spent=$spent; prev_window=$window; prev_ledger=$ledger
+    total=$((total + price))
   done < "$WORK/settlements.tsv"
   [ "$landed" -gt 0 ] || bad "not one settlement in the manifest is on chain"
+  # The ceiling is per period, so the figure it bounds is the running total —
+  # read live, off the ledger the last settlements ACTUALLY charged rather than
+  # off this agent's own. They are not always the same account: a ledger address
+  # is a PDA of (program, agent), so the settlements in this manifest span two
+  # programs and two paying agents between them.
+  LIVE_SPENT=$(policy_record "$prev_ledger" spent)
+  LIVE_WINDOW=$(policy_record "$prev_ledger" window_start)
+  [ "$prev_ledger" = "$POLICY" ] \
+    || note "those were paid by another agent, so this is its ledger, not $CAT's"
+  echo "  ledger $prev_ledger"
+  if [ -z "$LIVE_SPENT" ]; then
+    bad "that policy ledger could not be read off the chain"
+  elif [ "$LIVE_WINDOW" != "$prev_window" ]; then
+    note "period has rolled to $LIVE_WINDOW, so the live total has reset"
+  elif [ "$LIVE_SPENT" -ne "$total" ]; then
+    bad "the live ledger reads $LIVE_SPENT for period $LIVE_WINDOW; the prices charged to it sum to $total"
+  else
+    ok "the live ledger reads $LIVE_SPENT of $PER_PERIOD for period $LIVE_WINDOW — the sum of the prices charged to it"
+  fi
   NOW=$(balance_of "$RECIPIENT")
   echo "  $RECIPIENT holds $NOW LEZ now, by getAccount"
+  note "current state, not a settlement figure — this account has been spent from since"
 fi
 
 rule "6. above the ceiling: refused, three ways, before a transaction exists"

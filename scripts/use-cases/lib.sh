@@ -46,6 +46,23 @@ field() {
   ' "$1"
 }
 
+# `rows_of <tsv>` / `row_of <tsv> <n>` — how many data rows a manifest has, and
+# the nth of them as `key=value` lines keyed by the header.
+#
+# `field` keys on the first column, which needs that column to identify a row.
+# artifacts/adversarial.tsv's first column is `step` and holds 1,2,1,2,1,1 — so
+# there is nothing to key on and the loop that reads it had fallen back to eight
+# positional variables. These two plus `kv` give it the header names back.
+rows_of() { awk -F'\t' 'NR>1 && NF>1 {n++} END {print n+0}' "$1"; }
+row_of() {
+  awk -F'\t' -v want="$2" '
+    NR==1 { for (i = 1; i <= NF; i++) h[i] = $i; n = NF; next }
+    NF>1  { r++ }
+    r == want { for (i = 1; i <= n; i++) print h[i] "=" $i; found = 1; exit }
+    END { if (!found) { print "no row " want " in " FILENAME > "/dev/stderr"; exit 4 } }
+  ' "$1"
+}
+
 # Every row of a TSV as `name=value` assignments is more than this needs; what
 # the scripts want is one named column of every row, in order.
 column_of() {
@@ -55,6 +72,24 @@ column_of() {
             next }
     { print $col }
   ' "$1"
+}
+
+# `kv <blob> <key>` — the value of a named key in `key=value` output. Named and
+# not positional, for the same reason every TSV read above is: output grows
+# fields, and `cut -d= -f2` on line 7 keeps working while meaning something else.
+kv() { printf '%s\n' "$1" | awk -F= -v k="$2" '$1==k {print $2; exit}'; }
+
+# `settlement_facts <tx-hash> <recipient> [policy]` — what the chain says a
+# settlement DID, as `key=value` lines: the block it is in, the recipient's
+# balance immediately after it, and the policy ledger's running total immediately
+# after it. All three come out of the transaction's own committed post-state,
+# which `getTransaction` returns and which is content-addressed by the hash being
+# asked about. See scripts/use-cases/settlement-facts.py for why this is the only
+# route to a historical balance on a chain whose RPC has five methods and no
+# getAccountAtBlock among them.
+settlement_facts() {
+  python3 scripts/use-cases/settlement-facts.py \
+    --rpc "$RPC" --tx "$1" ${2:+--recipient "$2"} ${3:+--policy "$3"} 2>&1
 }
 
 rpc() {
@@ -108,6 +143,25 @@ b = n.to_bytes((n.bit_length() + 7) // 8, 'big')
 b = b'\x00' * (len(s) - len(s.lstrip('1'))) + b
 assert len(b) == 32, 'not a 32-byte account id: %r' % s
 print(b.hex())" "$1"
+}
+
+# The inverse of `id_hex`: 32 bytes as the base58 an account id is written in.
+# Both directions are needed because the CLI is not consistent about which it
+# takes — `pda policy --agent-id` wants hex and `pda claim --agent` wants
+# base58, and handing either the other one is an error rather than a wrong
+# answer, which is the only reason this was cheap to find.
+hex_id() {
+  python3 -c "
+import sys
+A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+b = bytes.fromhex(sys.argv[1])
+assert len(b) == 32, 'not 32 bytes: %r' % sys.argv[1]
+n = int.from_bytes(b, 'big')
+s = ''
+while n:
+    n, r = divmod(n, 58)
+    s = A[r] + s
+print('1' * (len(b) - len(b.lstrip(b'\x00'))) + s)" "$1"
 }
 
 # `policy_record <policy-account> <field>` — one field of the 97 bytes an
