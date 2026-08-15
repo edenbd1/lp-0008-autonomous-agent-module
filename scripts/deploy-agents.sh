@@ -195,6 +195,12 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   # funding step was introduced, while the same script had worked before it.
   export LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME"
   "$WALLET" account sync-private </dev/null >/dev/null 2>&1
+  # sync-private does nothing for a public account, and the signer is public.
+  # Its state changes with every policy it signs, so the second anchor of a run
+  # was being proved against the state from before the first — which submits,
+  # returns a hash, and never lands. `account get` refetches from the chain and
+  # rewrites the stored state, which is what makes the next anchor provable.
+  "$WALLET" account get --account-id "Public/$SIGNER" </dev/null >/dev/null 2>&1
   local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
     -- create_policy --owner "Public/$SIGNER" \
     --policy-hash "$policy_hash" --owner-id "$OWNER_HEX" --agent-id "$agent_hex" \
