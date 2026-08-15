@@ -298,16 +298,16 @@ is part of the evidence: it is what "tried and did not work" looks like.
 
 Every figure in this section was fetched by `./scripts/submission-evidence.py` at generation time. Nothing in it is transcribed from another document, and the transaction hash is not quoted from anywhere — it is derived from the committed bytes.
 
-`artifacts/programs/agent_verifier.bin` is 417,348 bytes. Deployment on LEZ is content-addressed, so the deploy transaction is `SHA256(u32_le(len) ‖ bytecode)` of exactly those bytes:
+`artifacts/programs/agent_verifier.bin` is 440,876 bytes. Deployment on LEZ is content-addressed, so the deploy transaction is `SHA256(u32_le(len) ‖ bytecode)` of exactly those bytes:
 
 | | |
 |---|---|
-| deploy transaction | [`a780003b…8576841e`](https://explorer.testnet.lez.logos.co/transaction/a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e) |
-| block | 8720 |
-| on the wire | 417,353 bytes |
-| bytes found in block | 8720, and in neither 8719 nor 8721 |
-| ImageID recomputed from the committed binary | `12fa95d9382121791f11feb4ac6f7e3ee19e20d296f2eb09a61a069eb578c9d8` |
-| ProgramId owning every policy account below | `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293` |
+| deploy transaction | [`697746f5…cb5370bf`](https://explorer.testnet.lez.logos.co/transaction/697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf) |
+| block | 8839 |
+| on the wire | 440,881 bytes |
+| bytes found in block | 8839, and in neither 8838 nor 8840 |
+| ImageID recomputed from the committed binary | `778a9341a00de46c4c056ac63a66f63156b068e61cce7f155a2b495e670c4661` |
+| ProgramId owning every policy account below | `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647` |
 
 The ImageID recomputed from the committed ELF and the `program_owner` the chain reports for the anchored policy accounts agree. The binary in this repository is the program enforcing these envelopes on chain.
 
@@ -317,7 +317,7 @@ Read out of the shipped `idl/agent_verifier.idl.json` rather than described — 
 
 | instruction | policy account address |
 |---|---|
-| `approve_spend`, `create_policy` | `PDA("agent-policy/v1", agent_id (arg))` |
+| `approve_spend`, `create_policy`, `update_policy` | `PDA("agent-policy/v1", agent_id (arg))` |
 | `spend`, `spend_approved` | `PDA("agent-policy/v1", agent (account))` |
 
 There is **one policy account per agent**: the seed is the agent, and every limit is the account's *data*, which LEZ rule 6 (`UnauthorizedDataModification`) lets only this program write. Where the seed is `(account)` it comes from the pre-state the state machine built and there is no argument to lie about; where it is `(arg)` it is caller-supplied, which is why `create_policy` is `#[account(init, …)]` and the first anchor for an agent is the only one.
@@ -474,11 +474,19 @@ Every figure in this table is decoded out of the settlement transaction itself. 
 |---|---|---|---|---|---|---|---|
 | 1 | [`4e3a3454…a490ddb1`](https://explorer.testnet.lez.logos.co/transaction/4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1) | 8740 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `Coxz1Cmf…` at 8,000 / 25 |
 | 2 | [`7cad4fbd…7168f019`](https://explorer.testnet.lez.logos.co/transaction/7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019) | 8747 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `Coxz1Cmf…` at 8,000 / 50 |
+| 3 | [`e691f593…26631047`](https://explorer.testnet.lez.logos.co/transaction/e691f593cf7c393d0eee21054a05bb1584abc78d81308efd2cbf60d326631047) | 8892 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `7HH46tXh…` at 8,000 / 25 |
+| 4 | [`aef14146…8bcb70b8`](https://explorer.testnet.lez.logos.co/transaction/aef1414608761c70545a8eb9f20a0301e14c0d316a6318ab0e38bc5b8bcb70b8) | 8901 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `7HH46tXh…` at 8,000 / 50 |
 
 Settlement 1: the sequencer's bytes hash to `4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1`, which is the hash cited, and those bytes were found inside block 8740 and in neither block 8739 nor 8741. The transaction touches 2 accounts.
-  The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+  The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is **not** the program this repository ships. **This settlement was made under a superseded deployment.** Its policy account was derived from a different ImageID and no longer exists under the program deployed today. It is a real transaction and it resolves on the explorer, but it is not evidence about the program in this repository.
 Settlement 2: the sequencer's bytes hash to `7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019`, which is the hash cited, and those bytes were found inside block 8747 and in neither block 8746 nor 8748. The transaction touches 2 accounts.
-  The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+  The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is **not** the program this repository ships. **This settlement was made under a superseded deployment.** Its policy account was derived from a different ImageID and no longer exists under the program deployed today. It is a real transaction and it resolves on the explorer, but it is not evidence about the program in this repository.
+Settlement 3: the sequencer's bytes hash to `e691f593cf7c393d0eee21054a05bb1584abc78d81308efd2cbf60d326631047`, which is the hash cited, and those bytes were found inside block 8892 and in neither block 8891 nor 8893. The transaction touches 2 accounts.
+  The envelope it charged, `7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+Settlement 4: the sequencer's bytes hash to `aef1414608761c70545a8eb9f20a0301e14c0d316a6318ab0e38bc5b8bcb70b8`, which is the hash cited, and those bytes were found inside block 8901 and in neither block 8900 nor 8902. The transaction touches 2 accounts.
+  The envelope it charged, `7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+
+**2 of the 4 settlements above predate the program this repository ships.** They are kept because they are on chain and a reviewer will find them, but the criterion they support is only supported by the 2 made under the current deployment.
 
 What the chain cannot show, stated rather than implied: the payer is a shielded account, so only the credit side of each settlement is publicly readable. `getAccount` answers with a fully-populated default account — zero balance, zero nonce, zero owner — for a shielded address exactly as it does for one that has never existed, so it is not an existence check and no debit is quoted here. The debit is constrained anyway: LEZ rule 8 requires total balance to be preserved across every program in a transaction, so a transaction that credited 25 LEZ debited 25 LEZ.
 
@@ -523,21 +531,24 @@ Read from `artifacts/agents.tsv` **by column name**, then checked against the ch
 
 | category | agent | policy account | per-tx | per-period | period | window | spent | `create_policy` |
 |---|---|---|---|---|---|---|---|---|
-| storage | `7o9PT8uE…` | `HHhRoBfv…` | 50 | 500 | 1,000 blocks | 0 | 0 | [`79c91ec7…a24b70f5`](https://explorer.testnet.lez.logos.co/transaction/79c91ec796a14b7c0c2df11ac96ff944f915fe767db397b31331c48fa24b70f5), block 8729 |
-| messaging | `GpRdooEW…` | `7ewsGn9S…` | 25 | 250 | 1,000 blocks | 0 | 0 | [`eb294055…38e53249`](https://explorer.testnet.lez.logos.co/transaction/eb294055f61645852e03fb96cc794a01b421b7dd714358c4e1a5000838e53249), block 8731 |
-| blockchain | `A7UBoMbS…` | `Coxz1Cmf…` | 200 | 1,000 | 1,000 blocks | 8,000 | 50 | [`0266f48b…d3cae867`](https://explorer.testnet.lez.logos.co/transaction/0266f48bcef250fc5c9fd68c6ebdd7e46d33e4e84c40a2cbbe7c7174d3cae867), block 8732 |
+| storage | `9Xpkkvos…` | `6FscNXjN…` | 50 | 500 | 1,000 blocks | 0 | 0 | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4), block 8868 |
+| messaging | `GpRdooEW…` | `7HH46tXh…` | 25 | 250 | 1,000 blocks | 8,000 | 50 | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918), block 8876 |
+| blockchain | `A7UBoMbS…` | `2RK4dPwz…` | 200 | 1,000 | 1,000 blocks | 0 | 0 | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda), block 8884 |
 
 Each `create_policy` above was confirmed present in the block named and absent from both neighbours. The limits are the chain's own copy: the address of a policy account is `PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so raising a limit does not edit this record — it names a different address that `create_policy` never initialised, and the state machine rejects the spend before the program body runs. `window` and `spent` are the halves only the owning program may write.
 
-`artifacts/anchored.tsv` records every `(program, anchor)` pair this repository has ever written, keyed on the program, which is why a redeploy shows up in it rather than overwriting it. Under the program deployed above there are 3:
+`artifacts/anchored.tsv` records every `(program, anchor)` pair this repository has ever written, keyed on the program, which is why a redeploy shows up in it rather than overwriting it. Under the program deployed above there are 6:
 
 | what | agent | transaction | block |
 |---|---|---|---|
-| `anchor` | `7o9PT8uE…` | [`79c91ec7…a24b70f5`](https://explorer.testnet.lez.logos.co/transaction/79c91ec796a14b7c0c2df11ac96ff944f915fe767db397b31331c48fa24b70f5) | 8729 |
-| `anchor` | `GpRdooEW…` | [`eb294055…38e53249`](https://explorer.testnet.lez.logos.co/transaction/eb294055f61645852e03fb96cc794a01b421b7dd714358c4e1a5000838e53249) | 8731 |
-| `anchor` | `A7UBoMbS…` | [`0266f48b…d3cae867`](https://explorer.testnet.lez.logos.co/transaction/0266f48bcef250fc5c9fd68c6ebdd7e46d33e4e84c40a2cbbe7c7174d3cae867) | 8732 |
+| `claim_agent` | `9Xpkkvos…` | [`88f9ec5c…dc292dd0`](https://explorer.testnet.lez.logos.co/transaction/88f9ec5c377dceeb5005336ecf358d778a30dc39d2ea49b1c166332cdc292dd0) | 8859 |
+| `create_policy` | `9Xpkkvos…` | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4) | 8868 |
+| `claim_agent` | `GpRdooEW…` | [`78ce43c9…adaa126c`](https://explorer.testnet.lez.logos.co/transaction/78ce43c977bcf9956d3c8f42836e65b2fc8159a18e04836214756cd0adaa126c) | 8875 |
+| `create_policy` | `GpRdooEW…` | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918) | 8876 |
+| `claim_agent` | `A7UBoMbS…` | [`0dd4e49e…e52921a2`](https://explorer.testnet.lez.logos.co/transaction/0dd4e49eeecac1366baf7a81a93639cadd8b6e013984979d99ebf63ae52921a2) | 8883 |
+| `create_policy` | `A7UBoMbS…` | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda) | 8884 |
 
-No superseded rows remain in that manifest at this commit.
+A further 3 rows belong to superseded programs — `a780003b…` (3). Those transactions are still on chain and still resolve, but the policy accounts they created were derived from a different ImageID and no longer exist under the current one. They are evidence of what was redeployed, not of what is enforceable today.
 <!-- END GENERATED agents -->
 
   Stronger than transaction presence: each policy account comes back owned by
