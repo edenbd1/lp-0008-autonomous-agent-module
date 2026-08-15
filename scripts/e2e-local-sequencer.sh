@@ -347,14 +347,36 @@ done
   || die "the recipient went $BEFORE -> $AFTER: the spend did not transfer 50"
 echo "  recipient balance $BEFORE -> $AFTER  (+50, read back from the chain)"
 
-# The negative half. A spend over the per-transaction limit must fail without an
-# owner approval — a run where both halves pass is not evidence of a threshold.
-OUT=$(spend_at 5000)
+# The negative half, and BOTH the amount and the check are load-bearing.
+#
+# This asked for 5000 and accepted any refusal at all. The agent holds 1000 and
+# has just paid 50, so 5000 is more than it has: a build with the ceiling
+# deleted outright refuses that too, by E_INSUFFICIENT_BALANCE (6008) or by the
+# transfer program's own checked_sub. The assertion could not fail while the
+# property it exists to prove was absent, which is not a threshold test.
+#
+# So the amount is chosen to leave exactly one rule able to refuse it:
+#
+#   OVER=300  >  per_tx 100          the ceiling — the rule under test
+#   OVER=300  <  950, what the agent still holds     so it cannot be 6008
+#   OVER=300  <  450 left in this period             so it cannot be 6006
+#
+# and the refusal is checked BY CODE. "No tx_hash" is also what a spel that fell
+# over for its own reasons produces, so the absence of a hash is necessary and
+# nowhere near sufficient. Same discipline as use case 3's `attempt`.
+OVER=300
+OUT=$(spend_at "$OVER")
 if echo "$OUT" | grep -q 'tx_hash: [0-9a-f]\{64\}'; then
   echo "$OUT" | tail -6
-  die "5000 was ACCEPTED without an owner approval — the threshold is not enforced"
+  die "$OVER was ACCEPTED without an owner approval — the threshold is not enforced"
 fi
-echo "  5000 (outside it) -> refused, as it must be"
+GOT=$(echo "$OUT" | grep -oE 'Program error [0-9]+: .*' | head -1)
+echo "$GOT" | grep -q 'Program error 6005:' || {
+  echo "$OUT" | tail -8
+  die "$OVER was refused, but by '${GOT:-no program error at all}' — expected 6005, the per-transaction ceiling. This run proves something other than the threshold."
+}
+echo "  $OVER (over the per-tx ceiling of $PER_TX, and inside the balance) -> refused"
+echo "         $GOT"
 END=$(balance_of "$RECIP")
 [ "$END" -eq "$AFTER" ] || die "the refused spend still moved balance: $AFTER -> $END"
 echo "  recipient balance unchanged at $END after the refusal"

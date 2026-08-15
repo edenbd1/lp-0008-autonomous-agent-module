@@ -119,7 +119,8 @@ jobs:
             'a second, unlimited policy for the same agent was refused' \
             '50 (inside the envelope)' \
             '+50, read back from the chain' \
-            '5000 (outside it) -> refused' \
+            'over the per-tx ceiling of 100, and inside the balance) -> refused' \
+            'Program error 6005:' \
             'recipient balance unchanged'; do
             grep -qF "$want" e2e.out || {
               echo "missing from the run: $want"; exit 1; }
