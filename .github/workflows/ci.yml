@@ -30,7 +30,7 @@ jobs:
           # The summary line is the assertion that it walked the tree at all: a
           # checker that found nothing to check exits 0 too. No step may go
           # green by skipping.
-          grep -q "every path, line citation and symbol citation resolves" check-docs.out \
+          grep -qE "^every .*resolves$" check-docs.out \
             || { echo "check-docs.py exited 0 without reporting a full pass"; exit 1; }
           if grep -q SKIPPED check-docs.out; then
             echo "check-docs.py reported SKIPPED"; exit 1

@@ -198,11 +198,21 @@ def confirm(chain, tx):
     here = chain.block(block)
     if here is None or raw not in here:
         raise Fatal("%s: block %d does not contain these bytes" % (tx, block))
+    # The successor block must already exist. Not for strength -- absence proves
+    # nothing either way -- but for determinism: the neighbour list is printed
+    # into the document, so a transaction sitting in the newest block would be
+    # written up with one neighbour and then disagree with itself sixty seconds
+    # later, when the next block arrived. That is a gate that goes red on its
+    # own, and a gate that cries wolf is one people learn to skip. Evidence for
+    # a transaction is generated once the chain has moved past it.
+    if chain.block(block + 1) is None:
+        raise Fatal("%s is in block %d, which is still the tip: wait for the "
+                    "next block before generating evidence for it" % (tx, block))
     neighbours = []
     for n in (block - 1, block + 1):
         b = chain.block(n)
         if b is None:
-            continue                       # before genesis, or past the tip
+            continue                       # before genesis
         if raw in b:
             raise Fatal("%s: its bytes are also in block %d" % (tx, n))
         neighbours.append(n)
