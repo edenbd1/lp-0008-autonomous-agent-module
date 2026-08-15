@@ -19,7 +19,7 @@ this transaction — recompute it rather than trusting the table.
 
 | Program | ImageID | Deploy tx | Explorer |
 |---|---|---|---|
-| Agent spending policy (`agent_verifier.bin`) | `7629aa9c…e8712a0d` | `1ea86256…f18b6f3c` | [link](https://explorer.testnet.lez.logos.co/transaction/1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c) |
+| Agent spending policy (`agent_verifier.bin`) | `15d234e5…32062e6a` | `b028eabf…b8c18549` | [link](https://explorer.testnet.lez.logos.co/transaction/b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549) |
 
 Recompute the deploy hash from the repository:
 
@@ -34,8 +34,41 @@ and read it back off the chain:
 
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c"]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549"]}'
 ```
+
+Rebuild it and get the same ImageID:
+
+```bash
+cargo risczero build --manifest-path crates/agent-verifier-spel/methods/guest/Cargo.toml
+# ImageID: 15d234e5d4199b3a0b98d6c6f5fb4540fa41e46eba5fa14fabbd323832062e6a
+```
+
+### The second program
+
+`spend` moves no balance itself. LEZ rule 5 (`UnauthorizedBalanceDecrease`)
+refuses any post-state that decreases the balance of an account the executing
+program does not own, and an agent's account is owned by LEZ's **authenticated
+transfer** program. So the policy program checks the anchored envelope and then
+chains a call into that program, which does own the accounts.
+
+That program is not deployed by this repository — it is one the chain already
+runs — but a byte-identical copy is committed as
+`artifacts/programs/authenticated_transfer.bin`, because the privacy circuit
+composes the inner call inside the proof and looks the callee up by ImageID.
+Its identity is checked against the chain rather than asserted:
+
+```bash
+curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getProgramIds","params":[]}'
+# "authenticated_transfer": [583309054,2344528779,3806558405,2890696795,
+#                            2257354672,3978764116,2273929063,1518858078]
+
+spel program-id artifacts/programs/authenticated_transfer.bin
+#   ProgramId (decimal): 583309054,2344528779,...
+```
+
+`./scripts/demo.sh` performs both checks, along with a SHA-256 pin on the file.
 
 ## The three agents
 
