@@ -41,18 +41,57 @@ OUT="${A2A_MANIFEST:-artifacts/a2a-task.tsv}"
 [ -f "$AUTH_TRANSFER" ] || { echo "missing $AUTH_TRANSFER" >&2; exit 1; }
 mkdir -p "$CARDS" artifacts
 
-field() { awk -F'\t' -v c="$1" -v n="$2" 'NR>1 && $1==c {print $n}' "$AGENTS"; }
+# Read a column of the manifest BY HEADER NAME, never by position.
+#
+# This used to be `field <category> <column-number>` with the numbers written at
+# the call sites. They were right, until they were not: `policy_hash` became
+# `policy_account`, columns moved, and a positional read does not fail when the
+# file changes underneath it — it returns whatever now sits in that slot and the
+# run continues with a confident wrong value. That pattern has produced three
+# separate false results in this repository. A name that is not in the header is
+# a hard failure here, and an empty value is a failure too, because "" is what
+# every downstream check reads as "this agent has no policy".
+col_of() { # header-name -> 1-based column index on stdout
+  local n
+  n=$(awk -F'\t' -v want="$1" \
+        'NR==1 { for (i = 1; i <= NF; i++) if ($i == want) { print i; exit } }' "$AGENTS")
+  [ -n "$n" ] || { echo "$AGENTS has no column '$1'" >&2; return 1; }
+  printf '%s\n' "$n"
+}
 
-CLIENT_CAT=blockchain          # has the largest envelope, so it pays
+field() { # category header-name -> value on stdout
+  local n v
+  n=$(col_of "$2") || return 1
+  v=$(awk -F'\t' -v c="$1" -v n="$n" 'NR>1 && $1==c {print $n; exit}' "$AGENTS")
+  [ -n "$v" ] || { echo "$AGENTS has no '$2' for category '$1'" >&2; return 1; }
+  printf '%s\n' "$v"
+}
+
+# The messaging agent pays and the storage agent is paid.
+#
+# It used to be the blockchain agent paying, on the grounds that its envelope is
+# the largest — but an envelope is a ceiling, not a balance, and that agent has
+# spent nearly all of its own on earlier settlements. A payer that cannot afford
+# the task produces the least useful demo available: a policy check that passes
+# and a transfer that fails. All three agents are deployed and anchored either
+# way; which two of them transact is a fact about who holds LEZ, not about the
+# design.
+CLIENT_CAT=messaging           # pays, from its own shielded account
 SERVER_CAT=storage             # advertises a skill and gets paid
 
-CLIENT_ID=$(field $CLIENT_CAT 2);  CLIENT_POLICY=$(field $CLIENT_CAT 4)
-SERVER_ID=$(field $SERVER_CAT 2)
-SERVER_PAY=$(field $SERVER_CAT 3)
+CLIENT_ID=$(field $CLIENT_CAT agent_id)          || exit 1
+CLIENT_POLICY=$(field $CLIENT_CAT policy_account) || exit 1
+SERVER_ID=$(field $SERVER_CAT agent_id)          || exit 1
+SERVER_PAY=$(field $SERVER_CAT pay_account)      || exit 1
 # Recorded for the reader, not used to build anything: `spend` derives the policy
 # address from the paying account itself and reads the owner out of that
 # account's data, so nothing here has to know who anchored.
-CLIENT_OWNER=$(field $CLIENT_CAT 9)
+CLIENT_OWNER=$(field $CLIENT_CAT owner) || exit 1
+# The account the CLIENT AGENT itself wrote, naming the only account allowed to
+# anchor over it. It is not needed to settle anything either — it is printed
+# below so a reader can see that the owner beside it is a party the agent
+# consented to, rather than whoever happened to anchor first.
+CLIENT_CLAIM=$(field $CLIENT_CAT claim_account) || exit 1
 [ -n "$SERVER_PAY" ] || { echo "the server agent has no receiving account in $AGENTS" >&2; exit 1; }
 [ -n "$CLIENT_POLICY" ] || { echo "no policy account recorded for $CLIENT_CAT in $AGENTS" >&2; exit 1; }
 
@@ -190,6 +229,10 @@ CLIENT_PERIOD=$(policy_field period_blocks)  || exit 1
 echo "  policy  $CLIENT_POLICY"
 echo "          read off chain: per-tx $CLIENT_PER_TX, per-period $CLIENT_PER_PERIOD,"
 echo "          period $CLIENT_PERIOD blocks, spent $(policy_field spent) in period $(policy_field window_start)"
+echo "  claim   $CLIENT_CLAIM"
+echo "          written by the client agent itself: it names $CLIENT_OWNER as"
+echo "          the only account that may anchor or re-fix this envelope, which"
+echo "          is why the policy above is a thing the agent agreed to"
 echo "  client  $CLIENT_ID  ($CLIENT_CAT, per-tx limit $CLIENT_PER_TX)"
 echo "  server  $SERVER_ID  ($SERVER_CAT), paid at Public/$SERVER_PAY"
 echo "  task    storage.upload at $PRICE LEZ"
@@ -347,12 +390,33 @@ echo "  the recipient is $PRICE LEZ richer, and no owner signed anything"
 # top of it is the part that was missing, so the manifest has to be able to hold
 # both. A run that does not confirm never reaches this line, so nothing
 # unconfirmed can accumulate here.
-HEADER='task_id	client	server	server_pay_account	skill	price	nonce	settlement_tx	balance_before	balance_after'
-if [ ! -s "$OUT" ] || [ "$(head -n1 "$OUT")" != "$HEADER" ]; then
+#
+# `program` is the first column and it is the reason this file can keep history
+# at all. A settlement is only meaningful against the program that enforced it —
+# the policy account it read is a PDA of that program — so a manifest of
+# settlements with no program column is a list of payments nobody can attribute.
+# Rows from superseded deployments stay: they were true, they are still on
+# chain, and deleting them would be deleting the evidence that the fixes since
+# were needed.
+PROGRAM_TX=$(python3 -c "
+import hashlib,struct
+b=open('$PROGRAM','rb').read()
+print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
+HEADER='program	task_id	client	server	server_pay_account	skill	price	nonce	settlement_tx	balance_before	balance_after'
+if [ ! -s "$OUT" ]; then
   printf '%s\n' "$HEADER" > "$OUT"
+elif [ "$(head -n1 "$OUT")" != "$HEADER" ]; then
+  # A header this script does not recognise is a manifest from an older column
+  # layout, and truncating it here would throw away landed settlements — which
+  # is precisely the evidence failure this repository has been closed for
+  # before. Refuse instead, and say what has to be reconciled by hand.
+  echo "  $OUT has a header this script does not write:" >&2
+  head -n1 "$OUT" >&2
+  echo "  refusing to overwrite it. Migrate it, or move it aside." >&2
+  exit 1
 fi
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$TASK_ID" "$CLIENT_ID" "$SERVER_ID" "$SERVER_PAY" storage.upload "$PRICE" "$NONCE" "$TX" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$PROGRAM_TX" "$TASK_ID" "$CLIENT_ID" "$SERVER_ID" "$SERVER_PAY" storage.upload "$PRICE" "$NONCE" "$TX" \
   "$BEFORE" "$AFTER" >> "$OUT"
 echo
 echo "manifest: $OUT"

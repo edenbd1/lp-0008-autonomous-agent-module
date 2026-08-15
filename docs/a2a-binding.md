@@ -117,7 +117,7 @@ there. `agent.subscribe` subscribes to exactly the same string
 Two consequences a third party must understand before deploying this:
 
 - **A task topic is a public, cleartext string containing the peer's account id
-  and the task id.** Anyone on the network sees that agent `7o9PT8uE…` is running
+  and the task id.** Anyone on the network sees that agent `9Xpkkvos…` is running
   task `a1b2…` — and, from the card, what that agent charges. The *contents* are
   protected by whatever Delivery's entry layer provides; the *existence, timing
   and counterparty* of every task are not. This binding does not fix that, and
@@ -165,7 +165,7 @@ The card `agent.card` builds (`agent_skills.cpp:639-721`), and the one
   "protocolVersion": "0.3.0",
   "name": "logos-storage-agent",
   "description": "Encrypts and stores a file on Logos Storage, returns its content address",
-  "url": "logos-messaging://7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+  "url": "logos-messaging://9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
   "preferredTransport": "logos-messaging",
   "version": "0.1.0",
   "provider": {
@@ -191,7 +191,7 @@ The card `agent.card` builds (`agent_skills.cpp:639-721`), and the one
     }
   ],
   "x-logos": {
-    "lezAccount": "7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+    "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
     "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
     "pricePerTask": 25,
     "settlement": "lez-chained-authenticated-transfer"
@@ -205,9 +205,14 @@ The live one is in [`artifacts/agent-cards/storage.json`](../artifacts/agent-car
 Rules a producer MUST follow:
 
 - **`skills` comes from the skill registry, not from a literal.** `agent.card`
-  reads the module's own `meta.skills()` output (`agent_skills.cpp:667-709`,
-  wired at `agent_module_plugin.cpp:216-218`), so a card cannot advertise a skill
-  the agent has not registered, and cannot omit one it has.
+  reads the module's own `skills()` output (`agent_skills.cpp:900-953`, wired at
+  `agent_module_plugin.cpp:216-218`), so a card cannot advertise a skill the
+  agent has not registered, and cannot omit one it has. The `meta.skills` skill
+  reads the *same* function (wired at `agent_module_plugin.cpp:222-224`), so the
+  catalogue a peer can ask for and the card it can read are one answer rather
+  than two. This bullet used to call that output "`meta.skills()`" while no
+  skill of that name was registered — the card was right, and the thing it
+  named did not exist.
 - **`skills[].id` is the skill name**, e.g. `storage.upload`. `tags` is the
   substring before the first `.` (`["storage"]`), or `["logos"]` when there is no
   dot. A2A requires `tags` to be present and non-empty.
@@ -840,10 +845,13 @@ spel --idl idl/agent_verifier.idl.json \
      --bin-auth-transfer artifacts/programs/authenticated_transfer.bin \
   -- spend --agent "Private/<client agent>" \
            --recipient "Public/<payee's paymentAccount>" \
-           --policy-hash <hex> --owner-id <hex> --agent-id <hex> \
-           --per-tx <n> --per-period <n> --period-blocks <n> \
            --amount <price> --window-start <block>
 ```
+
+There is no `--policy-hash`, no `--owner-id`, no `--agent-id` and no limits, and
+their absence is the design: the policy account's address is derived from the
+account that PAYS, and the ceiling is read out of that account. Nothing in the
+call is left for a caller to disagree with.
 
 Two preconditions a third party will otherwise hit:
 
@@ -941,10 +949,20 @@ answer for an unwired port, and it is not a refund mechanism.
 
 ### 6.7 The spending envelope bounds all of it
 
-A task payment is a spend, and a spend is bounded by an account address rather
-than by a branch: the policy account is a PDA whose seed is the hash of (owner,
-agent, per-tx, per-period, period-blocks). An agent wanting a larger ceiling
-would have to present an account nobody created.
+A task payment is a spend, and a spend is bounded by the chain rather than by a
+branch. Each agent has exactly one policy account, at
+`PDA(program, ["agent-policy/v1", agent_id])` — seeded by the agent id alone —
+and the limits are that account's *data*, which only the policy program may
+write. An agent wanting a larger ceiling cannot name a different address,
+because the address does not depend on the limits; it would have to make a write
+the program refuses.
+
+This paragraph previously said the seed was "the hash of (owner, agent, per-tx,
+per-period, period-blocks)". That was the superseded design, and it is worth
+naming rather than quietly correcting: under it, raising a limit named a
+*different* account, and anchoring a fresh unlimited policy at that address was
+available to whoever held the agent's key. `docs/limitations.md` carries the
+attack and the transaction that proves the previous program accepted it.
 
 So `max_price` in `agent.task` and any price check in a client are *advisory* —
 they save proving time on a transaction the chain would refuse. The ceiling is
@@ -1178,20 +1196,27 @@ A checklist for someone writing a peer, in the order the work has to happen.
 
 ## Where the code is
 
+Symbols, not line numbers. Line citations into `agent_skills.cpp` drifted by
+between +87 and +324 lines over a single refactor of this file — so a table of
+line numbers was not merely stale, it was stale by a *different amount* in every
+row, which is the kind of wrong that survives a spot-check. `scripts/check-docs.py`
+verifies that every symbol named here is in the file it is attributed to.
+
 | Thing | File |
 |---|---|
-| Task states, transitions, topic derivation, base64url | `module/src/agent_skills.cpp:113-235` |
-| `TaskStore` — create, advance, applyUpdate, recordPayment, snapshot, restore | `module/src/agent_skills.cpp:241-461` |
-| `validateAgentCard` | `module/src/agent_skills.cpp:467-601` |
-| `agent.card` | `module/src/agent_skills.cpp:607-754` |
-| `agent.discover` | `module/src/agent_skills.cpp:760-829` |
-| `agent.task` | `module/src/agent_skills.cpp:835-1019` |
-| `agent.subscribe` | `module/src/agent_skills.cpp:1025-1061` |
-| `agent.cancel` | `module/src/agent_skills.cpp:1067-1129` |
-| Ports (`CardPort`, `DiscoveryPort`, `TaskPort`) | `module/src/agent_skills.h:186-241` |
-| Content topics | `module/src/messaging_skills.cpp:12-20` |
-| Reliable channels vs bare topics | `module/src/messaging_skills.cpp:122-166`, `module/src/owner_channel.h:43-56` |
-| Where the ports are handed in | `module/src/agent_module_plugin.h:43-111` |
+| Task states and legal transitions | `enum class TaskState` and `canTransition`, `module/src/agent_skills.h` |
+| Topic derivation, base64url | `taskTopic` and `base64Url`, `module/src/agent_skills.cpp` |
+| The task store — create, advance, applyUpdate, recordPayment, snapshot, restore | `class TaskStore`, `module/src/agent_skills.cpp` |
+| Agent Card validation | `validateAgentCard`, `module/src/agent_skills.cpp` |
+| `agent.card` | `CardSkill`, `module/src/agent_skills.cpp` |
+| `agent.discover` | `DiscoverSkill`, `module/src/agent_skills.cpp` |
+| `agent.task` | `TaskSkill`, `module/src/agent_skills.cpp` |
+| `agent.subscribe` | `SubscribeSkill`, `module/src/agent_skills.cpp` |
+| `agent.cancel` | `CancelSkill`, `module/src/agent_skills.cpp` |
+| Ports (`CardPort`, `DiscoveryPort`, `TaskPort`) | the `struct …Port` declarations in `module/src/agent_skills.h` |
+| Content topics | `discoveryTopic`, `module/src/messaging_skills.cpp` |
+| Reliable channels vs bare topics | `CreateGroupSkill`, `module/src/messaging_skills.cpp`; `OwnerChannel`, `module/src/owner_channel.h` |
+| Where the ports are handed in | `struct SkillPorts`, `module/src/agent_module_plugin.h` |
 | Card signing, as published | `scripts/sign-agent-card.py` |
 | The end-to-end evidence path | `scripts/a2a-task.sh` |
 | Lifecycle and card unit tests | `module/tests/agent_skills_test.cpp` |

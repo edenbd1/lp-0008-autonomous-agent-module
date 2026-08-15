@@ -160,7 +160,8 @@ const char *kBuiltinSkills[] = {
     "wallet.history",      "program.query",    "program.call",
     "program.deploy",      "agent.card",       "agent.discover",
     "agent.task",          "agent.subscribe",  "agent.cancel",
-    "meta.status",         "meta.configure",   "agent.evaluate_task",
+    "meta.status",         "meta.configure",   "meta.skills",
+    "agent.evaluate_task",
 };
 constexpr std::size_t kBuiltinCount = sizeof(kBuiltinSkills) / sizeof(kBuiltinSkills[0]);
 
@@ -567,10 +568,32 @@ int main()
         check(sj.contains("balance") && sj["balance"].is_null(),
               "with an unreadable balance reported as unknown, never as zero");
 
+        // The catalogue the prize asks for by name. Like `meta.status` it needs
+        // no port from the host — the module wires it to its own registry — so
+        // it answers out of the box, and what it answers has to be the same
+        // card `skills()` just produced. It listing itself is the point: it is a
+        // registered skill and not a special case inside `invoke()`.
+        const auto listed = m.invoke("meta.skills", "{}");
+        const auto lj = json::parse(listed, nullptr, false);
+        check(okOf(listed) && lj.contains("skills") && lj["skills"].is_array(),
+              "meta.skills answers: the module wired itself into its own registry port");
+        check(lj["skills"] == card && lj.value("count", std::size_t{0}) == kBuiltinCount,
+              "and lists exactly the registry, count included");
+        check(!entryFor(lj["skills"], "meta.skills").empty(),
+              "including itself, because it is registered rather than special-cased");
+
         // The other twenty have no port. Each must come back as its own refusal
         // — not as "no skill named", which is the registry saying the skill does
         // not exist, and not as ok:true, and not as a crash on an empty
         // std::function.
+        //
+        // `meta.status` and `meta.skills` are the two exceptions, and they are
+        // exceptions for one reason: both answer questions about *this module*,
+        // which it can answer honestly with nothing wired. Everything else is a
+        // question about the world outside it.
+        const auto selfAnswering = [](const std::string &name) {
+            return name == "meta.status" || name == "meta.skills";
+        };
         int dispatched = 0;
         int refusedCleanly = 0;
         std::string wrong;
@@ -588,7 +611,7 @@ int main()
                 continue;
             }
             if (errOf(answer).find("no skill named") == std::string::npos) ++dispatched;
-            if (std::string(name) != "meta.status" && !okOf(answer) && !errOf(answer).empty()) {
+            if (!selfAnswering(name) && !okOf(answer) && !errOf(answer).empty()) {
                 ++refusedCleanly;
             }
         }
@@ -596,7 +619,7 @@ int main()
         check(wrong.empty(), "invoking every one of them yields a JSON answer, not an exception");
         check(dispatched == static_cast<int>(kBuiltinCount),
               "each dispatches to a skill rather than answering 'no skill named'");
-        check(refusedCleanly == static_cast<int>(kBuiltinCount) - 1,
+        check(refusedCleanly == static_cast<int>(kBuiltinCount) - 2,
               "and each unwired one refuses, naming what it is missing");
 
         // The refusal that matters most: an unwired module must not be able to

@@ -77,6 +77,10 @@ struct SkillPorts {
     /// internal map: storing a setting nothing reads would let `meta.configure`
     /// report `"effective":true` for a value that changes nothing.
     ConfigPort config;
+    /// What `meta.skills` lists. Wired to this module's own registry when left
+    /// empty, for the same reason `card.skills` is: a catalogue assembled
+    /// anywhere else could name a skill `invoke()` will not dispatch.
+    RegistryPort registry;
     /// The pluggable model behind `agent.evaluate_task`. Null is a supported
     /// deployment: the skill reports that no backend is configured, which is a
     /// decline, and declining is the only direction a backend may move a spend
@@ -98,10 +102,10 @@ struct SkillPorts {
     /// decimal integer becomes zero — every spend then goes to the owner, and
     /// every offer is declined, which is the safe direction.
     ///
-    /// Neither copy is the authority. The limits are the PDA seed of the policy
-    /// account (`crates/agent-policy-core`), so editing them here changes what
-    /// this process bothers asking about and nothing about what the chain
-    /// accepts.
+    /// Neither copy is the authority. The limits are the *data* of the agent's
+    /// one policy account (`crates/agent-policy-core`), which only the policy
+    /// program may write, so editing them here changes what this process
+    /// bothers asking about and nothing about what the chain accepts.
     SpendEnvelope envelope;
 
     /// Where the A2A task lifecycle is kept. Null means the module uses its own,
@@ -201,10 +205,10 @@ public:
     /// the registration.
     StdLogosResult registerSkill(std::shared_ptr<logos::agent::ISkill> skill);
 
-    /// Register the twenty-one skills this module ships with, wired to `ports`.
+    /// Register the twenty-two skills this module ships with, wired to `ports`.
     ///
     /// Before @ref start, and once. A host that has transports wires them here;
-    /// a host that does not gets the same twenty-one from @ref start with
+    /// a host that does not gets the same twenty-two from @ref start with
     /// nothing wired, and each one refuses with the port it is missing.
     ///
     /// `value` is the number registered. A name already taken — a third party
@@ -215,8 +219,15 @@ public:
     /// skill holds the name answers for it.
     StdLogosResult registerBuiltinSkills(logos::agent::SkillPorts ports);
 
-    /// `meta.skills()` — every registered skill and its parameter schema, as a
-    /// JSON array built with the JSON library rather than by string splicing.
+    /// Every registered skill and its parameter schema, as a JSON array built
+    /// with the JSON library rather than by string splicing.
+    ///
+    /// This is the module method. The *skill* of that description is
+    /// `meta.skills`, which is registered like any other and reads its
+    /// catalogue from here — as does `agent.card`. One producer, so the
+    /// catalogue, the card and the registry cannot disagree. For a while this
+    /// comment said "`meta.skills()`" and there was no such skill: the method
+    /// was reachable in-process and by nothing that loads this module.
     ///
     /// A skill whose `parameterSchema()` throws or does not parse as a JSON
     /// object gets `{"name":…,"error":…}` in place of its parameters; the other

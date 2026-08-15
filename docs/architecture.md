@@ -73,28 +73,39 @@ it honestly.
 
 ## The chain tier
 
-`agent_verifier` is a SPEL program with four instructions. Three of them exist
-to make the fourth trustworthy.
+`agent_verifier` is a SPEL program with six instructions. Five of them exist to
+make `spend` trustworthy.
 
 | Instruction | Signed by | Accounts | What it is for |
 |---|---|---|---|
-| `create_policy` | owner | policy (init, PDA), owner | anchor an envelope by address |
-| `approve_spend` | owner | approval (init, PDA), policy (PDA), owner | authorise one exact payment |
+| `claim_agent` | **agent** | claim (init, PDA of the signer), agent | name the one account that may anchor over this agent |
+| `create_policy` | owner | policy (init, PDA), claim (PDA), owner | anchor an envelope, if that claim names you |
+| `update_policy` | owner | policy (mut, PDA), owner | re-fix the limits; the way back from a wrong anchor |
+| `approve_spend` | owner | approval (init, PDA), policy (PDA), owner | authorise one exact payment, until one exact block |
 | `spend` | agent | policy (mut, PDA), agent, recipient | pay inside the envelope, unattended |
 | `spend_approved` | agent | policy (PDA), approval (mut, PDA), agent, recipient | pay outside it, on that approval |
 
-Two structural decisions are worth pulling out.
+Three structural decisions are worth pulling out.
 
-**The limits are an address; the running total is data.** `compute_policy_hash`
-folds (owner, agent, per-tx, per-period, period) into a digest
-(`crates/agent-policy-core/src/lib.rs:77-86`) and the policy account is the PDA
-seeded by it, so a limit cannot be edited — a different limit is a different
-account. The account's *data* is the one thing that does change: a 24-byte
-ledger, `window_start` then `spent`, written by `spend` and by nothing else,
-because the account is this program's PDA and LEZ rule 6 refuses a data write
-from any other program. Earlier revisions of this file said nothing was written
-there at all, which made the per-period ceiling unenforceable and was wrong.
-What that buys, and what it still does not, is
+**An agent has one policy account, and binding it takes two signatures.** The
+address is `PDA(program, ["agent-policy/v1", agent_id])` — the agent, and
+nothing else — so there is no such thing as a second policy for an agent and
+`init` refuses to overwrite the first. That decides *where*; `claim_agent`
+decides *who*. The agent signs a claim account at `PDA(program,
+["agent-owner/v1", agent])`, whose address is derived from the signing account,
+and `create_policy` refuses any signer that is not the id that claim names
+(6020) or refuses outright if there is no claim (6019). A previous revision of
+this program had only the first half, which meant anchoring a policy over
+somebody else's agent needed the agent's public id and no key at all.
+
+**The limits are data, not an address.** They used to be folded into the policy
+account's address by a `compute_policy_hash`, which stopped a limit being edited
+and did nothing about a second policy being anchored elsewhere. They now live in
+the account's 97 bytes — `version, owner, per_tx, per_period, period_blocks,
+window_start, spent`, little-endian — written by `create_policy`, changed only by
+`update_policy` (owner-signed) and `spend` (the running total), because the
+account is this program's PDA and LEZ rule 6 refuses a data write from any other
+program. What that buys, and what it still does not, is
 [`security-model.md`](security-model.md).
 
 **The program moves no money itself, and cannot.** LEZ rule 5 refuses any
@@ -104,7 +115,7 @@ account is owned by LEZ's `authenticated_transfer`. So `spend` checks the
 envelope and then returns a `ChainedCall` into whichever program already owns the
 agent's balance — `agent.account.program_owner`, read off the account rather than
 carried as a constant, so no argument and no deployment constant can redirect a
-payment (`agent_verifier.rs:663-691`). LEZ's own `vault` program does the same
+payment (`delegated_transfer` in `agent_verifier.rs`). LEZ's own `vault` program does the same
 thing (`lez/programs/vault/src/main.rs:47-58`).
 
 ```mermaid
@@ -143,11 +154,16 @@ content hash and reads its ProgramId back off the chain rather than asserting it
 
 ## One derivation, two consumers
 
-`crates/agent-policy-core` is small and it is load-bearing. It holds the three
-derivations — policy hash, spend reference, approval marker — each under its own
+`crates/agent-policy-core` is small and it is load-bearing. It holds the two
+hash derivations — spend reference and approval marker — each under its own
 domain separator, so a digest computed for one role can never be valid in
-another (`lib.rs:69-71`, and the test that asserts the three prefixes differ at
-`:541-542`).
+another, and the two PDA prefixes, `agent-policy/v1` and `agent-owner/v1`, which
+are what keep an agent's policy account and its owner claim at different
+addresses. A test asserts all four are distinct, and asserts that neither hash
+agrees with the same material hashed bare or under the other's separator —
+because a constant differing is necessary and nowhere near sufficient. It also
+holds the three record layouts (`PolicyRecord`, `OwnerClaim`, `ApprovalRecord`),
+each with its own version byte, so none of them can decode another's bytes.
 
 It also holds the spend decision itself. That used to be a pure comparison
 called `is_autonomous`; it is now `SpendPolicy::authorize`
@@ -161,15 +177,21 @@ executing a zkVM binary.
 
 The point is that it is compiled **twice**: into the guest, where the chain
 checks the derivation, and into the host, where the crate's examples are invoked
-by the deploy and settlement scripts — `policy-hash` for the anchor
-(`scripts/deploy-agents.sh:276`, `scripts/e2e-local-sequencer.sh:222`),
-`spend-marker` for an approval (`scripts/a2a-task.sh:217`), and `window-start`
-for the period a spend declares (`scripts/a2a-task.sh:234`,
-`scripts/e2e-local-sequencer.sh:277`). The address a script computes is
-therefore the address the program derives, and the period it names is computed
-by the same `window_start_for` the guest checks — by construction rather than by
-agreement. A divergence would be a compile error, not a transaction that fails
-on chain for reasons nobody can see.
+by the settlement script — `spend-marker` for an approval and `window-start` for
+the period a spend declares (`scripts/a2a-task.sh`). The period a script names is
+computed by the same `window_start_for` the guest checks — by construction rather
+than by agreement — and a divergence would be a compile error rather than a
+transaction that fails on chain for reasons nobody can see.
+
+There used to be a third example, `policy-hash`, which recomputed the address an
+anchor would land at. It is gone because the thing it computed is gone: the
+policy account's address is now a PDA of the agent, so the scripts ask `spel pda`
+to resolve it from the published IDL instead of deriving it a second time. The
+same crate is still what makes the two halves agree — the adversarial harness
+recomputes both PDAs from `POLICY_PDA_PREFIX` and `OWNER_CLAIM_PDA_PREFIX` and
+then runs the committed ELF, so if the constants ever drift, every case in that
+suite fails on the macro's own PDA check rather than passing against an address
+nothing reads.
 
 The workspace split exists for the same reason it does in LP-0002 and LP-0003:
 the guest targets `riscv32im-risc0-zkvm-elf` and carries its own `[workspace]`,
@@ -182,7 +204,8 @@ dependency of the guest.
 `AgentModuleImpl` (`module/src/agent_module_plugin.h`) is a registry, not a god
 object. Its whole contract is `configure` once with the anchored policy address,
 `start` before any skill call, `stop` before shutdown
-(`agent_module_plugin.h:17-19`), plus `registerSkill` and `skills()`.
+(`AgentModuleImpl::configure`, `::start`, `::stop` in `agent_module_plugin.h`),
+plus `registerSkill` and `skills()`.
 
 A skill is anything implementing `ISkill` — a name, a JSON Schema for its
 parameters, and an `invoke` (`module/src/agent_module_interface.h:51-79`). That
@@ -209,15 +232,15 @@ through it:
 
 | Port | Header | Members |
 |---|---|---|
-| `DeliveryPort` | `messaging_skills.h:28` | `ready`, `send(topic, payload)`, `subscribe`, `channelCreate` |
-| `StoragePort` | `storage_skills.h:22` | `ready`, `upload`, `download`, `manifests`, `exists` |
-| `SharePort` | `storage_skills.h:37` | `send(recipient, message)` |
-| `WalletPort` | `wallet_skills.h:102` | `getAccount`, `walletAccount`, `getTransaction`, `journal`, `spend`, `spentThisPeriod` |
-| `ProgramPort` | `program_skills.h:66` | `call`, `deploy`, `read` |
-| `SequencerPort` | `program_skills.h:80` | `rpc(method, params)` |
-| `OwnerChannelPort` | `owner_channel.h:193` | `ready`, `channelCreate`, `channelSend`, `drain`, `nowMs`, `idle` |
-| `CardPort` / `DiscoveryPort` / `TaskPort` / `StatusPort` / `ConfigPort` | `agent_skills.h:186`, `:218`, `:227`, `:244`, `:261` | the A2A seams |
-| `HttpTransport` | `inference.h:229` | `post` |
+| `DeliveryPort` | `struct DeliveryPort`, `messaging_skills.h` | `ready`, `send(topic, payload)`, `subscribe`, `channelCreate` |
+| `StoragePort` | `struct StoragePort`, `storage_skills.h` | `ready`, `upload`, `download`, `manifests`, `exists` |
+| `SharePort` | `struct SharePort`, `storage_skills.h` | `send(recipient, message)` |
+| `WalletPort` | `struct WalletPort`, `wallet_skills.h` | `getAccount`, `walletAccount`, `getTransaction`, `journal`, `spend`, `spentThisPeriod` |
+| `ProgramPort` | `struct ProgramPort`, `program_skills.h` | `call`, `deploy`, `read` |
+| `SequencerPort` | `struct SequencerPort`, `program_skills.h` | `rpc(method, params)` |
+| `OwnerChannelPort` | `struct OwnerChannelPort`, `owner_channel.h` | `ready`, `channelCreate`, `channelSend`, `drain`, `nowMs`, `idle` |
+| `CardPort` / `DiscoveryPort` / `TaskPort` / `StatusPort` / `ConfigPort` | the five `struct …Port` declarations in `agent_skills.h` | the A2A seams |
+| `HttpTransport` | `struct HttpTransport`, `inference.h` | `post` |
 
 This is not indirection for its own sake. It is what lets CI assert the
 behaviour that actually matters — that a skill refuses when the node is down,
@@ -255,14 +278,15 @@ refusal — on `/lp-0008/1/owner-channel/<owner>/<agent>`, sends a
 `spend_approval_request` naming the policy, recipient, amount, nonce and marker
 seed, re-sends every 15 s, and after 120 s with no answer returns
 `ApprovalVerdict::Unreachable`, which is terminal
-(`owner_channel.h:233`, `owner_channel.cpp:456`). It never falls back to acting
+(`OwnerChannelConfig::timeoutMs`, `owner_channel.h`; the verdict comes back from
+`OwnerChannel::requestApproval`, `owner_channel.cpp`). It never falls back to acting
 alone; the prize is explicit that an above-threshold transaction which cannot
 reach its owner must not execute.
 
 A reply is only an answer if it agrees on every field of the request, and a reply
 carrying `per_tx`, `per_period`, `period_blocks` or `policy` is refused outright
 — "an approval names a payment, it cannot change a limit"
-(`owner_channel.cpp:155-158`).
+(`checkReply` in `owner_channel.cpp`).
 
 That is the channel a host which **links** this module wires. A host that
 **loads** it as a plugin cannot: an `OwnerChannelPort` is a struct of
@@ -329,18 +353,18 @@ Both gaps are filled here, and nowhere else in the stack:
 
 - **Transport**: Logos Messaging replaces A2A's HTTP. Agent Cards carry
   `"preferredTransport": "logos-messaging"` and a `logos-messaging://<account>`
-  URL (`module/src/agent_skills.cpp:634-641`); requests are A2A JSON-RPC
+  URL (`validateAgentCard` in `module/src/agent_skills.cpp`); requests are A2A JSON-RPC
   (`message/send`, `tasks/cancel`) carried as message payloads on a content
   topic derived from the agent and the task (`taskTopic`,
-  `agent_skills.cpp:193-196`).
+  `taskTopic` in `agent_skills.cpp`).
 - **Payment**: an `x-logos` extension block on the card carries the LEZ account,
   the public payment account, the price per task, and
   `"settlement": "lez-chained-authenticated-transfer"`
-  (`agent_skills.cpp:711-721`).
+  (`CardSkill::invoke` in `agent_skills.cpp`).
 
 The task lifecycle is A2A's — `submitted`, `working`, `input-required`,
 `auth-required`, `completed`, `canceled`, `failed`, `rejected`
-(`agent_skills.h:51-61`) — with the legal transitions enforced in one place
+(`enum class TaskState` in `agent_skills.h`) — with the legal transitions enforced in one place
 (`canTransition`) and state kept in a `TaskStore` that can be snapshotted and
 restored so a node restart does not lose an open task.
 
@@ -399,8 +423,8 @@ exactly that in [`skills.md`](skills.md), never as "works".
 
 ```mermaid
 flowchart LR
-    G["guest crate<br/>(own workspace)"] -->|cargo risczero build| ELF["agent_verifier.bin<br/>ImageID 26ed1580…"]
-    ELF -->|wallet deploy-program| TX["deploy tx 8c87cc9b…<br/>= SHA256(u32le(len) ‖ bytes)"]
+    G["guest crate<br/>(own workspace)"] -->|cargo risczero build| ELF["agent_verifier.bin<br/>ImageID: see DEPLOYMENT.md"]
+    ELF -->|wallet deploy-program| TX["deploy tx<br/>= SHA256(u32le(len) ‖ bytes)"]
     ELF -->|committed| ART["artifacts/programs/"]
     ART -->|demo.sh recomputes| TX
     IDL["idl/agent_verifier.idl.json"] -->|spel --idl| CALL["create_policy / spend"]
@@ -411,6 +435,14 @@ committed binary hashes to exactly its own deployment — which is what lets
 `scripts/demo.sh` prove, from a clean clone with no keys and no funded account,
 that the program on chain is the program in this repository. Deployment is
 idempotent for the same reason.
+
+Neither the ImageID nor the deploy hash is written into that diagram. Both move
+on every guest rebuild, and this diagram carried a pair from two deployments ago
+while claiming to describe the build that produces the shipped binary — a
+picture of a topology that was right and of a program that was gone.
+[`docs/DEPLOYMENT.md`](DEPLOYMENT.md) records them once, and
+`scripts/verify-deployment.sh` is what checks that the record still matches the
+bytes and the chain.
 
 `vendor/spel` is a pinned copy of the SPEL framework repinned to LEZ v0.2.4
 (`47eba25`); the published spel releases lag the testnet, so the framework types

@@ -21,7 +21,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJzZWNwMjU2azEtYmlwMzQwIiwia2lkIjoiNVNhMTNOeU5Gc1RxQWozQXRkb1E3a3pDNlpaSkpONTdBWXFoTmRkSHRqbloifQ",
-      "signature": "7a31fd244b550ea0dbfe7fe30ebad64762ef9d880b1e0b3237b8c02c3fb03d75b4e38d06787e70038f5d9fa098def90190254dd63878e606af54cc5879b75f3d"
+      "signature": "74ba7026c5b82089d14d59846578edd0393c0ddcf060bb0adb0d788c23c5409be553fe892e595cbec1a3f3fc0fa8c177c4186ba88977ea1f9f747eb657849b15"
     }
   ],
   "skills": [
@@ -40,12 +40,12 @@
       ]
     }
   ],
-  "url": "logos-messaging://7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+  "url": "logos-messaging://9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
   "version": "0.1.0",
   "x-logos": {
-    "lezAccount": "7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+    "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
     "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
-    "pricePerTask": 25,
+    "pricePerTask": 5,
     "settlement": "lez-chained-authenticated-transfer"
   }
 }

@@ -9,63 +9,70 @@
 //! deploying an autonomous agent on a remote node is trusting exactly the
 //! machine most likely to be compromised.
 //!
-//! ONE POLICY ACCOUNT PER AGENT, AND WHY THAT IS THE WHOLE PROPERTY
+//! ANCHORING IS A TWO-PARTY ACT, AND THAT IS THE WHOLE PROPERTY
 //!
-//! The previous three deployments derived the policy account's *address* from
-//! the policy contents — owner, agent, and both limits. The reasoning was that
-//! an agent cannot edit a limit, because an edited limit names a different
-//! address that `create_policy` never initialised. That much was true and it
-//! was never the attack.
+//! The address of an agent's policy account is `PDA(program,
+//! ["agent-policy/v1", agent])` — the agent, and nothing else. That much is
+//! right and it is kept. What it does not decide, and what the previous
+//! deployment got badly wrong, is **who may write there**.
 //!
-//! Folding the limits into the address means every (owner, agent, limits)
-//! triple has an address of its own, so there is no such thing as *the* policy
-//! account for an agent — there are 2^256 of them, all uninitialised, and
-//! anchoring is first-come at every one. An attacker holding a compromised
-//! agent's key therefore never had to invent an owner or forge a signature. It
-//! could **be** the owner: anchor a fresh policy naming the compromised agent
-//! as `agent_id` and itself as `owner_id`, with `per_tx = per_period =
-//! u128::MAX`, and then spend the agent's whole balance under it. Every check
-//! passed, because every check was satisfied — the signer really was the owner
-//! that policy named. That was executed against the deployed binary, `Halted(0)`
-//! on both transactions, and it made the headline claim of this repository
-//! false.
+//! That deployment declared exactly two accounts on `create_policy`: the policy
+//! account and a signer recorded as its owner. `agent_id` was a free `[u8; 32]`
+//! argument, discarded by the body, and the agent's account was never declared,
+//! never read and never asked to sign. So anchoring a policy over somebody
+//! else's agent needed **no key at all** — only the agent's public id, which
+//! this repository publishes in `artifacts/agents.tsv` and inside every signed
+//! Agent Card. Executed against the deployed binary: an unrelated account
+//! anchored `per_tx = per_period = u128::MAX` over an agent it did not control
+//! and was accepted; the honest owner's later anchor was then refused
+//! `AccountAlreadyInitialized`, as was every variant of it, for the life of that
+//! agent identity. `per_tx = 0` instead of `u128::MAX` makes the same call a
+//! permanent denial of service. The predecessor design at least required the
+//! agent's key; this one required nothing.
 //!
-//! Checking more fields could not close it. What closes it is removing the
-//! choice of address:
+//! One address per agent is therefore necessary and nowhere near sufficient.
+//! The missing half is consent, and it is now two signatures, taken in two
+//! separate transactions from two separate wallets:
 //!
-//!   the policy account's address is `PDA(program, ["agent-policy/v1", agent])`
+//!   1. `claim_agent` — the **agent** signs, and designates the account id that
+//!      is allowed to anchor its policy. It writes an [`OwnerClaim`] into
+//!      `PDA(program, ["agent-owner/v1", agent])`, an address derived from the
+//!      *signing* account, so there is no `agent_id` argument to lie about.
+//!   2. `create_policy` — the **designated owner** signs. It reads that claim
+//!      account and refuses unless the signer is the id the agent named.
 //!
-//! and nothing else. The limits and the owner live in that account's **data**,
-//! written by the program that owns it. `create_policy` declares the account
-//! `#[account(init)]`, and `init` refuses an account that is not in its default
-//! state — so the first anchor for an agent is the only anchor for that agent.
-//! A second one is not *detected*, it is impossible: there is one address, and
-//! it is taken.
+//! A third party holds neither key, so it can do neither step: it cannot claim
+//! an agent it cannot sign for, and it cannot anchor over an agent that has
+//! designated somebody else. Both refusals are error codes rather than
+//! `AccountAlreadyInitialized`, so the reason is legible.
 //!
-//! An attacker who takes the agent process now finds that the policy account it
-//! would have to anchor already exists and belongs to the owner, and that the
-//! only account `spend` will read for that agent is that one. Anchoring an
-//! unlimited policy is no longer a thing the chain can be asked to do.
+//! Splitting it in two is what makes it deployable. `spel` signs only for
+//! accounts an instruction declares as signers, and only with keys the *one*
+//! wallet home it is pointed at actually holds. One instruction requiring both
+//! signatures would require the owner's key and the agent's key in the same
+//! wallet — which is the assumption the whole design exists to avoid. Two
+//! single-signer instructions keep the agent's key on the agent's node and the
+//! owner's key with the owner.
 //!
-//! WHAT THIS COSTS, AND WHAT IT DOES NOT
+//! LOSING THE RACE IS NOT PERMANENT
 //!
-//! It costs the ability to change a policy. There is exactly one per agent and
-//! its data is written once by `create_policy` and thereafter only by `spend`,
-//! which touches the running total and nothing else. Raising an envelope means
-//! a new agent identity. That is a deliberate trade — see
-//! `docs/security-model.md` — and it is strictly stronger than the previous
-//! design, where an owner could anchor a second, looser policy and the agent
-//! could then choose which to present.
+//! `init` cannot be undone: LEZ rule 4 forbids changing an account's program
+//! owner (`ModifiedProgramOwner`, `program/mod.rs:697-703`), so an account this
+//! program has claimed is this program's forever and no `close` can exist. The
+//! recovery therefore has to live in the record rather than in the address, and
+//! it does: `update_policy` re-fixes both limits and the period in place, on the
+//! signature of the owner the record names. An envelope that was anchored wrong
+//! is corrected rather than abandoned, and an owner who believes the agent is
+//! compromised can set `per_tx = 0` and stop it spending unattended at all,
+//! which nothing in the previous design could do.
 //!
-//! It costs no new trust. The program already had to read this account's data
-//! for the period ledger, and LEZ rule 6 (`UnauthorizedDataModification`) is
-//! what stops anyone else writing there.
-//!
-//! What it does NOT cover is anchoring order. If an agent's key is compromised
-//! *before* its owner has anchored anything, the attacker can anchor first, and
-//! first-writer-wins then favours the attacker. The owner anchors when it
-//! creates the agent, which is before the agent has run, let alone been taken.
-//! That residual is stated rather than papered over.
+//! What stays irreversible is the agent's own designation of its owner. It has
+//! to: an agent that could re-designate could name itself and then anchor its
+//! own unlimited policy, which is the attack. The cost of getting it wrong is
+//! bounded — a private account costs nothing to create and the agent's balance
+//! is never trapped, since the balance is held by the transfer program and moves
+//! on the agent's own key — so the remedy is a new agent identity, and no third
+//! party can force it.
 //!
 //! WHAT THE OWNER SIGNS
 //!
@@ -76,10 +83,18 @@
 //! `spend_approved` stamps the marker's data on the way through, so a marker
 //! that exists is not the same thing as a marker that is still unspent.
 //!
-//! Who the owner *is* is no longer an argument either. `approve_spend` reads it
-//! out of the policy account and compares it to the signer, so a compromised
-//! agent signing its own approvals is refused by the same account it would have
-//! had to overwrite.
+//! An approval also **expires**. It used to be a bearer instrument: a marker,
+//! once created, authorised its payment in every block forever, redeemable the
+//! day the agent's key was stolen and against a period ledger it does not draw
+//! on. The owner now names the last block it is good for, that block is written
+//! into the marker by [`ApprovalRecord`], and `spend_approved` pins the
+//! transaction's own block validity window to it — so an expired approval is not
+//! refused by this program, it is a transaction no block will include.
+//!
+//! Who the owner *is* is not an argument either. `approve_spend` reads it out of
+//! the policy account and compares it to the signer, so a compromised agent
+//! signing its own approvals is refused by the same account it would have had to
+//! overwrite.
 //!
 //! WHERE THE RUNNING TOTAL LIVES
 //!
@@ -116,6 +131,20 @@ use sha2::{Digest, Sha256};
 /// ever granted. `seed_from_str` zero-pads to 32 bytes and panics past that, so
 /// this must stay short.
 pub const POLICY_PDA_PREFIX: &str = "agent-policy/v1";
+
+/// The constant first seed of every owner-claim account's address. The second is
+/// the agent's own account id, exactly as for the policy account.
+///
+/// It has to differ from [`POLICY_PDA_PREFIX`], and the reason is not tidiness:
+/// with a shared prefix an agent's claim account and its policy account would be
+/// the same address, `create_policy` would find a claim where it expects a
+/// policy record, and `claim_agent` would be refused by `init` for an agent that
+/// had merely been anchored. Two prefixes, two accounts, one agent.
+///
+/// Both are two-seed PDAs of 32 bytes each, while an approval marker is a
+/// one-seed PDA, so no marker address can collide with either — which matters,
+/// because a marker seed is derivable by anyone who knows the payment.
+pub const OWNER_CLAIM_PDA_PREFIX: &str = "agent-owner/v1";
 
 /// Domain separators. Distinct prefixes keep a hash computed for one purpose
 /// from ever being valid for another.
@@ -238,9 +267,66 @@ impl SpendPolicy {
     }
 }
 
-/// The policy account's data was not written by this program.
+/// The account's data was not written by this program, or was written under a
+/// layout this build does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MalformedRecord;
+
+/// The agent's own statement of which account may anchor its policy.
+///
+/// This is the whole contents of `PDA(program, ["agent-owner/v1", agent])`, and
+/// it is the account that makes anchoring a two-party act. It is written by
+/// `claim_agent`, whose policy-account-shaped guarantee is that the *agent*
+/// signs and the address is derived from the signing account — so nobody can
+/// write here for an agent whose key they do not hold, and there is no
+/// `agent_id` argument to disagree with.
+///
+/// `create_policy` reads it and refuses any signer that is not `owner`. That is
+/// the difference between the previous deployment, where an anchor needed no key
+/// whatsoever, and this one, where it needs two.
+///
+/// One field, no limits, no period: the claim says *who decides*, never *what
+/// was decided*. Keeping the terms out of it is what lets `update_policy` change
+/// them later without the agent having to sign again — and what stops a
+/// compromised agent from mattering here at all, since by the time it is
+/// compromised this account already exists and `init` will not have it twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnerClaim {
+    /// The account id `create_policy` will require as its signer.
+    pub owner: [u8; 32],
+}
+
+impl OwnerClaim {
+    /// Layout version. Distinct from [`PolicyRecord::VERSION`] so that even a
+    /// hypothetical address collision could not have one read as the other.
+    pub const VERSION: u8 = 2;
+    /// `version || owner`.
+    pub const ENCODED_LEN: usize = 1 + 32;
+
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::ENCODED_LEN] {
+        let mut out = [0u8; Self::ENCODED_LEN];
+        out[0] = Self::VERSION;
+        out[1..33].copy_from_slice(&self.owner);
+        out
+    }
+
+    /// Decode a claim account's data. Fails closed, and in particular refuses a
+    /// claim naming the all-zero account: no key produces that id, so a policy
+    /// keyed to it could never be anchored by anybody and the agent identity
+    /// would be spent for nothing.
+    pub fn decode(data: &[u8]) -> Result<Self, MalformedRecord> {
+        if data.len() != Self::ENCODED_LEN || data[0] != Self::VERSION {
+            return Err(MalformedRecord);
+        }
+        let mut owner = [0u8; 32];
+        owner.copy_from_slice(&data[1..33]);
+        if owner == [0u8; 32] {
+            return Err(MalformedRecord);
+        }
+        Ok(Self { owner })
+    }
+}
 
 /// Everything the chain knows about one agent's envelope: who owns it, what it
 /// permits, and what has been spent against it.
@@ -309,6 +395,80 @@ impl PolicyRecord {
                 window_start: u64_le(&data[73..81]),
                 spent: u128_le(&data[81..97]),
             },
+        })
+    }
+}
+
+/// What an owner approval says beyond the fact that it exists.
+///
+/// The approval account's *address* already commits to the payment — agent,
+/// recipient, amount, nonce, through [`compute_spend_ref`] and
+/// [`compute_approval_marker`] — so the only things left to record are the two
+/// that the address cannot carry because they change: when it stops being good,
+/// and whether it has been used.
+///
+/// Both were missing. The account used to hold empty data until it was spent and
+/// a single byte afterwards, which gave single use and nothing else: an approval
+/// was valid in **every block, forever**, so an owner who approved one payment
+/// had written a bearer instrument that an attacker could redeem the day it
+/// stole the agent's key, months later, against a period ledger the approved
+/// path does not draw on. There was no way back either — `approve_spend` is
+/// `init`, so the marker cannot be re-issued to cancel it.
+///
+/// `expiry_block` is the fix and it is enforced by the chain rather than by this
+/// program: `spend_approved` pins the transaction's block validity window to
+/// `[0, expiry_block)`, and a transaction outside its window is rejected by the
+/// state machine with `OutOfValidityWindow`. So an expired approval is not an
+/// approval this program refuses — it is one that no block will accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalRecord {
+    /// First block at which this approval is no longer redeemable. The
+    /// transaction that spends it must land strictly before this.
+    pub expiry_block: u64,
+    /// Set by `spend_approved` as it consumes the approval. `init` gives single
+    /// *issue*; this is what gives single *use*.
+    pub spent: bool,
+}
+
+impl ApprovalRecord {
+    /// Layout version, distinct from the other two records in this crate.
+    pub const VERSION: u8 = 3;
+    /// `version || expiry_block || spent`, the integer little-endian.
+    pub const ENCODED_LEN: usize = 1 + 8 + 1;
+
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::ENCODED_LEN] {
+        let mut out = [0u8; Self::ENCODED_LEN];
+        out[0] = Self::VERSION;
+        out[1..9].copy_from_slice(&self.expiry_block.to_le_bytes());
+        out[9] = u8::from(self.spent);
+        out
+    }
+
+    /// Decode an approval account's data.
+    ///
+    /// An expiry of zero is refused here as well as at issuing time: `[0, 0)` is
+    /// an empty block range, which `SpelOutput::try_with_block_validity_window`
+    /// rejects, and an approval that cannot be pinned to a window is exactly the
+    /// unbounded bearer instrument this record exists to prevent. Anything but
+    /// `0` or `1` in the `spent` byte is refused too — a marker this program
+    /// wrote only ever holds those, so a third value is data it did not write.
+    pub fn decode(data: &[u8]) -> Result<Self, MalformedRecord> {
+        if data.len() != Self::ENCODED_LEN || data[0] != Self::VERSION {
+            return Err(MalformedRecord);
+        }
+        let expiry_block = u64_le(&data[1..9]);
+        if expiry_block == 0 {
+            return Err(MalformedRecord);
+        }
+        let spent = match data[9] {
+            0 => false,
+            1 => true,
+            _ => return Err(MalformedRecord),
+        };
+        Ok(Self {
+            expiry_block,
+            spent,
         })
     }
 }
@@ -382,10 +542,18 @@ mod tests {
     //    `window_bounds` are tested here as arithmetic; the enforcement is not
     //    arithmetic.
     //
-    // 2. "An agent has one policy account and cannot anchor a second." That is
-    //    `#[account(init)]` refusing a non-default account at an address derived
-    //    from the agent alone. There is no hash to test here any more, which is
-    //    the improvement — the harness proves it against the binary.
+    // 2. "No third party can bind an agent to a policy." That is two account
+    //    checks in the guest — `claim_agent` deriving the claim account's
+    //    address from the account that signs, and `create_policy` refusing a
+    //    signer that is not the id that claim names. Neither is arithmetic and
+    //    neither can be reached from here. The harness in
+    //    `crates/agent-verifier-adversarial` proves both against the binary, and
+    //    the two-step attack it runs end to end is the reason to read it.
+    //
+    // 3. "An approval stops being redeemable." The expiry lives in
+    //    [`ApprovalRecord`] and is tested below as a round trip; the enforcement
+    //    is the block validity window the guest pins to the transaction, which
+    //    the state machine checks. Encoding is arithmetic, expiry is not.
 
     const OWNER: [u8; 32] = [1; 32];
     const AGENT: [u8; 32] = [2; 32];
@@ -567,7 +735,99 @@ mod tests {
         assert!(PolicyRecord::decode(&[0u8; 24]).is_err());
     }
 
+    // ── the owner claim, which is what makes anchoring two-party ─────────
+
+    #[test]
+    fn the_claim_carries_the_owner_and_nothing_else() {
+        let c = OwnerClaim { owner: OWNER };
+        assert_eq!(OwnerClaim::decode(&c.encode()).expect("round trip"), c);
+        assert_eq!(OwnerClaim::ENCODED_LEN, 33);
+        // The bytes land where the layout says, because `create_policy` compares
+        // its signer against exactly these 32.
+        assert_eq!(c.encode()[0], OwnerClaim::VERSION);
+        assert_eq!(&c.encode()[1..33], &OWNER);
+    }
+
+    #[test]
+    fn a_claim_naming_nobody_is_not_a_claim() {
+        // An agent that designated the all-zero account would have designated an
+        // id no key produces: `create_policy` could never be signed for it, so
+        // the agent identity would be spent on an envelope nobody can anchor.
+        // `claim_agent` refuses it and so does this decoder, which is the half
+        // that matters — the guest reads the account rather than the call.
+        let zero = OwnerClaim { owner: [0; 32] };
+        assert!(OwnerClaim::decode(&zero.encode()).is_err());
+        assert!(OwnerClaim::decode(&[]).is_err());
+        assert!(OwnerClaim::decode(&[0u8; OwnerClaim::ENCODED_LEN - 1]).is_err());
+        let mut wrong = OwnerClaim { owner: OWNER }.encode();
+        wrong[0] = OwnerClaim::VERSION + 1;
+        assert!(OwnerClaim::decode(&wrong).is_err());
+    }
+
+    #[test]
+    fn the_three_records_cannot_be_read_as_one_another() {
+        // Their addresses are separated by prefix and seed count, so this is
+        // belt and braces — but a decoder that accepted another record's bytes
+        // would turn an address mistake into a silent policy, and each of these
+        // decides who may spend what.
+        assert_ne!(POLICY_PDA_PREFIX, OWNER_CLAIM_PDA_PREFIX);
+        let claim = OwnerClaim { owner: OWNER }.encode();
+        let policy = anchored().encode();
+        let approval = ApprovalRecord { expiry_block: 9000, spent: false }.encode();
+        assert!(PolicyRecord::decode(&claim).is_err());
+        assert!(PolicyRecord::decode(&approval).is_err());
+        assert!(OwnerClaim::decode(&policy).is_err());
+        assert!(OwnerClaim::decode(&approval).is_err());
+        assert!(ApprovalRecord::decode(&policy).is_err());
+        assert!(ApprovalRecord::decode(&claim).is_err());
+        // Three layouts, three version bytes.
+        assert_eq!(
+            [PolicyRecord::VERSION, OwnerClaim::VERSION, ApprovalRecord::VERSION],
+            [1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn the_claim_prefix_is_a_usable_pda_seed() {
+        // Same trap as `POLICY_PDA_PREFIX`: `seed_from_str` zero-pads to 32
+        // bytes and panics past that, inside the guest, where a panic is a halt
+        // with no error code.
+        assert!(!OWNER_CLAIM_PDA_PREFIX.is_empty());
+        assert!(OWNER_CLAIM_PDA_PREFIX.len() <= 32);
+    }
+
     // ── approvals ────────────────────────────────────────────────────────
+
+    #[test]
+    fn an_approval_carries_an_expiry_and_a_use_flag() {
+        let a = ApprovalRecord { expiry_block: 9000, spent: false };
+        assert_eq!(ApprovalRecord::decode(&a.encode()).expect("round trip"), a);
+        let used = ApprovalRecord { spent: true, ..a };
+        assert_eq!(ApprovalRecord::decode(&used.encode()).expect("round trip"), used);
+        // Issued and spent differ in the byte `spend_approved` writes, so an
+        // unspent approval cannot be produced by truncating a spent one.
+        assert_ne!(a.encode(), used.encode());
+        assert_eq!(ApprovalRecord::ENCODED_LEN, 10);
+    }
+
+    #[test]
+    fn an_approval_with_no_expiry_is_not_an_approval() {
+        // `[0, 0)` is an empty block range and cannot be pinned to a
+        // transaction, so an approval that says zero is the unbounded bearer
+        // instrument this record exists to prevent. Refuse rather than treat it
+        // as "never expires".
+        assert!(ApprovalRecord::decode(&ApprovalRecord { expiry_block: 0, spent: false }.encode()).is_err());
+        // And a `spent` byte this program never wrote is data it never wrote.
+        let mut odd = ApprovalRecord { expiry_block: 9000, spent: false }.encode();
+        odd[9] = 2;
+        assert!(ApprovalRecord::decode(&odd).is_err());
+        // The empty account the previous deployment used as "issued, unspent"
+        // is not a record, so a marker made by that program cannot be redeemed
+        // by this one.
+        assert!(ApprovalRecord::decode(&[]).is_err());
+        assert!(ApprovalRecord::decode(&[1]).is_err());
+    }
+
 
     #[test]
     fn an_approval_is_bound_to_the_agent_it_was_granted_for() {

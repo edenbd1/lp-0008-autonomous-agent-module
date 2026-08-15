@@ -86,7 +86,8 @@ const char *const kSkills[] = {
     "wallet.history",      "program.query",    "program.call",
     "program.deploy",      "agent.card",       "agent.discover",
     "agent.task",          "agent.subscribe",  "agent.cancel",
-    "meta.status",         "meta.configure",   "agent.evaluate_task",
+    "meta.status",         "meta.configure",   "meta.skills",
+    "agent.evaluate_task",
 };
 constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 
@@ -172,13 +173,22 @@ int main(int argc, char **argv)
 
     // ---- the module's real behaviour, through callMethod ------------------
     const QString owner = QStringLiteral("lez1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
-    // A real anchored policy hash — the blockchain agent's, from
-    // artifacts/anchored.tsv under the current program 8c87cc9b…. Any 64-hex
-    // string exercises the same path, but using the live one means a reader who
-    // greps for it lands on the policy account this module would actually
-    // configure against, rather than on a deploy transaction that never was one.
+    // The blockchain agent's account id, which is the 32-byte seed the current
+    // program derives its policy account from — `PDA(program, ["agent-policy/v1",
+    // agent_id])`. Read it out of artifacts/agents.tsv (`agent_id`, base58
+    // A7UBoMbSo…) rather than out of this comment.
+    //
+    // Any 64-hex string exercises the same path. Using a live one means a reader
+    // who greps for it lands on something the chain really holds — but it also
+    // means this constant goes stale on a redeploy, and it did: it used to be a
+    // policy hash from `artifacts/anchored.tsv` "under the current program
+    // 8c87cc9b…", two programs after that stopped being the current program, and
+    // under a scheme where the limits were part of the seed at all. Nothing here
+    // could fail on that, because `configure()` only checks the shape.
+    // `scripts/verify-deployment.sh` is what checks the identifiers against the
+    // chain; this is a well-formed input, and that is all it has to be.
     const QString policy =
-        QStringLiteral("1a317aae885143298b3b033539273a02ff9c0c4f55e586f979a22b15c6e7c356");
+        QStringLiteral("8761681eb6bdf2cc7bb2341a58b9c3213f3a0112c2195aa634db12c780c0fa90");
 
     QVariant status = provider->callMethod(QStringLiteral("status"), {});
     note("status(): " + status.toString());
@@ -280,6 +290,36 @@ int main(int argc, char **argv)
     check(contains(metaStatus, "\"ok\":true") && contains(metaStatus, "\"started\":true")
               && metaStatus.toString().contains(policy),
           "meta.status answers over the boundary with what the agent is bound to");
+
+    // The catalogue the prize asks for by name, over the same boundary. This is
+    // the check that would have caught its absence: it was documented in three
+    // C++ headers and in the A2A binding while `invoke("meta.skills")` answered
+    // "no skill named 'meta.skills' is registered", because nothing in this
+    // harness had ever asked the loaded binary for it. Asserted on its content,
+    // not just its shape — a catalogue that omits the skill listing it, or
+    // disagrees with `skills()`, is the same defect one layer along.
+    QVariant catalogue = provider->callMethod(QStringLiteral("invoke"),
+                                              {QStringLiteral("meta.skills"),
+                                               QStringLiteral("{}")});
+    note("invoke(meta.skills): " + catalogue.toString());
+    const QJsonObject listing =
+        QJsonDocument::fromJson(catalogue.toString().toUtf8()).object();
+    const QJsonArray listed2 = listing.value("skills").toArray();
+    QSet<QString> catalogued;
+    for (const QJsonValue &entry : listed2) {
+        const QJsonObject object = entry.toObject();
+        if (object.value("parameters").isObject()) {
+            catalogued.insert(object.value("name").toString());
+        }
+    }
+    check(listing.value("ok").toBool() && listed2.size() == kSkillCount
+              && listing.value("count").toInt() == kSkillCount,
+          QStringLiteral("meta.skills lists all %1 skills over the boundary, and counts them")
+              .arg(kSkillCount));
+    check(catalogued == listed,
+          "and every one of them carries the parameter schema skills() published for it");
+    check(catalogued.contains(QStringLiteral("meta.skills")),
+          "including itself: it is a registered skill, not a special case in invoke()");
 
     // A skill whose transport nobody wired: refused, and refused with the port
     // it is missing rather than with a claim that it worked.

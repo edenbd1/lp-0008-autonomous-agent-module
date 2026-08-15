@@ -219,9 +219,22 @@ rule "5. below the ceiling: accepted, unattended, and already on chain"
 if [ ! -s "$SETTLEMENTS" ]; then
   bad "no settlement manifest at $SETTLEMENTS"
 else
+  # By header name, never by position. This loop used to destructure the row
+  # with `read -r task client server pay skill price nonce tx …`, which is the
+  # exact pattern `lib.sh` exists to replace: when `a2a-task.tsv` gained a
+  # leading `program` column, every variable shifted by one and the script
+  # reported a price of "skill" as being over the ceiling and a transaction hash
+  # of "70" as not on chain. Two confident wrong answers from a file that was
+  # perfectly correct.
   n=0; landed=0
-  while IFS=$'\t' read -r task client server pay skill price nonce tx before after; do
-    [ "$task" = task_id ] && continue
+  mkdir -p "$WORK"
+  paste -d'\t' \
+    <(column_of "$SETTLEMENTS" price) \
+    <(column_of "$SETTLEMENTS" settlement_tx) \
+    <(column_of "$SETTLEMENTS" balance_before) \
+    <(column_of "$SETTLEMENTS" balance_after) > "$WORK/settlements.tsv" \
+    || die "$SETTLEMENTS is missing a column this script needs"
+  while IFS=$'\t' read -r price tx before after; do
     [ -n "$tx" ] || continue
     n=$((n + 1))
     printf '  %s LEZ  %s\n' "$price" "$tx"
@@ -237,7 +250,7 @@ else
     else
       bad "  recorded $before -> $after for a price of $price"
     fi
-  done < "$SETTLEMENTS"
+  done < "$WORK/settlements.tsv"
   [ "$landed" -gt 0 ] || bad "not one settlement in the manifest is on chain"
   NOW=$(balance_of "$RECIPIENT")
   echo "  $RECIPIENT holds $NOW LEZ now, by getAccount"

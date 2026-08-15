@@ -1493,6 +1493,80 @@ int main()
               "and a configure with nowhere to store it refuses");
     }
 
+    // The skill the prize names and this repository documented for months
+    // without registering. These cases are about the skill itself; that the
+    // module registers it and wires it to its own registry is asserted in
+    // skills_test.cpp, which is where the registry lives.
+    std::printf("meta.skills\n");
+    {
+        RegistryPort port;
+        port.listing = [] {
+            return std::string(R"([{"name":"storage.upload","parameters":{"type":"object"}},)"
+                               R"({"name":"meta.skills","parameters":{"type":"object"}}])");
+        };
+        SkillsSkill skills(port);
+
+        const auto all = skills.invoke("{}");
+        check(okOf(all), "the catalogue answers");
+        const auto j = jsonOf(all);
+        check(j.contains("skills") && j["skills"].is_array() && j["skills"].size() == 2,
+              "with one entry per registered skill");
+        check(j.value("count", std::size_t{0}) == 2, "and a count of them");
+        check(j["skills"][0].value("name", std::string{}) == "storage.upload"
+                  && j["skills"][0]["parameters"].value("type", std::string{}) == "object",
+              "each carrying the parameter schema another agent would call it from");
+        check(okOf(skills.invoke("")), "empty parameters are accepted, like meta.status");
+        check(!okOf(skills.invoke("not json")),
+              "malformed parameters are refused, not thrown");
+    }
+    {
+        // The listing is passed through as the registry built it, including the
+        // entry a skill gets when its own parameterSchema() misbehaved. Deriving
+        // that isolation a second time here would be a second place for it to be
+        // wrong.
+        RegistryPort port;
+        port.listing = [] {
+            return std::string(
+                R"([{"name":"bad.schema","error":"parameter schema is not a JSON object"}])");
+        };
+        SkillsSkill skills(port);
+        const auto j = jsonOf(skills.invoke("{}"));
+        check(j["skills"][0].value("error", std::string{}).find("not a JSON object")
+                  != std::string::npos,
+              "a skill whose schema did not parse is listed with its error, not dropped");
+    }
+    {
+        SkillsSkill none(RegistryPort{});
+        check(!okOf(none.invoke("{}")),
+              "a catalogue with no registry behind it refuses, rather than reporting no skills");
+
+        RegistryPort notJson;
+        notJson.listing = [] { return std::string("{}"); };
+        check(!okOf(SkillsSkill(notJson).invoke("{}")),
+              "and a registry that did not answer with an array is refused");
+
+        // The module answers `{"error":…}` before start. `invoke()` refuses
+        // first, so this is only reachable by a host that links the module —
+        // and passing the reason on beats reporting an agent with no skills.
+        RegistryPort early;
+        early.listing = [] { return std::string(R"({"error":"agent is not started"})"); };
+        const auto refused = SkillsSkill(early).invoke("{}");
+        check(!okOf(refused)
+                  && jsonOf(refused).value("error", std::string{}).find("not started")
+                         != std::string::npos,
+              "a registry that refused says why, in its own words");
+
+        // Bounded before it is parsed, for the reason every other copied
+        // document here is: `done()` takes its argument by value and a copy
+        // recurses once per level.
+        RegistryPort deep;
+        deep.listing = [] {
+            return std::string("[") + std::string(200, '[') + std::string(200, ']') + "]";
+        };
+        check(!okOf(SkillsSkill(deep).invoke("{}")),
+              "a listing nested past the depth bound is refused, not copied");
+    }
+
     std::printf("\n%s\n", failures ? "FAILURES" : "all agent-coordination behaviours hold");
     return failures ? 1 : 0;
 }

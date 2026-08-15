@@ -335,7 +335,7 @@ StdLogosResult AgentModuleImpl::registerBuiltinSkills(logos::agent::SkillPorts p
         }
         // Once, for the same reason `registerSkill` refuses a duplicate name: a
         // second wiring cannot replace the first, so it would only ever be
-        // twenty-one refusals reported as a failure to register.
+        // twenty-two refusals reported as a failure to register.
         if (builtinsClaimed_) {
             return StdLogosResult{false, {}, "the built-in skills are already registered"};
         }
@@ -390,6 +390,12 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     // name a skill this agent has not registered — and cannot omit one it has.
     if (!ports.card.skills) {
         ports.card.skills = [this] { return skills(); };
+    }
+    // And `meta.skills` reads the same registry the card does, rather than a
+    // catalogue of its own. Two producers would be two answers to "what can this
+    // agent do", and the one a caller got would depend on which it asked.
+    if (!ports.registry.listing) {
+        ports.registry.listing = [this] { return skills(); };
     }
 
     // ---- runtime settings, for the two keys something actually reads ------
@@ -533,9 +539,13 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
         std::make_shared<TaskSkill>(ports.task, tasks),
         std::make_shared<SubscribeSkill>(ports.task, tasks),
         std::make_shared<CancelSkill>(ports.task, tasks),
-        // The module's own two.
+        // The module's own three. `meta.skills` is the catalogue the prize asks
+        // for by name; it is registered like any other skill rather than
+        // special-cased in `invoke()`, so it appears in its own listing and in
+        // the Agent Card, and a caller cannot tell it from a third party's.
         std::make_shared<StatusSkill>(ports.status, tasks),
         std::make_shared<ConfigureSkill>(ports.config),
+        std::make_shared<SkillsSkill>(ports.registry),
         // Pluggable inference. Registered with a null backend too: the skill
         // reports that none is configured, which is a decline, and a decline is
         // the only direction a backend is allowed to move a spend in anyway.

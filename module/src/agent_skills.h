@@ -241,10 +241,12 @@ struct CardPort {
     std::function<std::uint64_t()> pricePerTask;
     std::function<std::string()> providerOrganization;
     std::function<std::string()> providerUrl;
-    /// The registered skills, in the shape the plugin's `meta.skills()` already
-    /// returns: `[{"name":"storage.upload","parameters":{…}}]`. Taking the
-    /// registry's own output means the card cannot advertise a skill the agent
-    /// does not have.
+    /// The registered skills, in the shape the plugin's own `skills()` returns:
+    /// `[{"name":"storage.upload","parameters":{…}}]`. Taking the registry's own
+    /// output means the card cannot advertise a skill the agent does not have.
+    /// The `meta.skills` skill reads the same function — see @ref RegistryPort;
+    /// it wraps this array in the `{"ok":true,…}` envelope every skill answers
+    /// in, which is the one difference between the two.
     std::function<std::string()> skills;
     /// Detached-payload JWS (RFC 7515 appendix F): given
     /// `<protected>.<payload>`, return the base64url signature. Empty means the
@@ -353,6 +355,16 @@ struct ConfigPort {
     std::function<std::string(const std::string &key)> get;
 };
 
+/// Where `meta.skills` reads the catalogue from.
+struct RegistryPort {
+    /// Every registered skill and its parameter schema, in the shape the
+    /// plugin's own `skills()` returns: `[{"name":"storage.upload",
+    /// "parameters":{…}}]`. Taking the registry's own output — the same
+    /// function `CardPort::skills` is wired to — is what keeps the catalogue
+    /// and the Agent Card from being two answers to one question.
+    std::function<std::string()> listing;
+};
+
 // ---------------------------------------------------------------------------
 // The skills
 // ---------------------------------------------------------------------------
@@ -455,9 +467,10 @@ private:
 ///
 /// Only known keys, each validated for its own shape. The envelope keys
 /// (`per_tx`, `per_period`, `period_blocks`) are accepted but reported as *not
-/// effective*: those limits live in the PDA seed of the anchored policy
-/// account, so writing a larger number here changes what the agent asks the
-/// owner about and changes nothing about what the chain will let it spend.
+/// effective*: those limits are the data of the anchored policy account, which
+/// only the policy program may write, so writing a larger number here changes
+/// what the agent asks the owner about and changes nothing about what the chain
+/// will let it spend.
 class ConfigureSkill final : public ISkill {
 public:
     explicit ConfigureSkill(ConfigPort port) : port_(std::move(port)) {}
@@ -467,6 +480,37 @@ public:
 
 private:
     ConfigPort port_;
+};
+
+/// `meta.skills()` — every registered skill and its parameter schema.
+///
+/// This existed as prose before it existed as code. Three doc comments
+/// described it — `agent_module_interface.h`, `agent_module_plugin.h`, and the
+/// note on `CardPort::skills` above — while `invoke("meta.skills")` answered
+/// *no skill named 'meta.skills' is registered*, because `invoke()` is a plain
+/// map lookup and nothing had ever put that name in the map. A documented skill
+/// that does not dispatch is worse than an absent one: a caller reads the
+/// header, writes against it, and finds out at run time.
+///
+/// It is a skill rather than only a module method on purpose. `AgentModuleImpl`
+/// has always had `skills()`, and an in-process host could call it — but a host
+/// that *loads* this module reaches it through `invoke()` and nothing else, and
+/// another agent over A2A reaches it through `invoke()` and nothing else. The
+/// information was reachable; the skill was not.
+///
+/// The listing is passed through as the registry built it, including the
+/// `{"name":…,"error":…}` entry a skill gets when its own `parameterSchema()`
+/// throws or does not parse. That isolation is the plugin's, and re-deriving it
+/// here would be a second place for it to be wrong.
+class SkillsSkill final : public ISkill {
+public:
+    explicit SkillsSkill(RegistryPort port) : port_(std::move(port)) {}
+    std::string name() const override { return "meta.skills"; }
+    std::string parameterSchema() const override;
+    std::string invoke(const std::string &paramsJson) override;
+
+private:
+    RegistryPort port_;
 };
 
 } // namespace logos::agent

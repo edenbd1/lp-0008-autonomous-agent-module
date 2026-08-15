@@ -32,10 +32,12 @@ them from the checkout instead of quoting them.
 | check the claims from a clean clone, with nothing installed | [1](#1-prove-it-from-a-clean-clone) |
 | read the live deployment back off the chain yourself | [2](#2-read-the-live-deployment-back-yourself) |
 | deploy and configure your own three agents | [3](#3-deploy-your-own-agents-cli), [4](#4-configure-the-agent) |
-| run an A2A task between two agents and settle it in LEZ | [5](#5-run-an-a2a-task-and-settle-it-in-lez) |
-| drive a real Logos Delivery and Logos Storage node | [6](#6-drive-a-real-delivery-and-storage-node) |
-| load the module in the Logos app and reach it as its owner | [7](#7-load-the-module-in-the-logos-app-basecamp), [8](#8-the-owner-channel) |
-| know what does not work | [10](#10-what-does-not-work) |
+| call the agent's skills from a shell, and see it read the chain | [5](#5-talk-to-the-agent-and-add-a-skill-of-your-own) |
+| write a skill of your own and load it into the module | [5](#adding-a-skill), [`docs/skills.md`](docs/skills.md) |
+| run an A2A task between two agents and settle it in LEZ | [6](#6-run-an-a2a-task-and-settle-it-in-lez) |
+| drive a real Logos Delivery and Logos Storage node | [7](#7-drive-a-real-delivery-and-storage-node) |
+| load the module in the Logos app and reach it as its owner | [8](#8-load-the-module-in-the-logos-app-basecamp), [9](#9-the-owner-channel) |
+| know what does not work | [11](#11-what-does-not-work) |
 
 ## 1. Prove it from a clean clone
 
@@ -104,8 +106,9 @@ false results published from this repository came from exactly that. Reading by
 position is the bug; the helper is the fix, and it is used everywhere below.
 
 What is anchored under *exactly* that program — the ledger is keyed by
-`(program, agent_id)`, because a redeploy moves every policy to an address that
-has never been initialised:
+`(program, what, agent_id)`, because a redeploy moves every account to an
+address that has never been initialised, and because anchoring is now two
+single-use steps per agent (`claim_agent`, then `create_policy`):
 
 ```sh
 awk -F'\t' -v p="$PROG" '
@@ -273,12 +276,17 @@ own error text, is in [`docs/limitations.md`](docs/limitations.md).
 
 ### Re-running it
 
-Anchoring is single-use by construction: `create_policy` is declared
-`#[account(init, …)]` and `init` refuses to overwrite. An agent's identity is
-stable once funded, so a second run resolves the *same* policy account and is
-correctly refused — which looks exactly like a failure. `artifacts/anchored.tsv`
-is what tells the two apart; the script reports a refused re-anchor as
-already-anchored and leaves the manifest intact.
+Anchoring is single-use by construction, twice over: `claim_agent` and
+`create_policy` are both declared `#[account(init, …)]` and `init` refuses to
+overwrite. An agent's identity is stable once funded, so a second run resolves
+the *same* two accounts and is correctly refused — which looks exactly like a
+failure. `artifacts/anchored.tsv` is what tells the two apart; the script reports
+a refused repeat as already-done and leaves the manifest intact.
+
+Fund before you claim, and never after. A shielded transfer does not credit an
+existing note, it mints a **new** one with a new account id, so an agent funded
+after it has claimed is an agent whose claim and policy sit at addresses nothing
+will look at again.
 
 Agent keys are written under `$AGENT_HOMES`, never into the repository. An
 agent whose key is committed is not an agent, and one whose key is thrown away
@@ -299,19 +307,32 @@ policy account, at `PDA(program, ["agent-policy/v1", agent_id])` — seeded by t
 agent id and nothing else — and the three numbers are that account's data, which
 only this program may write (LEZ rule 6, `UnauthorizedDataModification`).
 
-`create_policy` declares that account `#[account(init, …)]`, so the owner writes
-it once, when it creates the agent, and there is nowhere to put a second one.
-The owner it records is the account that *signed* — there is no `owner_id`
-argument — so the claim and the fact cannot differ, and `approve_spend` later
-compares its signer against that recorded owner rather than against anything the
-caller supplies.
+Writing that account takes **two signatures, in two transactions, from two
+wallets**. The agent signs `claim_agent`, which writes the id of the one account
+allowed to anchor over it into `PDA(program, ["agent-owner/v1", agent])` — an
+address derived from the signing account, so there is nothing there to
+substitute. That account then signs `create_policy`, which refuses any other
+signer (6020) and refuses outright if the agent never claimed (6019). The owner
+it records is the account that *signed*; there is no `owner_id` argument, so the
+claim and the fact cannot differ, and `approve_spend` later compares its signer
+against that recorded owner rather than against anything the caller supplies.
+
+The previous deployment had only half of this. Its `create_policy` never
+declared the agent's account at all, so anchoring a policy over somebody else's
+agent needed only that agent's **public id** — which this file tells you how to
+read out of the manifest. That is on chain: `eedb3caf…` at block 8869 is a
+stranger anchoring `per_tx = u128::MAX` over an agent it does not control, and
+the identical call to the program shipped here was never included.
 
 Raising a limit is therefore not a different address an attacker anchors afresh
-— that was the previous design and it is why this one exists — it is a write the
-program refuses. And `spend` takes no `agent_id` at all: the policy account's
-address is derived from the *paying* account, so the ceiling a payment is
-measured against is whatever that account says, not what the caller typed.
-Reconfiguring an agent means deploying a new one.
+— that was the design two versions ago — and it is not a write the program
+refuses outright either. `update_policy` re-fixes both limits and the period in
+place, on the signature of the owner the record names, and carries the running
+total through unchanged. It is the way back from an anchor that was wrong and
+the brake on an agent that is suspect: `per_tx = 0` and it spends nothing
+unattended. `spend` takes no `agent_id` and no limits at all — the policy
+account's address is derived from the *paying* account, so the ceiling a payment
+is measured against is whatever that account says, not what the caller typed.
 
 Above `per_tx` the agent must present an approval account seeded by the exact
 payment — agent, recipient, amount, nonce — and owned by this program. What
@@ -328,8 +349,104 @@ configure(ownerAddress, policyHashHex)   // then start()
 
 A second `configure` is refused: the binding is the agent's identity, not a
 preference. `status()` reports what it is bound to and whether it is running.
+§5 is how to make both calls from a shell.
 
-## 5. Run an A2A task and settle it in LEZ
+`meta.configure` exists as a skill and takes `per_tx`, `per_period` and
+`period_blocks` among its keys — and it is worth being exact about what that
+does, because the name invites the wrong reading. It changes what *this process*
+bothers asking the owner about. It changes nothing about what the chain accepts:
+the ceiling is the policy account's data, and LEZ rule 6
+(`UnauthorizedDataModification`) means only the policy program may write it. An
+agent that raised its own `per_tx` through `meta.configure` would still have
+every spend above the anchored limit refused on chain.
+
+## 5. Talk to the agent, and add a skill of your own
+
+```sh
+examples/agent-console/run.sh          # builds, then self-tests, offline
+OUT=${TMPDIR:-/tmp}/lp0008-console     # where it puts the binaries
+```
+
+A C++17 compiler, a checkout of
+[`logos-cpp-sdk`](https://github.com/logos-co/logos-cpp-sdk) (§10 pins the
+revision CI uses) and `nlohmann/json.hpp`. No node, no keys, no Logos install.
+
+`agent-console` links the agent module and gives its dispatcher a command line.
+Three commands, and the first is how you find the other two's arguments:
+
+```sh
+$OUT/agent-console skills | python3 -m json.tool   # 22 skills, each with a JSON Schema
+$OUT/agent-console status
+$OUT/agent-console invoke <name> '<json>'
+```
+
+It wires the ports a command-line tool can honestly wire — the sequencer's
+JSON-RPC — so the chain reads are real. Derive the program from the committed
+binary and ask the chain about it, through the agent:
+
+```sh
+PROG=$(python3 -c "
+import hashlib,struct
+b=open('artifacts/programs/agent_verifier.bin','rb').read()
+print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
+
+$OUT/agent-console invoke program.query "{\"program_id\":\"$PROG\",\"method\":\"getTransaction\"}"
+# {"ok":true,"found":true,"included":true,"result":["<bytecode>", <block>]}
+
+PAY=$(col artifacts/agents.tsv pay_account storage)        # the helper from §2
+$OUT/agent-console --account "Public/$PAY" invoke wallet.balance '{}'
+# {"ok":true,"account":"<base58>","balance":<n>,"shielded":false,"source":"sequencer.getAccount"}
+```
+
+No hash, block height or balance is quoted above. A redeploy moves the first
+two and a settlement moves the third — that payee read 45 and then 95 while this
+section was being written. `"source":"sequencer.getAccount"` is the part that
+carries the claim: the module answered, and it answered from the chain rather
+than from a file in this repository.
+
+**It cannot move money, and that is deliberate.** Its `WalletPort::spend` is
+null, so `wallet.send` refuses — `{"ok":false,"submitted":false,"outcome":
+"owner_unreachable"}` — rather than submitting. A console that could sign would
+be a second, unaudited spending path around the anchored policy this whole
+submission is about. The CLIs that do hold keys are `scripts/deploy-agents.sh`
+(§3) and `scripts/a2a-task.sh` (§6).
+
+### Adding a skill
+
+A skill is one interface — `ISkill` in
+[`module/src/agent_module_interface.h`](module/src/agent_module_interface.h) —
+with three methods: a name, a JSON Schema for its parameters, and an `invoke`
+taking and returning a JSON string. That header is the *only* thing a skill
+needs: not the plugin header, not the Logos SDK, not Qt, not a JSON library.
+
+[`examples/skills/notary-digest`](examples/skills/notary-digest) is a complete
+one, in about a page. Build it, load it, call it:
+
+```sh
+c++ -std=c++17 -Werror -fPIC -shared -I module/src \
+    examples/skills/notary-digest/notary_digest_skill.cpp -o /tmp/libnotary.dylib
+
+$OUT/agent-console --skill /tmp/libnotary.dylib invoke notary.digest '{"content":"hello"}'
+# {"ok":true,"skill":"notary.digest","algorithm":"sha256","digest":"2cf24dba…","bytes":5}
+```
+
+`run.sh` does exactly that and then checks four things, each of which fails the
+script: the returned digest equals `shasum -a 256` of the same input; it does
+**not** equal the digest of altered input; `git status --porcelain module/` is
+unchanged by the run, which is the prize's "without modifying the core agent
+module" checked rather than asserted; and `docs/skills.md`'s reference table
+still lists exactly the skills the module registers.
+
+One limit, stated here rather than left to be found: **a skill cannot be added
+to an already-installed `agent.lgx`.** `registerSkill` takes a
+`std::shared_ptr<ISkill>`, Logos Core reaches a core module over Qt Remote
+Objects in a separate process, and there is no wire format for a C++ object — so
+skills are added by a host that *links* the module, which is what
+`agent-console` is. The full interface specification, the loader convention, the
+parameters of all 22 built-in skills, and what would have to change for the
+plugin path are in [`docs/skills.md`](docs/skills.md).
+
+## 6. Run an A2A task and settle it in LEZ
 
 ```sh
 WALLET_BIN=<path to wallet> ./scripts/a2a-task.sh
@@ -372,7 +489,7 @@ with the default account for those — which is why each agent keeps a public
 receiving account and why its Agent Card advertises that as its payment
 address. The trade is written up in [`docs/limitations.md`](docs/limitations.md).
 
-## 6. Drive a real Delivery and Storage node
+## 7. Drive a real Delivery and Storage node
 
 ```sh
 ./scripts/exercise-nodes.sh
@@ -399,7 +516,7 @@ afternoon teaches everyone to ignore it.
 Point `DELIVERY_SRC` and `STORAGE_SRC` at your checkouts if they are not under
 `_external/`.
 
-## 7. Load the module in the Logos app (Basecamp)
+## 8. Load the module in the Logos app (Basecamp)
 
 The loadable asset is committed: `module/agent.lgx`, one `darwin-arm64`
 variant. Check it against itself rather than trusting this page.
@@ -409,7 +526,7 @@ reviewer's `PATH` and it is not in this repository. It is the packager
 Basecamp's own packages are built with, `logos-co/logos-package` pinned at
 `18b0075`; build it and either put it on `PATH` or point `$LGX_BIN` at
 `logos-package/build/lgx`. [`docs/basecamp.md`](docs/basecamp.md) has the build.
-The rest of §7 does not need it.
+The rest of §8 does not need it.
 
 ```sh
 git clone https://github.com/logos-co/logos-package && \
@@ -445,20 +562,34 @@ That document also carries the two load harnesses and their recorded output:
 `logos_core_load_test` `dlopen`s the real `liblogos_core` out of the installed
 `LogosBasecamp.app`, loads the module through the same C API in the same order
 as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
-own transport: 21 skills listed, each with a parameter schema, `invoke()`
+own transport: 22 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
 Stated plainly, because a reviewer will check: there is **no click in the
 Basecamp GUI** behind that, only Logos Core's C API with Basecamp's own shipped
 library; the package is **macOS arm64 only**; there is **no owner-facing UI
-plugin**, only the `core` module; and the 21 registered skills **have no ports
-wired**, because a port is a `std::function` and a host that loads this as a
-plugin has no wire format for one. Each of them therefore refuses *as itself* —
+plugin**, only the `core` module; and 20 of the 22 registered skills **have no
+ports wired**, because a port is a `std::function` and a host that loads this as
+a plugin has no wire format for one. Each of those refuses *as itself* —
 `{"ok":false,"error":"no account to read: …"}` — which is what the harness
 asserts, and is the opposite of the failure worth hiding: a module that loads,
-answers `skills()` with `[]`, and looks like it works.
+answers `skills()` with `[]`, and looks like it works. The two that do answer
+are `meta.status` and `meta.skills`, and they answer for one reason: both are
+questions about *this module*, which it wires to itself. Every other skill asks
+about the world outside it.
 
-## 8. The owner channel
+One more, and it is not ours to fix. The prize asks that the module load
+"alongside the wallet, storage, and messaging modules". **Logos Basecamp 0.2.2
+ships no such modules.** `ls /Applications/LogosBasecamp.app/Contents/modules/`
+returns `capability_module`, `package_downloader`, `package_manager`, and the
+harness's own output reads `loaded modules: capability_module agent`. So
+*loads and runs* is demonstrated against the real runtime, and *alongside those
+three* cannot be demonstrated by any submission against this host, because the
+three do not exist to load. That is a statement about Basecamp 0.2.2 on
+2026-08-15, checked by listing the directory, not an inference from the module
+failing to find them.
+
+## 9. The owner channel
 
 An above-threshold spend is the one case where the agent has to stop and ask.
 `OwnerChannel` opens a **reliable** channel — not a bare topic, because a
@@ -469,7 +600,7 @@ dropped approval request looks exactly like a refusal — at
 ```
 
 and sends a `spend_approval_request` carrying the protocol id, a correlation
-id, the agent, the policy hash, the recipient, the amount as decimal digits
+id, the agent, its policy account, the recipient, the amount as decimal digits
 (the chain's amounts are `u128`, which no JSON number holds), the nonce, the
 approval marker seed, and an expiry. It re-sends every 15 s and, after 120 s
 with no answer, returns `Unreachable` — terminal, never a quiet fallback to
@@ -487,7 +618,7 @@ limit — and the only reason to send one is to try.
 That exchange is exercised in CI against a fake owner — one that can be made
 silent, late or hostile on demand, which a real one cannot. It is **not**
 reachable from a loaded Basecamp module, and cannot be: `OwnerChannelPort` is a
-struct of `std::function`s and a plugin cannot be handed one (§7).
+struct of `std::function`s and a plugin cannot be handed one (§8).
 
 ### What a loaded module does about that
 
@@ -553,7 +684,7 @@ rebuilt, `{"total":0}`, no error anywhere.
 and CI runs it with a negative control that puts the module back in that state
 and asserts the suite goes red.
 
-## 9. Tests and CI
+## 10. Tests and CI
 
 ```sh
 cargo test --workspace --release --locked      # the policy crate, 18 tests
@@ -592,7 +723,7 @@ it locally with `./scripts/e2e-local-sequencer.sh` against a
 Compute-unit costs for every on-chain operation are measured in
 [`docs/benchmarks/cu-budget.md`](docs/benchmarks/cu-budget.md).
 
-## 10. What does not work
+## 11. What does not work
 
 [`docs/limitations.md`](docs/limitations.md) is the honest state and is meant
 to be read before the rest. It carries, among others: that a shielded agent can
@@ -601,7 +732,7 @@ settlement is public; that `getAccount` cannot see a private balance, so only
 the credit side of a payment is checkable by a third party; that no model has
 ever been run against the inference port — the local backend is a stub with an
 honest name and the HTTP backend has never made a real request; and that the
-node runs in §6 are a local command rather than CI.
+node runs in §7 are a local command rather than CI.
 
 Retractions live there too, with what replaced them. If you find a gap that is
 not in that file, it is an omission rather than a decision.
@@ -623,23 +754,44 @@ module/src                        the Logos Core module: skill registry, owner
 module/tests                      the suites, plus the two load harnesses and
                                   the C node drivers
 module/agent.lgx                  the loadable package (darwin-arm64)
+examples/agent-console            §5 — the module's dispatcher, from a shell
+examples/skills/notary-digest     §5 — a third-party skill, outside module/src
 scripts/demo.sh                   §1 — the whole thing from a clean clone
 scripts/deploy-agents.sh          §3 — three agents, funded and anchored
-scripts/a2a-task.sh               §5 — two agents, one A2A task, one settlement
-scripts/exercise-nodes.sh         §6 — real Delivery and Storage nodes
-scripts/e2e-local-sequencer.sh    §9 — the lifecycle against a real sequencer
+scripts/verify-deployment.sh      checks docs/DEPLOYMENT.md and artifacts/
+                                  against the chain, and fails if they disagree
+scripts/a2a-task.sh               §6 — two agents, one A2A task, one settlement
+scripts/exercise-nodes.sh         §7 — real Delivery and Storage nodes
+scripts/e2e-local-sequencer.sh    §10 — the lifecycle against a real sequencer
 artifacts/                        the manifests: agents, anchors, settlements,
                                   Agent Cards, and the deployed program binaries
 idl/                              the instruction ABI the CLI drives
-docs/                             architecture, security model, skills,
-                                  deployment, Basecamp, limitations
+docs/                             see the reading order below
 ```
 
-Reading order for the documents: [`architecture.md`](docs/architecture.md) for
-the shape, [`security-model.md`](docs/security-model.md) for what the agent may
-do alone, [`skills.md`](docs/skills.md) for which skills are wired to a running
-node and which are only compiled, [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) for
-what is live, and [`limitations.md`](docs/limitations.md) for what is not.
+### The documents, in reading order
+
+| | |
+|---|---|
+| [`architecture.md`](docs/architecture.md) | the shape of the module, and where each decision is made |
+| [`security-model.md`](docs/security-model.md) | what the agent may do alone, and what it may not — the "They can" / "They cannot" lists |
+| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 22 built-ins. Also which are wired to a running node and which are only compiled |
+| [`a2a-binding.md`](docs/a2a-binding.md) | the A2A transport binding over Logos Messaging — the Agent Card schema, the task lifecycle, and a conformance table against A2A §11.1, including where this implementation does not conform |
+| [`use-cases.md`](docs/use-cases.md) | the prize's illustrative use cases, and which of them this repository demonstrates |
+| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | what is live, how it got there, and how to reproduce it |
+| [`benchmarks/cu-budget.md`](docs/benchmarks/cu-budget.md) | the cost of each on-chain operation, and why LEZ v0.2.4 does not meter compute units |
+| [`basecamp.md`](docs/basecamp.md) | building, packaging and loading the module in the Logos app, with the two load harnesses |
+| [`limitations.md`](docs/limitations.md) | what does not work. Meant to be read before the rest, not after |
+| [`recon.md`](docs/recon.md) | notes from reading the Logos stack, kept because several conclusions in the others rest on them |
+
+**One place per fact.** Where a document and a manifest disagree about what is
+deployed, the manifest wins and the document is the bug:
+[`artifacts/anchored.tsv`](artifacts/anchored.tsv) and
+[`artifacts/agents.tsv`](artifacts/agents.tsv) are the record, and
+`./scripts/verify-deployment.sh` checks both against the chain *and* against
+`docs/DEPLOYMENT.md`, failing if any of the three has drifted. This repository
+has shipped two contradictory accounts of its own deployment before; that script
+is the fix, and running it is cheaper than reading for it.
 
 ## License
 

@@ -19,28 +19,43 @@
 //! from it in a single field. A check that only shows a refusal proves nothing
 //! about whether anything is ever accepted.
 //!
-//! WHAT THIS FILE GOT WRONG BEFORE, WHICH IS WORTH MORE THAN ANY CASE IN IT
+//! WHAT THIS FILE GOT WRONG BEFORE, TWICE, WHICH IS WORTH MORE THAN ANY CASE
 //!
-//! The previous version contained half the live attack and asserted it as the
+//! The first version contained half the live attack and asserted it as the
 //! BENIGN control: `"the same call, naming the account that actually signs —
-//! accepted"`, `expect: None`. That call is an attacker anchoring an unlimited
-//! policy over somebody else's agent while honestly naming itself as the owner
-//! — the exact bypass — and the suite whose whole job was to prove the bypass
-//! closed had it written down as required behaviour. It also never followed the
-//! anchor with a `spend`, so the second step, the one that actually empties the
-//! account, was never executed here at all.
+//! accepted"`. That call was an attacker anchoring an unlimited policy over
+//! somebody else's agent while honestly naming itself as the owner.
 //!
-//! Both are fixed below. That anchoring call now has to REFUSE, and the two-step
-//! attack — anchor, then spend the whole balance under it — runs end to end as a
-//! regression, in the three shapes that were accepted by the previous binary on
-//! chain. `Expect::Accepted` appears only where acceptance is the property under
-//! test.
+//! The second version — the one that shipped with the `AccountAlreadyInitialized`
+//! fix, and whose header said the sentence above — did it again, in a form that
+//! looks like housekeeping:
+//!
+//!     "an agent nobody has anchored yet still can be — accepted"
+//!         accounts: [policy_pda(other_agent), fresh_signer(attacker)]
+//!         instruction: anchor(other_agent, unlimited)
+//!         expect: Accepted
+//!
+//! That is an unrelated account anchoring `per_tx = per_period = u128::MAX` over
+//! an agent it does not control, asserted as required behaviour. It was required
+//! behaviour, because `create_policy` never declared the agent's account at all;
+//! the suite was faithfully recording a program in which anchoring needed no key
+//! whatsoever. The four steps that make it an attack — the honest owner then
+//! being refused for good, the agent spending its balance, the attacker signing
+//! its own approval — were not run.
+//!
+//! Both are fixed below. That anchoring call now has to REFUSE, with 6019
+//! (nobody has claimed this agent) or 6020 (the signer is not the owner it
+//! claimed), and the four-step attack runs end to end as a regression, in the
+//! shapes the previous binaries accepted. `Expect::Accepted` appears only where
+//! acceptance is the property under test, and the *second* step of the attack is
+//! now an `Accepted` on purpose: the property is not only that the stranger is
+//! refused, it is that the honest owner can still anchor afterwards.
 
 use std::path::PathBuf;
 
 use agent_policy_core::{
-    compute_approval_marker, compute_spend_ref, PolicyRecord, SpendLedger, SpendPolicy,
-    POLICY_PDA_PREFIX,
+    compute_approval_marker, compute_spend_ref, ApprovalRecord, OwnerClaim, PolicyRecord,
+    SpendLedger, SpendPolicy, OWNER_CLAIM_PDA_PREFIX, POLICY_PDA_PREFIX,
 };
 use anyhow::{bail, Context, Result};
 use nssa_core::{
@@ -55,15 +70,23 @@ use spel_framework_core::pda::{compute_pda, seed_from_str};
 /// risc0's serde writes a variant index and then the fields in declaration
 /// order, so the ORDER of these variants and of their fields is the ABI.
 ///
-/// Half the fields the previous deployment carried are gone, and that is the
-/// fix rather than tidying: `spend` has no `agent_id`, no `owner_id`, no limits.
-/// The policy account's address is derived from the paying account itself and
-/// the limits are read out of that account, so there is nothing left in the call
-/// for a caller to disagree with.
+/// `ClaimAgent` is first because it happens first: an agent designates the
+/// account that may anchor its policy before any policy exists. That ordering is
+/// the fix expressed in the ABI — under the previous binary there was nothing to
+/// do before `create_policy`, which is precisely why anybody could call it.
 #[derive(serde::Serialize)]
 #[allow(dead_code)]
 enum Instruction {
+    ClaimAgent {
+        owner_id: [u8; 32],
+    },
     CreatePolicy {
+        agent_id: [u8; 32],
+        per_tx: u128,
+        per_period: u128,
+        period_blocks: u64,
+    },
+    UpdatePolicy {
         agent_id: [u8; 32],
         per_tx: u128,
         per_period: u128,
@@ -75,6 +98,7 @@ enum Instruction {
         recipient: [u8; 32],
         amount: u128,
         nonce: u64,
+        expiry_block: u64,
     },
     Spend {
         amount: u128,
@@ -97,17 +121,17 @@ const HOLDER_PROGRAM: ProgramId = [7; 8];
 /// What a case must do.
 ///
 /// The two refusal kinds do not look alike from out here, and the difference is
-/// worth stating because the attack is now closed by the second one.
+/// worth stating because the attack is now closed by the first one.
 ///
 /// A refusal the program body returns comes back through `SpelError`, which
 /// `#[lez_program]` turns into
 ///
-///   Guest panicked: Program error [12012]: Program error 6012: …
+///   Guest panicked: Program error [12019]: Program error 6019: …
 ///
 /// The bracketed number is `SpelError::error_code()`, which offsets a *custom*
-/// code by 6000 — so this program's documented 6012 appears twice, once
-/// unrecognisably. Matching the bracketed form alone would match 6012 against
-/// 12012 and pass a case that halted for a completely different reason.
+/// code by 6000 — so this program's documented 6019 appears twice, once
+/// unrecognisably. Matching the bracketed form alone would match 6019 against
+/// 12019 and pass a case that halted for a completely different reason.
 ///
 /// A refusal from the macro's own account validation never reaches that path at
 /// all. The generated dispatcher does
@@ -121,8 +145,12 @@ const HOLDER_PROGRAM: ProgramId = [7; 8];
 /// `SpelError::error_code()` would call that 1002, but 1002 appears nowhere in
 /// what the executor prints, and an integration cannot branch on it either — it
 /// has the variant name and nothing else. So that is what is matched, and what
-/// is reported. This matters here more than it looks: `AccountAlreadyInitialized`
-/// *is* the fix for the anchoring bypass.
+/// is reported.
+///
+/// `AccountAlreadyInitialized` is no longer load-bearing for the anchoring
+/// attack, and that is the point of this deployment: it fires only on the honest
+/// owner's own second anchor. A stranger is stopped one step earlier, by a
+/// numbered refusal that says why.
 #[derive(Clone, Copy)]
 enum Expect {
     /// Must run to completion and commit a `ProgramOutput`.
@@ -157,10 +185,16 @@ impl Expect {
 }
 
 /// The macro refuses a second `#[account(init)]` on an account that already
-/// exists. One policy account per agent, and this is the refusal that says so.
+/// exists. One claim and one policy account per agent, and this is the refusal
+/// that says so — to the party that already holds them, never to a stranger.
 const ALREADY_ANCHORED: Expect = Expect::Validation("AccountAlreadyInitialized");
-/// The policy account presented is not the one this agent's id derives.
-const WRONG_POLICY_ACCOUNT: Expect = Expect::Validation("PdaMismatch");
+/// The account presented is not the PDA the seeds derive.
+const WRONG_ACCOUNT: Expect = Expect::Validation("PdaMismatch");
+
+/// Nobody has designated an owner for this agent, so no policy may be anchored.
+const E_AGENT_UNCLAIMED: u32 = 6019;
+/// The signer is not the account the agent designated.
+const E_NOT_DESIGNATED_OWNER: u32 = 6020;
 
 struct Case {
     what: &'static str,
@@ -208,6 +242,37 @@ fn run(elf: &[u8], program_id: ProgramId, case: &Case) -> Result<Option<ProgramO
     }
 }
 
+/// Say what an accepted call actually wrote, so "accepted" is not merely the
+/// absence of an error. Each of the three records this program writes is tried
+/// against the first post-state, because each of them is a claim about who may
+/// spend what.
+fn wrote(output: &ProgramOutput) -> Option<String> {
+    let data = output.post_states.first()?.account().data.to_vec();
+    if let Ok(r) = PolicyRecord::decode(&data) {
+        return Some(format!(
+            "policy account: per-tx {}, per-period {}, {} spent in period {}",
+            r.policy.per_tx, r.policy.per_period, r.ledger.spent, r.ledger.window_start
+        ));
+    }
+    if let Ok(c) = OwnerClaim::decode(&data) {
+        return Some(format!(
+            "claim account: only {}… may anchor this agent",
+            hex8(&c.owner)
+        ));
+    }
+    if let Ok(a) = ApprovalRecord::decode(&data) {
+        return Some(format!(
+            "approval account: dead at block {}, spent {}",
+            a.expiry_block, a.spent
+        ));
+    }
+    None
+}
+
+fn hex8(id: &[u8; 32]) -> String {
+    id[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn main() -> Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let elf = std::fs::read(root.join("artifacts/programs/agent_verifier.bin"))
@@ -224,16 +289,17 @@ fn main() -> Result<()> {
     );
 
     // The cast. `attacker` and `agent_pay` are real accounts whose keys the
-    // attacker holds — the property this deployment has to have is that holding
-    // a key is not the same as being able to anchor.
+    // attacker holds; `agent` is one whose key it does NOT. The property this
+    // deployment has to have is that knowing an agent's id — which is public,
+    // in `artifacts/agents.tsv` and in every signed Agent Card — buys nothing.
     let attacker = [0x11u8; 32];
     let real_owner = [0x22u8; 32];
     let agent = [0x33u8; 32];
     let other_agent = [0x44u8; 32];
     let recipient = [0x55u8; 32];
     // The agent's own PUBLIC pay account. It is program-owned, which is what let
-    // it anchor repeatedly against the previous binary, and the third executed
-    // variant of the attack used exactly that account.
+    // it anchor repeatedly against an earlier binary, and one executed variant of
+    // the attack used exactly that account.
     let agent_pay = [0x66u8; 32];
 
     let unlimited = SpendPolicy {
@@ -246,14 +312,28 @@ fn main() -> Result<()> {
         per_period: 1000,
         period_blocks: 1000,
     };
+    // What a hostile anchor looks like when the goal is denial of service rather
+    // than theft: an agent that may spend nothing, for the life of its identity.
+    let inert = SpendPolicy {
+        per_tx: 0,
+        per_period: 0,
+        period_blocks: 1000,
+    };
 
-    // The policy account's address: this program, the constant prefix, the
-    // agent. Nothing else — no owner, no limits, so there is exactly one per
-    // agent. Recomputed here from the SAME constant the guest declares; if the
-    // two ever drift, every PDA below misses and the macro's own check fails the
+    // The two accounts an agent has under this program, and both are addressed
+    // from the agent alone: no owner, no limits, so there is exactly one of each
+    // per agent. Recomputed here from the SAME constants the guest declares; if
+    // they ever drift, every PDA below misses and the macro's own check fails the
     // suite rather than letting it pass against an address nothing reads.
-    let prefix = seed_from_str(POLICY_PDA_PREFIX);
-    let policy_pda = |a: &[u8; 32]| *compute_pda(&program_id, &[&prefix, a]).value();
+    let policy_prefix = seed_from_str(POLICY_PDA_PREFIX);
+    let claim_prefix = seed_from_str(OWNER_CLAIM_PDA_PREFIX);
+    let policy_pda = |a: &[u8; 32]| *compute_pda(&program_id, &[&policy_prefix, a]).value();
+    let claim_pda = |a: &[u8; 32]| *compute_pda(&program_id, &[&claim_prefix, a]).value();
+    assert_ne!(
+        policy_pda(&agent),
+        claim_pda(&agent),
+        "the two prefixes must not collapse onto one address"
+    );
 
     // What the honest owner anchored for `agent`, as bytes, exactly as
     // `create_policy` writes them.
@@ -278,6 +358,19 @@ fn main() -> Result<()> {
             policy_pda(&agent),
         )
     };
+    // The claim `agent` signed: only `real_owner` may anchor over it.
+    let agents_claim = || {
+        with_id(
+            account(
+                program_id,
+                0,
+                OwnerClaim { owner: real_owner }.encode().to_vec(),
+            ),
+            false,
+            claim_pda(&agent),
+        )
+    };
+    let unclaimed = |a: &[u8; 32]| with_id(Account::default(), false, claim_pda(a));
     let payer = |id: [u8; 32]| with_id(account(HOLDER_PROGRAM, 10_000, vec![]), true, id);
     let payee = || with_id(account(HOLDER_PROGRAM, 0, vec![]), false, recipient);
     let fresh_signer = |id: [u8; 32]| with_id(Account::default(), true, id);
@@ -292,19 +385,43 @@ fn main() -> Result<()> {
         per_period: p.per_period,
         period_blocks: p.period_blocks,
     };
+    let update = |a: [u8; 32], p: SpendPolicy| Instruction::UpdatePolicy {
+        agent_id: a,
+        per_tx: p.per_tx,
+        per_period: p.per_period,
+        period_blocks: p.period_blocks,
+    };
+    let claim = |owner_id: [u8; 32]| Instruction::ClaimAgent { owner_id };
 
-    // The one approval the honest owner grants: 900 to `recipient`, nonce 7.
-    // Above the 200 per-transaction envelope, which is the only reason to have
-    // an approval at all.
-    let approved_marker =
-        compute_approval_marker(&compute_spend_ref(&agent, &recipient, 900, 7));
+    // The one approval the honest owner grants: 900 to `recipient`, nonce 7,
+    // dead at block 9000. Above the 200 per-transaction envelope, which is the
+    // only reason to have an approval at all.
+    const EXPIRY: u64 = 9000;
+    let approved_marker = compute_approval_marker(&compute_spend_ref(&agent, &recipient, 900, 7));
     let marker_pda = *compute_pda(&program_id, &[&approved_marker]).value();
-    let approve = |amount: u128, nonce: u64| Instruction::ApproveSpend {
+    let approve = |amount: u128, nonce: u64, expiry_block: u64| Instruction::ApproveSpend {
         marker_seed: approved_marker,
         agent_id: agent,
         recipient,
         amount,
         nonce,
+        expiry_block,
+    };
+    let granted = |spent: bool| {
+        with_id(
+            account(
+                program_id,
+                0,
+                ApprovalRecord {
+                    expiry_block: EXPIRY,
+                    spent,
+                }
+                .encode()
+                .to_vec(),
+            ),
+            false,
+            marker_pda,
+        )
     };
     let spend_approved = |amount: u128, nonce: u64| Instruction::SpendApproved {
         recipient_id: recipient,
@@ -314,60 +431,227 @@ fn main() -> Result<()> {
     };
 
     let cases = vec![
-        // ── anchoring: one policy account per agent, first writer wins ────
+        // ── the agent designates its owner: the half that was missing ─────
         Case {
-            what: "the owner anchors its agent's policy, at an address nobody has taken — accepted",
+            what: "the agent designates the account that may anchor its policy — accepted",
+            accounts: vec![unclaimed(&agent), payer(agent)],
+            instruction: claim(real_owner),
+            expect: Expect::Accepted,
+        },
+        Case {
+            what: "an attacker designates ITSELF as the owner of an agent whose key it lacks",
+            // The claim account's address is derived from the account that
+            // SIGNS, so an attacker signing for itself cannot reach the victim's
+            // claim address at all — there is no argument here to lie about.
+            accounts: vec![unclaimed(&agent), fresh_signer(attacker)],
+            instruction: claim(attacker),
+            expect: WRONG_ACCOUNT,
+        },
+        Case {
+            what: "the agent designates a second owner, having designated one already",
+            accounts: vec![agents_claim(), payer(agent)],
+            instruction: claim(attacker),
+            expect: ALREADY_ANCHORED,
+        },
+        Case {
+            what: "an agent designates the all-zero account, which no key produces",
+            accounts: vec![unclaimed(&agent), payer(agent)],
+            instruction: claim([0u8; 32]),
+            expect: Expect::Custom(6022),
+        },
+        // ── anchoring: two parties, and a stranger is neither ─────────────
+        Case {
+            // THE CASE THIS SUITE USED TO ASSERT AS CORRECT, with the same
+            // accounts and the same instruction. It is the whole defect.
+            what: "an attacker anchors an UNLIMITED policy over an agent nobody has claimed",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&other_agent)),
+                unclaimed(&other_agent),
+                fresh_signer(attacker),
+            ],
+            instruction: anchor(other_agent, unlimited),
+            expect: Expect::Custom(E_AGENT_UNCLAIMED),
+        },
+        Case {
+            what: "the same call with per_tx = 0 — the denial of service, not the theft",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&other_agent)),
+                unclaimed(&other_agent),
+                fresh_signer(attacker),
+            ],
+            instruction: anchor(other_agent, inert),
+            expect: Expect::Custom(E_AGENT_UNCLAIMED),
+        },
+        Case {
+            what: "an attacker anchors over an agent that designated somebody else",
             accounts: vec![
                 with_id(Account::default(), false, policy_pda(&agent)),
+                agents_claim(),
+                fresh_signer(attacker),
+            ],
+            instruction: anchor(agent, unlimited),
+            expect: Expect::Custom(E_NOT_DESIGNATED_OWNER),
+        },
+        Case {
+            what: "the same, signed by the agent's own program-owned public pay account",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&agent)),
+                agents_claim(),
+                owned_signer(agent_pay),
+            ],
+            instruction: anchor(agent, unlimited),
+            expect: Expect::Custom(E_NOT_DESIGNATED_OWNER),
+        },
+        Case {
+            what: "the compromised agent itself anchors, as both owner and agent",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&agent)),
+                agents_claim(),
+                payer(agent),
+            ],
+            instruction: anchor(agent, unlimited),
+            expect: Expect::Custom(E_NOT_DESIGNATED_OWNER),
+        },
+        Case {
+            what: "a claim account an outsider merely funded at the right address",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&agent)),
+                with_id(
+                    account(
+                        HOLDER_PROGRAM,
+                        0,
+                        OwnerClaim { owner: attacker }.encode().to_vec(),
+                    ),
+                    false,
+                    claim_pda(&agent),
+                ),
+                fresh_signer(attacker),
+            ],
+            instruction: anchor(agent, unlimited),
+            expect: Expect::Custom(E_AGENT_UNCLAIMED),
+        },
+        Case {
+            what: "a claim account holding data this program did not write",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&agent)),
+                with_id(account(program_id, 0, vec![0u8; 33]), false, claim_pda(&agent)),
+                fresh_signer(attacker),
+            ],
+            instruction: anchor(agent, unlimited),
+            expect: Expect::Custom(6016),
+        },
+        Case {
+            what: "the owner the agent designated anchors its policy — accepted",
+            accounts: vec![
+                with_id(Account::default(), false, policy_pda(&agent)),
+                agents_claim(),
                 fresh_signer(real_owner),
             ],
             instruction: anchor(agent, real),
             expect: Expect::Accepted,
         },
         Case {
-            what: "an attacker anchors an UNLIMITED policy over that agent, naming itself as owner",
-            accounts: vec![agents_policy(&anchored), fresh_signer(attacker)],
-            instruction: anchor(agent, unlimited),
-            expect: ALREADY_ANCHORED,
-        },
-        Case {
-            what: "the same, signed by the agent's own program-owned public pay account",
-            accounts: vec![agents_policy(&anchored), owned_signer(agent_pay)],
-            instruction: anchor(agent, unlimited),
-            expect: ALREADY_ANCHORED,
-        },
-        Case {
-            what: "the compromised agent itself anchors, as both owner and agent",
-            accounts: vec![agents_policy(&anchored), payer(agent)],
-            instruction: anchor(agent, unlimited),
-            expect: ALREADY_ANCHORED,
-        },
-        Case {
-            what: "an agent nobody has anchored yet still can be — accepted",
+            what: "…and an envelope of zero, which is a policy and not a mistake — accepted",
             accounts: vec![
-                with_id(Account::default(), false, policy_pda(&other_agent)),
-                fresh_signer(attacker),
+                with_id(Account::default(), false, policy_pda(&agent)),
+                agents_claim(),
+                fresh_signer(real_owner),
             ],
-            instruction: anchor(other_agent, unlimited),
+            instruction: anchor(agent, inert),
             expect: Expect::Accepted,
+        },
+        Case {
+            what: "the designated owner anchors a second time",
+            accounts: vec![agents_policy(&anchored), agents_claim(), fresh_signer(real_owner)],
+            instruction: anchor(agent, unlimited),
+            expect: ALREADY_ANCHORED,
         },
         Case {
             what: "an anchor whose policy account is not the PDA for the agent it names",
             accounts: vec![
                 with_id(Account::default(), false, policy_pda(&other_agent)),
+                agents_claim(),
                 fresh_signer(real_owner),
             ],
             instruction: anchor(agent, real),
-            expect: WRONG_POLICY_ACCOUNT,
+            expect: WRONG_ACCOUNT,
         },
         Case {
             what: "a policy with no period, which nothing could ever be accounted against",
             accounts: vec![
-                with_id(Account::default(), false, policy_pda(&other_agent)),
+                with_id(Account::default(), false, policy_pda(&agent)),
+                agents_claim(),
                 fresh_signer(real_owner),
             ],
             instruction: anchor(
-                other_agent,
+                agent,
+                SpendPolicy {
+                    period_blocks: 0,
+                    ..real
+                },
+            ),
+            expect: Expect::Custom(6017),
+        },
+        // ── the way back: an anchored envelope is not a life sentence ─────
+        Case {
+            what: "a stranger re-fixes the anchored envelope to unlimited",
+            accounts: vec![agents_policy(&period_spent_out), fresh_signer(attacker)],
+            instruction: update(agent, unlimited),
+            expect: Expect::Custom(6012),
+        },
+        Case {
+            what: "the compromised agent re-fixes its own envelope",
+            accounts: vec![agents_policy(&period_spent_out), payer(agent)],
+            instruction: update(agent, unlimited),
+            expect: Expect::Custom(6012),
+        },
+        Case {
+            what: "the owner the record names freezes the agent at per_tx = 0 — accepted",
+            accounts: vec![agents_policy(&period_spent_out), fresh_signer(real_owner)],
+            instruction: update(agent, inert),
+            expect: Expect::Accepted,
+        },
+        Case {
+            what: "the agent spends 1 under the envelope its owner just froze",
+            accounts: vec![
+                with_id(
+                    account(
+                        program_id,
+                        0,
+                        PolicyRecord {
+                            policy: inert,
+                            ..period_spent_out
+                        }
+                        .encode()
+                        .to_vec(),
+                    ),
+                    false,
+                    policy_pda(&agent),
+                ),
+                payer(agent),
+                payee(),
+            ],
+            instruction: spend(1, 8000),
+            expect: Expect::Custom(6005),
+        },
+        Case {
+            what: "an update against a policy account this program never created",
+            accounts: vec![
+                with_id(
+                    account(HOLDER_PROGRAM, 0, anchored.encode().to_vec()),
+                    false,
+                    policy_pda(&agent),
+                ),
+                fresh_signer(real_owner),
+            ],
+            instruction: update(agent, real),
+            expect: Expect::Custom(6002),
+        },
+        Case {
+            what: "an update that would leave the policy with no period",
+            accounts: vec![agents_policy(&anchored), fresh_signer(real_owner)],
+            instruction: update(
+                agent,
                 SpendPolicy {
                     period_blocks: 0,
                     ..real
@@ -392,7 +676,7 @@ fn main() -> Result<()> {
             what: "a different agent presents this agent's policy account",
             accounts: vec![agents_policy(&anchored), payer(other_agent), payee()],
             instruction: spend(200, 8000),
-            expect: WRONG_POLICY_ACCOUNT,
+            expect: WRONG_ACCOUNT,
         },
         Case {
             what: "a policy account at the right address that this program never created",
@@ -456,7 +740,7 @@ fn main() -> Result<()> {
                 agents_policy(&anchored),
                 payer(agent),
             ],
-            instruction: approve(900, 7),
+            instruction: approve(900, 7, EXPIRY),
             expect: Expect::Custom(6012),
         },
         Case {
@@ -466,7 +750,7 @@ fn main() -> Result<()> {
                 agents_policy(&anchored),
                 owned_signer(agent_pay),
             ],
-            instruction: approve(900, 7),
+            instruction: approve(900, 7, EXPIRY),
             expect: Expect::Custom(6012),
         },
         Case {
@@ -476,7 +760,7 @@ fn main() -> Result<()> {
                 agents_policy(&anchored),
                 fresh_signer(real_owner),
             ],
-            instruction: approve(900, 7),
+            instruction: approve(900, 7, EXPIRY),
             expect: Expect::Accepted,
         },
         Case {
@@ -486,8 +770,18 @@ fn main() -> Result<()> {
                 agents_policy(&anchored),
                 fresh_signer(real_owner),
             ],
-            instruction: approve(901, 7),
+            instruction: approve(901, 7, EXPIRY),
             expect: Expect::Custom(6003),
+        },
+        Case {
+            what: "the owner grants an approval that never expires — the old bearer instrument",
+            accounts: vec![
+                with_id(Account::default(), false, marker_pda),
+                agents_policy(&anchored),
+                fresh_signer(real_owner),
+            ],
+            instruction: approve(900, 7, 0),
+            expect: Expect::Custom(6021),
         },
         Case {
             what: "an above-threshold spend on an approval anyone could have funded",
@@ -504,61 +798,47 @@ fn main() -> Result<()> {
         },
         Case {
             what: "the same spend on the approval this program created — accepted",
-            accounts: vec![
-                agents_policy(&anchored),
-                with_id(account(program_id, 0, vec![]), false, marker_pda),
-                payer(agent),
-                payee(),
-            ],
+            accounts: vec![agents_policy(&anchored), granted(false), payer(agent), payee()],
             instruction: spend_approved(900, 7),
             expect: Expect::Accepted,
         },
         Case {
             what: "presenting that approval a second time, after it was stamped",
+            accounts: vec![agents_policy(&anchored), granted(true), payer(agent), payee()],
+            instruction: spend_approved(900, 7),
+            expect: Expect::Custom(6018),
+        },
+        Case {
+            what: "an approval in the shape the previous deployment used: empty data, no expiry",
             accounts: vec![
                 agents_policy(&anchored),
-                with_id(account(program_id, 0, vec![1]), false, marker_pda),
+                with_id(account(program_id, 0, vec![]), false, marker_pda),
                 payer(agent),
                 payee(),
             ],
             instruction: spend_approved(900, 7),
-            expect: Expect::Custom(6018),
+            expect: Expect::Custom(6016),
         },
         Case {
             what: "a different agent presents an approval granted for this one",
             accounts: vec![
                 agents_policy(&anchored),
-                with_id(account(program_id, 0, vec![]), false, marker_pda),
+                granted(false),
                 payer(other_agent),
                 payee(),
             ],
             instruction: spend_approved(900, 7),
-            expect: WRONG_POLICY_ACCOUNT,
+            expect: WRONG_ACCOUNT,
         },
     ];
 
     let mut failures = 0;
     for case in &cases {
         match (run(&elf, program_id, case), case.expect) {
-            (Ok(Some(output)), Expect::Accepted) => {
-                // Accepted. Say what it wrote, so "accepted" is not just the
-                // absence of an error.
-                let record = output
-                    .post_states
-                    .first()
-                    .and_then(|p| PolicyRecord::decode(&p.account().data).ok());
-                match record {
-                    Some(r) => println!(
-                        "  ok    {}\n          policy account: per-tx {}, per-period {}, {} spent in period {}",
-                        case.what,
-                        r.policy.per_tx,
-                        r.policy.per_period,
-                        r.ledger.spent,
-                        r.ledger.window_start
-                    ),
-                    None => println!("  ok    {}", case.what),
-                }
-            }
+            (Ok(Some(output)), Expect::Accepted) => match wrote(&output) {
+                Some(what) => println!("  ok    {}\n          {what}", case.what),
+                None => println!("  ok    {}", case.what),
+            },
             (Ok(None), Expect::Accepted) => {
                 failures += 1;
                 println!("  FAIL  {}\n          the guest halted without committing", case.what);
@@ -583,61 +863,112 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── the attack, both steps, as it was executed on chain ──────────────
+    // ── the attack, all four steps, as it was executed on chain ──────────
     //
-    // The cases above are single calls. What emptied an agent under the previous
-    // program was two: anchor an unlimited policy, then spend under it. The old
-    // suite ran the first half and asserted it as correct; it never ran the
-    // second at all. So run both, in order, in the three shapes the previous
-    // binary accepted at halt 0 — and do not stop at the anchor being refused,
-    // because "the anchor failed" is not the property. The property is that the
-    // balance is still out of reach afterwards.
-    println!("\n  the two-step attack that emptied an agent under the previous program:");
+    // The cases above are single calls. What happened against the deployed
+    // binary was a sequence, and the suite that shipped with it ran one step of
+    // it and called that step correct. So run the whole thing, in the shapes
+    // that were accepted, and do not stop when the first step is refused —
+    // "the anchor failed" is not the property. The property is what is still
+    // true afterwards: the honest owner can anchor, the agent is inside its
+    // envelope, and the attacker cannot approve its way out.
+    println!("\n  the four-step attack, executed against the previous program at halt 0:");
     for (who, signing) in [
-        ("the compromised agent itself", payer(agent)),
         ("a separate account the attacker controls", fresh_signer(attacker)),
         ("the agent's own public pay account", owned_signer(agent_pay)),
+        ("the compromised agent itself", payer(agent)),
     ] {
-        let step1 = Case {
-            what: "",
-            accounts: vec![agents_policy(&anchored), signing],
-            instruction: anchor(agent, unlimited),
-            expect: ALREADY_ANCHORED,
+        let mut ok = true;
+        let mut step = |case: Case, note: &str| {
+            if !ok {
+                return;
+            }
+            match (run(&elf, program_id, &case), case.expect) {
+                (Ok(None), Expect::Accepted) | (Ok(Some(_)), Expect::Custom(_))
+                | (Ok(Some(_)), Expect::Validation(_)) => {
+                    ok = false;
+                    println!("  FAIL  {who}: {note}");
+                }
+                (Err(e), _) => {
+                    ok = false;
+                    println!("  FAIL  {who}: {note} — halted for the wrong reason: {e}");
+                }
+                _ => {}
+            }
         };
-        match run(&elf, program_id, &step1) {
-            Ok(None) => {}
-            Ok(Some(_)) => {
-                failures += 1;
-                println!("  FAIL  {who}: anchored an unlimited policy over the agent");
-                continue;
-            }
-            Err(e) => {
-                failures += 1;
-                println!("  FAIL  {who}: step 1 halted for the wrong reason: {e}");
-                continue;
-            }
-        }
-        // Step 2. The unlimited policy does not exist, so the only policy account
-        // this agent has an address for is the owner's — present that one and try
-        // to move everything.
-        let step2 = Case {
-            what: "",
-            accounts: vec![agents_policy(&anchored), payer(agent), payee()],
-            instruction: spend(10_000, 8000),
-            expect: Expect::Custom(6005),
-        };
-        match run(&elf, program_id, &step2) {
-            Ok(None) => println!(
-                "  ok    {who}: the anchor refused [AccountAlreadyInitialized], and the\n          follow-up spend of the whole balance refused [6005] against the\n          owner's own policy"
-            ),
-            Ok(Some(_)) => {
-                failures += 1;
-                println!("  FAIL  {who}: the follow-up spend moved the agent's whole balance");
-            }
-            Err(e) => {
-                failures += 1;
-                println!("  FAIL  {who}: the follow-up spend halted for the wrong reason: {e}");
-            }
+
+        // 1. Anchor an unlimited policy over an agent that has designated an
+        //    owner it is not. This is the step that used to be accepted.
+        step(
+            Case {
+                what: "",
+                accounts: vec![
+                    with_id(Account::default(), false, policy_pda(&agent)),
+                    agents_claim(),
+                    signing,
+                ],
+                instruction: anchor(agent, unlimited),
+                expect: Expect::Custom(E_NOT_DESIGNATED_OWNER),
+            },
+            "anchored an unlimited policy over an agent it does not own",
+        );
+        // 2. The honest owner anchors afterwards. Under the previous program
+        //    this was refused `AccountAlreadyInitialized`, for good, at the only
+        //    address the agent has. Losing the race must not be permanent, so
+        //    this one has to be ACCEPTED.
+        step(
+            Case {
+                what: "",
+                accounts: vec![
+                    with_id(Account::default(), false, policy_pda(&agent)),
+                    agents_claim(),
+                    fresh_signer(real_owner),
+                ],
+                instruction: anchor(agent, real),
+                expect: Expect::Accepted,
+            },
+            "the honest owner could not anchor afterwards",
+        );
+        // 3. The agent spends its whole balance, as it would have under the
+        //    hostile policy.
+        step(
+            Case {
+                what: "",
+                accounts: vec![agents_policy(&anchored), payer(agent), payee()],
+                instruction: spend(10_000, 8000),
+                expect: Expect::Custom(6005),
+            },
+            "the agent moved its whole balance",
+        );
+        // 4. And the attacker signs an approval for 9,999,999 to its own wallet.
+        let big = compute_approval_marker(&compute_spend_ref(&agent, &attacker, 9_999_999, 1));
+        step(
+            Case {
+                what: "",
+                accounts: vec![
+                    with_id(Account::default(), false, *compute_pda(&program_id, &[&big]).value()),
+                    agents_policy(&anchored),
+                    fresh_signer(attacker),
+                ],
+                instruction: Instruction::ApproveSpend {
+                    marker_seed: big,
+                    agent_id: agent,
+                    recipient: attacker,
+                    amount: 9_999_999,
+                    nonce: 1,
+                    expiry_block: EXPIRY,
+                },
+                expect: Expect::Custom(6012),
+            },
+            "the attacker signed itself an approval for 9,999,999",
+        );
+
+        if ok {
+            println!(
+                "  ok    {who}: the anchor refused [{E_NOT_DESIGNATED_OWNER}], the honest owner\n          anchored afterwards, the whole-balance spend refused [6005] against\n          that policy, and the attacker's own approval refused [6012]"
+            );
+        } else {
+            failures += 1;
         }
     }
 

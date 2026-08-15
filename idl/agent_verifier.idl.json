@@ -3,6 +3,46 @@
   "name": "agent_verifier",
   "instructions": [
     {
+      "name": "claim_agent",
+      "accounts": [
+        {
+          "name": "claim",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "agent-owner/v1"
+              },
+              {
+                "kind": "account",
+                "path": "agent"
+              }
+            ]
+          }
+        },
+        {
+          "name": "agent",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "owner_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "create_policy",
       "accounts": [
         {
@@ -10,6 +50,76 @@
           "writable": true,
           "signer": false,
           "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "agent-policy/v1"
+              },
+              {
+                "kind": "arg",
+                "path": "agent_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "agent-owner/v1"
+              },
+              {
+                "kind": "arg",
+                "path": "agent_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "agent_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "per_tx",
+          "type": "u128"
+        },
+        {
+          "name": "per_period",
+          "type": "u128"
+        },
+        {
+          "name": "period_blocks",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_policy",
+      "accounts": [
+        {
+          "name": "policy",
+          "writable": true,
+          "signer": false,
+          "init": false,
           "pda": {
             "seeds": [
               {
@@ -130,6 +240,10 @@
         },
         {
           "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "expiry_block",
           "type": "u64"
         }
       ]
