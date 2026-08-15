@@ -24,6 +24,14 @@ SIGNER_HOME="${LEE_WALLET_HOME_DIR:-$HOME/.lez-wallet}"
 IDL=idl/agent_verifier.idl.json
 PROGRAM=artifacts/programs/agent_verifier.bin
 MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
+# Anchoring is single-use by design: create_policy is declared #[account(init)]
+# and init refuses to overwrite. Once an agent is funded its identity is stable,
+# so a second run derives the same policy hash and is correctly refused. Without
+# a record of what was already anchored, that correct refusal looks identical to
+# a failure and wipes the entry out of the manifest.
+LEDGER="${LEDGER:-artifacts/anchored.tsv}"
+[ -f "$LEDGER" ] || printf 'policy_hash\tcreate_tx\n' > "$LEDGER"
+anchored_tx() { awk -F'\t' -v h="$1" 'NR>1 && $1==h {print $2; exit}' "$LEDGER"; }
 # Each agent is funded so it can pay for real; spend moves balance, not just proof.
 FUND_AMOUNT="${FUND_AMOUNT:-40}"
 
@@ -187,12 +195,24 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
     --per-tx "$per_tx" --per-period "$per_period" --period-blocks "$period" 2>&1)
   local tx; tx=$(echo "$out" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
   if [ -z "$tx" ]; then
+    # Before calling this a failure, ask whether this exact policy is already
+    # anchored from an earlier run. If it is, that refusal is init doing its job.
+    local prior; prior=$(anchored_tx "$policy_hash")
+    if [ -n "$prior" ] && confirmed "$prior"; then
+      echo "  create_policy $prior  already anchored (init refused a second one)"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$cat" "$agent" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
+      echo
+      return 0
+    fi
     echo "  NO TRANSACTION — spel submitted nothing:" >&2
     echo "$out" | tail -8 >&2
     return 1
   fi
   for _ in $(seq 1 25); do sleep 6; confirmed "$tx" && break; done
-  if confirmed "$tx"; then echo "  create_policy $tx  landed"
+  if confirmed "$tx"; then
+    echo "  create_policy $tx  landed"
+    printf '%s\t%s\n' "$policy_hash" "$tx" >> "$LEDGER"
   else echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1; fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
