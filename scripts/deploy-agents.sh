@@ -163,8 +163,19 @@ fund_agent() { # category seed_account amount
   return 1
 }
 
-deploy_agent() { # category per_tx per_period period_blocks fund
+deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   local cat="$1" per_tx="$2" per_period="$3" period="$4" fund="${5:-$FUND_AMOUNT}"
+  # A signer anchors exactly one policy: its first create_policy lands and no
+  # later one does, per account rather than per run, with a fresh and correctly
+  # formed account behaving no differently. So each agent gets its own owner.
+  # Nothing requires the three to share one — owner_id is simply committed into
+  # each policy hash — and an agent per principal is arguably the more honest
+  # shape anyway.
+  local signer="${6:-$SIGNER}"
+  local OWNER_HEX; OWNER_HEX=$(python3 -c "
+import hashlib,sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$signer")
+  echo "  owner  $signer"
   echo "[$cat] new shielded account"
   local seed; seed=$(new_agent "$cat")
   if [ -z "$seed" ]; then echo "  FAILED to create an account" >&2; return 1; fi
@@ -200,7 +211,7 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   # was being proved against the state from before the first — which submits,
   # returns a hash, and never lands. `account get` refetches from the chain and
   # rewrites the stored state, which is what makes the next anchor provable.
-  "$WALLET" account get --account-id "Public/$SIGNER" </dev/null >/dev/null 2>&1
+  "$WALLET" account get --account-id "Public/$signer" </dev/null >/dev/null 2>&1
   local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
     -- create_policy --owner "Public/$SIGNER" \
     --policy-hash "$policy_hash" --owner-id "$OWNER_HEX" --agent-id "$agent_hex" \
@@ -249,9 +260,9 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
 
 # One per default skill category, with envelopes sized to what each does: a
 # storage agent pays small and often, a blockchain agent moves more per call.
-deploy_agent storage    50   500  1000  10
-deploy_agent messaging  25   250  1000  10
-deploy_agent blockchain 200 1000  1000  30
+deploy_agent storage    50   500  1000  10  12tm7eC5xjKqRKTRdXHDqCkAmr1MuXsavt22AMAaxS9v
+deploy_agent messaging  25   250  1000  10  CWLkf996jdXB6Zs4TX74G47f15yREgNVzwo883wJX8j4
+deploy_agent blockchain 200 1000  1000  30  Saavr9yrD9AipzK4kKFG9N3LF3zdA4Sc6PucX7oKMwN
 
 echo "manifest: $MANIFEST"
 column -t -s$'\t' "$MANIFEST" 2>/dev/null || cat "$MANIFEST"
