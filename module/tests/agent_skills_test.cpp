@@ -311,8 +311,27 @@ int main()
               "the card is signed");
         json unsignedCard = card;
         unsignedCard.erase("signatures");
+        // `secp256k1-bip340` and the PAYMENT account, which is what
+        // scripts/sign-agent-card.py writes and what
+        // scripts/use-cases/verify-agent-card.py demands.
+        //
+        // THIS ASSERTION USED TO ENCODE THE BUG. It read `EdDSA` and the
+        // shielded `lezAccount`, which is what CardSkill defaulted to — so the
+        // repository's own verifier rejected the module's own card with
+        // "unexpected algorithm 'EdDSA'" while this suite reported 300-odd
+        // checks passing. A test that asserts the current behaviour rather than
+        // the required one cannot fail, and it stops anyone else's test from
+        // failing either, because the wrong value now looks load-bearing.
+        //
+        // That is the third defect on this project to survive inside a green
+        // suite by being written down as the specification. The question worth
+        // asking of every expectation here is not "does the code do this" but
+        // "should it" — for this one the answer lives outside the code, in
+        // docs/a2a-binding.md §7.5 and in what verify-agent-card.py will accept,
+        // and both were already saying `secp256k1-bip340` over the payment
+        // account while this line said otherwise.
         const std::string wantProtected =
-            base64Url(json{{"alg", "EdDSA"}, {"kid", a.account}}.dump());
+            base64Url(json{{"alg", "secp256k1-bip340"}, {"kid", a.pay}}.dump());
         const std::string wantInput = wantProtected + "." + base64Url(unsignedCard.dump());
         check(card["signatures"][0].value("protected", std::string{}) == wantProtected,
               "the JWS protected header names the algorithm and the key");
@@ -321,6 +340,15 @@ int main()
         check(card["signatures"][0].value("signature", std::string{}) == "c2lnbmF0dXJl",
               "the signature the key produced is the one published");
         check(validateAgentCard(card.dump()).empty(), "the card it emits validates as A2A");
+        // The property the two above only imply, asserted directly because it is
+        // the one a verifier actually enforces: the key named in the header is
+        // the account the card asks to be paid into. A card signed by any other
+        // key verifies and is still a licence to redirect the money, which is
+        // why verify-agent-card.py refuses it.
+        const json hdr = json::parse(
+            std::string("{\"alg\":\"secp256k1-bip340\",\"kid\":\"") + a.pay + "\"}");
+        check(base64Url(hdr.dump()) == card["signatures"][0].value("protected", std::string{}),
+              "and `kid` is the payment account, so the card can be verified at all");
     }
     {
         // An unsigned card is forgeable by anyone who can publish on the topic,

@@ -975,10 +975,26 @@ std::string CardSkill::invoke(const std::string &paramsJson)
     // A2A carries the signature as an RFC 7515 JWS with a detached payload: the
     // payload is the card without its own signatures, so a verifier can strip
     // them and recompute exactly this string.
+    // `secp256k1-bip340`, not `EdDSA`. A LEZ account key is BIP-340 Schnorr over
+    // secp256k1, so a header saying `EdDSA` sends a verifier to Ed25519 to check
+    // a Schnorr signature. It also has to agree with the other implementation of
+    // this construction in this repository — `scripts/sign-agent-card.py` — or
+    // the two produce cards each other's verifier refuses, which is exactly what
+    // `scripts/use-cases/verify-agent-card.py` did to this module's own card.
     std::string alg = call(port_.algorithm);
-    if (alg.empty()) alg = "EdDSA"; // LEZ account keys
+    if (alg.empty()) alg = "secp256k1-bip340";
+    // `kid` names the key that SIGNED, and a verifier has to be able to find it.
+    // That is the *payment* account: it is public, so the wallet exposes its
+    // public key, and it is the account the card asks a stranger to send money
+    // to — which is the thing the signature exists to vouch for. The shielded
+    // `lezAccount` was the old default and is verifiable by nobody, because the
+    // wallet does not expose that key the way it does a public account's.
     std::string kid = call(port_.keyId);
-    if (kid.empty()) kid = account; // the account is the identity
+    if (kid.empty()) {
+        kid = payAccount.empty()
+                  ? account // a free agent with no payee falls back to its identity
+                  : (startsWith(payAccount, "Public/") ? payAccount.substr(7) : payAccount);
+    }
     const std::string protectedB64 = base64Url(json{{"alg", alg}, {"kid", kid}}.dump());
     const std::string payloadB64 = base64Url(card.dump());
     const std::string signingInput = protectedB64 + "." + payloadB64;
