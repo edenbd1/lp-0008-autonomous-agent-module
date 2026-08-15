@@ -101,6 +101,24 @@ int main()
         check(okOf(d.invoke(R"({"address":"cid-1","path":"/tmp/y"})")), "and succeeds on a known one");
     }
     {
+        // share must refuse when it CANNOT check the address, not only when the
+        // check comes back negative. Without these two, deleting the existence
+        // check outright leaves the suite green while share reports ok:true for
+        // an address nobody ever verified.
+        SharePort willSend{[](const std::string &, const std::string &) { return true; }};
+
+        StoragePort down{[] { return false; }, {}, {}, {},
+                         [](const std::string &) { return true; }};
+        ShareSkill sDown(down, willSend);
+        check(!okOf(sDown.invoke(R"({"address":"cid-1","recipient":"bob"})")),
+              "share refuses while the storage node is stopped");
+
+        StoragePort noExists{[] { return true; }, {}, {}, {}, {}};
+        ShareSkill sNo(noExists, willSend);
+        check(!okOf(sNo.invoke(R"({"address":"cid-1","recipient":"bob"})")),
+              "and refuses when it has no way to verify the address");
+    }
+    {
         // The point of share taking two ports: a delivery failure must not be
         // reported as a storage failure.
         StoragePort up{[] { return true; }, {}, {}, {},
