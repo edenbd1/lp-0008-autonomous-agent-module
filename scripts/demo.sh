@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 export RISC0_DEV_MODE=0
 
 RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
-DEPLOY_TX=1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c
+DEPLOY_TX=b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549
 IMPOSSIBLE=dededededededededededededededededededededededededededededededede
 
 rule() { printf '\n\033[1m== %s\033[0m\n' "$1"; }

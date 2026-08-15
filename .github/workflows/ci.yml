@@ -55,7 +55,7 @@ jobs:
           import hashlib,struct
           b=open('artifacts/programs/agent_verifier.bin','rb').read()
           print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
-          want=1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c
+          want=b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549
           if [ "$got" != "$want" ]; then
             echo "deploy hash drifted: got $got, expected $want"; exit 1
           fi
@@ -73,7 +73,7 @@ jobs:
               -H 'Content-Type: application/json' \
               -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"
           }
-          real=$(q 1ea86256ab621b623a3cdf1c50c1ac3ee2aa6ba1c7a66a89d68e5c26f18b6f3c)
+          real=$(q b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549)
           ctrl=$(q dededededededededededededededededededededededededededededededede)
           echo "$real" | grep -q '"result":\[' || { echo "deploy not on chain: $real"; exit 1; }
           echo "$ctrl" | grep -q '"result":null' || { echo "control did not return null: $ctrl"; exit 1; }

@@ -183,11 +183,25 @@ fund_agent() { # category seed_account amount
 # credit. It is also what makes the balance readable with `getAccount`: private
 # notes are commitments and the RPC returns the default account for them, so a
 # payment into a shielded account cannot be checked from outside.
+claimed() { # account id -> true if some program already owns it
+  ! curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$1\"]}" \
+    | grep -q '"program_owner":\[0,0,0,0,0,0,0,0\]'
+}
+
 pay_account() { # category -> public account id on stdout
-  local home="$AGENT_HOMES/$1" id
-  id=$(LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
-         "$WALLET" account list </dev/null 2>/dev/null \
-       | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||' | head -n1)
+  local home="$AGENT_HOMES/$1" id ids
+  ids=$(LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+          "$WALLET" account list </dev/null 2>/dev/null \
+        | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||')
+  # An account this agent already initialised, if there is one. Preferring it
+  # over "the first one listed" keeps the manifest stable across runs: `account
+  # list` does not promise an order, and a run that picked a different account
+  # would advertise a payment address nobody has ever paid.
+  for id in $ids; do
+    if claimed "$id"; then echo "$id"; return 0; fi
+  done
+  id=$(printf '%s\n' $ids | head -n1)
   if [ -z "$id" ]; then
     LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
       "$WALLET" account new public </dev/null >/dev/null 2>&1
@@ -196,14 +210,9 @@ pay_account() { # category -> public account id on stdout
          | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||' | head -n1)
   fi
   [ -n "$id" ] || return 1
-  # Already claimed? Then init would fail on "Account must be uninitialized".
-  local owner; owner=$(curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$id\"]}")
-  if ! echo "$owner" | grep -q '"program_owner":\[0,0,0,0,0,0,0,0\]'; then
-    echo "$id"; return 0
-  fi
   LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
     "$WALLET" auth-transfer init --account-id "Public/$id" </dev/null >/dev/null 2>&1
+  claimed "$id" || return 1
   echo "$id"
 }
 
