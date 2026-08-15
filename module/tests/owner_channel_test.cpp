@@ -152,11 +152,16 @@ static json replyFor(const ApprovalRequest &r, const char *decision)
 }
 
 // A fake and a channel wired to it, held together so neither outlives the other.
+//
+// The default owner sender id is `owner-sds`, which is also `Fake::reply`'s
+// default sender: the channel refuses to open without one, so a rig that leaves
+// it out is a rig that can only test the refusal. The tests that want the
+// refusal build their config by hand, below.
 struct Rig {
     Fake fake;
     std::unique_ptr<OwnerChannel> channel;
 
-    explicit Rig(const std::string &ownerSenderId = "")
+    explicit Rig(const std::string &ownerSenderId = "owner-sds")
     {
         OwnerChannelConfig cfg;
         cfg.contentTopic = kTopic;
@@ -207,10 +212,53 @@ int main()
         cfg.contentTopic = kTopic;
         cfg.ownerAccount = "owner-acct";
         cfg.agentAccount = "agent-acct";
+        cfg.ownerSenderId = "owner-sds";
         OwnerChannel ch(cfg, deaf);
         const auto o = ch.open();
         check(!okOf(o), "a port with no inbound path refuses to open");
         check(errOf(o).find("inbound") != std::string::npos, "and names the missing half");
+    }
+    {
+        // THE CHANNEL MUST NOT BELIEVE EVERYBODY.
+        //
+        // `ownerSenderId` defaulted to empty and empty meant "accept every
+        // sender as the owner", so the safe-looking default was the unsafe one.
+        // Measured before the fix: a frame from `THIRD-PARTY` carrying the
+        // request's own terms came back `verdict:"approved"`.
+        OwnerChannelConfig cfg;
+        cfg.contentTopic = kTopic;
+        cfg.ownerAccount = "owner-acct";
+        cfg.agentAccount = "agent-acct";
+        cfg.timeoutMs = 1000;
+        cfg.resendIntervalMs = 300;
+        // cfg.ownerSenderId deliberately left at its default.
+        Fake fake;
+        OwnerChannel ch(cfg, fake.port());
+        const auto o = ch.open();
+        check(!okOf(o), "a channel with no owner sender id refuses to open");
+        check(errOf(o).find("owner sender id") != std::string::npos,
+              "and says that an unset one would accept every sender as the owner");
+        check(!ch.isOpen(), "so it never reaches the state where a stranger could answer");
+
+        // And the refusal is load-bearing: with the channel closed, the third
+        // party's replayed approval cannot be acted on at all.
+        fake.reply(1, replyFor(request(), "approve").dump(), "third-party");
+        const auto d = ch.requestApproval(request());
+        check(!d.approved() && d.verdict == ApprovalVerdict::ChannelUnavailable,
+              "and an approval replayed by a third party approves nothing");
+        check(d.ownerUnreachable(), "which stays terminal: nothing is submitted");
+    }
+    {
+        // The channel id is built by concatenation too.
+        OwnerChannelConfig cfg;
+        cfg.contentTopic = kTopic;
+        cfg.ownerAccount = "owner-acct/../someone-else";
+        cfg.agentAccount = "agent-acct";
+        cfg.ownerSenderId = "owner-sds";
+        Fake fake;
+        OwnerChannel ch(cfg, fake.port());
+        check(!okOf(ch.open()),
+              "an account id that would name a different channel refuses to open");
     }
     {
         Rig r;
@@ -386,6 +434,46 @@ int main()
         const auto d = r.channel->requestApproval(request());
         check(!d.approved(), "a reply from another sender does not approve");
         check(d.ignored >= 1, "when the owner's sender id is pinned, other senders are ignored");
+        check(d.verdict == ApprovalVerdict::Unreachable,
+              "a third party replaying the exact terms leaves the owner simply unanswered");
+    }
+    {
+        // ONE INJECTED FRAME MUST NOT COST THE OWNER THEIR ANSWER.
+        //
+        // An altered reply used to end the exchange the instant it arrived, so a
+        // single frame naming one wrong term — which anybody who can write to
+        // the topic can send — permanently denied every approval the owner
+        // wanted to give, while the owner's real answer was still in flight.
+        // Measured before the fix: altered-then-genuine gave `verdict:"refused"`.
+        Rig r;
+        r.channel->open();
+        auto altered = replyFor(request(), "approve");
+        altered["amount"] = "101"; // one wrong term
+        r.fake.reply(1, altered.dump());
+        r.fake.reply(2, replyFor(request(), "approve").dump());
+        const auto d = r.channel->requestApproval(request());
+        check(d.approved(), "an injected altered frame does not stop the owner's real approval");
+        check(d.altered == 1, "the altered frame is counted");
+        check(d.detail.find("other terms") != std::string::npos,
+              "and reported even on the approval, because somebody else was writing to the topic");
+        check(d.markerSeed == "9f3a…marker", "the seed is still the request's own");
+    }
+    {
+        // The other half of the same choice: altered frames and nothing else is
+        // still terminal, and still `Refused` rather than a bare timeout, so a
+        // caller holding a payment never submits it and an operator learns that
+        // somebody was answering.
+        Rig r;
+        r.channel->open();
+        auto altered = replyFor(request(), "approve");
+        altered["amount"] = "101";
+        r.fake.reply(1, altered.dump());
+        r.fake.reply(2, altered.dump());
+        const auto d = r.channel->requestApproval(request());
+        check(d.verdict == ApprovalVerdict::Refused,
+              "altered answers and no valid one is refused, not merely unreachable");
+        check(d.altered >= 2, "with every one of them counted");
+        check(d.ownerUnreachable(), "and it stays terminal: nothing is submitted");
     }
 
     std::printf("\nrequests this channel refuses to make\n");
