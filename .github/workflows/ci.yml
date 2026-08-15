@@ -555,7 +555,18 @@ jobs:
           clang++ -std=c++17 -Wall -Wextra module/tests/owner_channel_test.cpp \
             module/src/owner_channel.cpp \
             -o owner_channel_test
-          ./owner_channel_test
+          ./owner_channel_test | tee owner_channel_test.out
+          # This ran bare: exit code only, no banner, no skip guard, while ten
+          # other steps in this file assert both. The banner is this suite's own
+          # closing line, quoted exactly, which is what distinguishes "the
+          # assertions passed" from "the binary printed nothing and returned
+          # zero".
+          grep -qF "all owner-channel behaviours hold" owner_channel_test.out \
+            || { echo "owner_channel_test exited 0 without reporting a full pass"; exit 1; }
+          if grep -q SKIPPED owner_channel_test.out; then
+            echo "owner_channel_test reported SKIPPED"; exit 1
+          fi
+          rm -f owner_channel_test.out
 
       # The dangerous window is not the crash, it is between the wallet
       # returning a hash and the task recording it: the money moved, and a
@@ -569,7 +580,18 @@ jobs:
           clang++ -std=c++17 -Wall -Wextra module/tests/task_persistence_test.cpp \
             module/src/task_persistence.cpp \
             -o task_persistence_test
-          ./task_persistence_test
+          ./task_persistence_test | tee task_persistence_test.out
+          # This ran bare: exit code only, no banner, no skip guard, while ten
+          # other steps in this file assert both. The banner is this suite's own
+          # closing line, quoted exactly, which is what distinguishes "the
+          # assertions passed" from "the binary printed nothing and returned
+          # zero".
+          grep -qF "a restart loses nothing it was told to keep" task_persistence_test.out \
+            || { echo "task_persistence_test exited 0 without reporting a full pass"; exit 1; }
+          if grep -q SKIPPED task_persistence_test.out; then
+            echo "task_persistence_test reported SKIPPED"; exit 1
+          fi
+          rm -f task_persistence_test.out
 
       # ---------------------------------------------------------------------
       # Everything under module/tests/ is accounted for. Eight suites run above,
