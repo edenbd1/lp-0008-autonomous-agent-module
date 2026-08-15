@@ -717,24 +717,34 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   it is found at `~/logos/src/logos-package/build/lgx`, and the root hash it
   quoted was one repackage stale.
 
-  **The "accessible from the Logos app" half does not hold, and the reason is
-  not the one usually given.** It is *not* that Basecamp 0.2.2 ships no wallet,
-  storage or messaging module — that blocks a different criterion, not this one.
-  It is that there is no surface. Measured: with the module installed at the
-  exact path the document names, Basecamp 0.2.2 was launched from a terminal and
-  reported `Total modules: 3`, loading only `capability_module`,
-  `package_manager` and `package_downloader`; the string `agent` appears
-  **nowhere** in its output. Its Package Manager installs from a configured
-  repository only, so a reviewer cannot install a local `.lgx` through the GUI
-  either, and this repository ships no Basecamp `ui` app, so a `core` module has
-  no owner-facing window. Everything that has ever reached this module inside
-  Logos Core reached it through a harness that drives `liblogos_core` directly.
-  A harness is not the Logos app.
+  **The "accessible from the Logos app" half now holds, and the diagnosis that
+  it did not was right about the cause.** It was never that Basecamp 0.2.2 ships
+  no wallet, storage or messaging module — that blocks a different criterion.
+  It was that there was no surface: a `core` module is not one, Basecamp gives
+  windows to `ui` plugins, and this repository shipped none. With the module
+  installed at the exact path the document names, Basecamp reported
+  `Total modules: 3` and the string `agent` appeared **nowhere** in its output.
 
-  What closing it would cost: a Basecamp `ui` app — a QML plugin against
-  `logos-qt-sdk`, packaged with `type: ui` into the plugins directory — which is
-  new work rather than wiring. The `core` half it would talk to already exists
-  and already answers.
+  [`app/`](app/README.md) is that plugin — Qt Widgets, implementing Basecamp's
+  `IComponent`, packaged `type: ui`, holding no agent logic of its own. With
+  both packages installed and the sidebar tile clicked once, Basecamp prints
+  `App launcher clicked: "agent-ui"`, `Loading core dependency for "agent-ui" :
+  "agent"`, `Module loaded: agent`, `Added plugin dock to WorkspaceArea:
+  "LP-0008 Agent"` and `Successfully loaded UI module: "agent-ui"`, and the
+  window's first call arrives at the module. The tile's own label is readable
+  out of the app through macOS's accessibility API, so it is an assertion
+  rather than a screenshot.
+
+  The owner channel closes with it: an above-threshold `wallet.send` published
+  `ownerApprovalRequested` to that window, the owner clicked **Approve**, and
+  the agent acted on the verdict — 5.2 s from call to answer inside a 60 s wait,
+  reproduced from a clean clone and a clean install. Two module-side facts had
+  to be measured to get there, one of which changed `module/src`; both are in
+  [`docs/limitations.md`](docs/limitations.md).
+
+  What is still bounded: Basecamp 0.2.2's Package Manager installs from a
+  configured repository only, so both packages are installed by hand — by the
+  reviewer as much as by us — and both carry only a `darwin-arm64` variant.
 
 ### Reliability
 

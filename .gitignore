@@ -22,3 +22,6 @@ build-basecamp/
 # scripts/logos-core-headless.sh builds the headless harness and keeps the
 # module's persistence base here.
 build-headless/
+
+build-ui/
+app/src/metadata.json

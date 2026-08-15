@@ -579,6 +579,97 @@ was in the middle, because there is none. And `verdict: approved` unlocks the
 the chain's answer, and the reason no owner on this testnet can give it is three
 sections above.
 
+## The owner channel inside Basecamp: two facts that had to be measured
+
+The owner console (`app/`) completes a real approval round trip inside Basecamp
+0.2.2 — `app/README.md` has the transcript. Getting there turned up two
+properties of a *loaded* Logos Core module that no amount of reading the source
+would have shown, and both are worth writing down because anything else built on
+this transport will meet them.
+
+**1. A module that blocks on a call cannot publish while it blocks, and the fix
+is in the module.**
+
+`wallet.send` above the envelope waits for the owner, polling for a verdict and
+re-publishing `ownerApprovalRequested` on an interval. A core module runs in its
+own `logos_host`, and the transport — both the events it emits and the calls it
+receives — is dispatched by that process's Qt event loop. The wait ran *on* that
+loop and slept between polls, so everything it published queued behind it.
+
+Measured, before the fix, with the console open and a 30 s approval timeout: the
+`wallet.send` call reached the module at T; six `ownerApprovalRequested` events
+were delivered to the app within four milliseconds of each other at **T+30.0
+s**; and a bare `status()` clicked at T+3 s also arrived at T+30.0 s. T+30 s is
+when the wait gave up. The owner was told about the spend after the agent had
+stopped waiting for an answer.
+
+The fix is `AgentModuleImpl::setOwnerIdle`, installed by the module's Logos Core
+export with a lambda that pumps the host's event loop instead of sleeping. It
+is guarded on there *being* an event loop and on running on its thread, so a
+unit test that constructs the impl directly still sleeps exactly as before. The
+re-entrancy it buys was checked before it was relied on: `invoke()` drops the
+mutex before calling a skill and `approveSpend()` takes it only to record a
+verdict, so an approval dispatched inside the wait completes against the map the
+wait is polling. A version that held the mutex across the skill call would
+deadlock rather than time out.
+
+After it: attempt 1 of the same request reaches the owner in **7 ms**.
+
+**2. The verdict cannot come back on the connection that asked for it, and the
+fix is in the UI.**
+
+Pumping the loop was not enough. Qt disables a socket's read notifier for the
+duration of the handler it is running, and `invoke("wallet.send")` *is* that
+handler — so a verdict sent down the host's own connection is not read until the
+call it answers has already returned. Measured: `approveSpend` clicked at T+23 s
+of a 60 s wait reached the module at **T+60.0 s**, while the outgoing events
+streamed live throughout.
+
+The console therefore opens a **second** `LogosAPI` at connect time and answers
+on that. The module's registry hands it a second socket with a notifier of its
+own, which is not inside a handler and is still live while the first is blocked.
+Both share the process's `TokenManager`, so the capability token Basecamp
+obtained for the plugin covers it. With that, the verdict clicked at T+7.2 s
+arrived at T+7.2 s and the module acted on it.
+
+Neither is a general cure. A module method that blocks is still a module that
+answers nothing else on that connection for the duration, and the second
+connection is a workaround inside one process rather than a property of the
+transport. The shape that would not need either is an `invoke` that returns
+immediately with a pending-approval handle and reports the outcome as another
+event — a change to the skill's contract, which `module/tests/`,
+`docs/a2a-binding.md` and the A2A task lifecycle all describe in its current
+form. Cost: that redesign, plus re-deriving the four assertions in harness 2
+that are written against a synchronous `wallet.send`.
+
+## Both packages are installed by hand, and a reviewer cannot avoid it
+
+Basecamp 0.2.2's Package Manager installs from a configured package repository
+only. There is no "install from file", so neither `module/agent.lgx` nor
+`app/agent-ui.lgx` can be installed by clicking, and the procedures in
+`docs/basecamp.md` and `app/README.md` unpack them into the user modules and
+user plugins directories by hand. This is a property of the host, not of the
+packages — both are real `lgx` packages, `lgx verify` passes on both, and
+Basecamp installs each into the right directory when told to, by `type`.
+
+Cost to close: publishing both to a package repository Basecamp can be pointed
+at. Nothing in either package changes.
+
+## Only `darwin-arm64`, for the UI plugin as well
+
+`app/agent-ui.lgx` carries one variant, the same as `module/agent.lgx`, and a
+reviewer on Linux cannot open either. The plugin itself is portable — plain Qt
+Widgets, no macOS-specific code, and `app/CMakeLists.txt` already takes the ELF
+branch for the link options — so this is a build-and-package job on a Linux
+host or in a container, against a Qt at or below Basecamp's 6.9.2, not a design
+problem. LP-0002 ships two variants from the same shape and its Linux half was
+verified against the AppImage's own Qt.
+
+Cost to close: one container build per package, plus `lgx add --variant
+linux-amd64` on each.
+
+## deploy-agents.sh is one command, plus four things it cannot do for you
+
 ## Two commands, not one, and what each needs before it will run
 
 The prize asks that "the owner can deploy the agent and configure it with a

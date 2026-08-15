@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <string>
+#include <thread>
+
+// Qt, in this header only, and only for `onContextReady`'s idle — see the note
+// there. It is safe here and would not be in `src/`: this header is compiled
+// into exactly one thing, the Qt plugin, through `generated_code/`. Nothing in
+// `module/src/` includes it, and the unit tests build the impl without Qt.
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QThread>
 
 #include <logos_module_context.h>
 #include <logos_result.h>
@@ -213,5 +223,45 @@ inline void AgentModuleExport::onContextReady()
         ownerApprovalRequested(requestJson, static_cast<std::int64_t>(attempt),
                                logos::agent::detail::nowNs());
         return true;
+    });
+
+    // What the approval wait does between polls, inside a *hosted* module.
+    //
+    // The impl's default sleeps, and in a `logos_host` that turns the owner
+    // channel into a deadlock that reports itself as a timeout. The module's
+    // transport — the outgoing `ownerApprovalRequested` and the incoming
+    // `approveSpend` — is dispatched by this process's Qt event loop, and
+    // `invoke("wallet.send")` is *running on* that loop while it waits. Sleep
+    // on it and both halves of the channel queue behind the call that is
+    // waiting for them.
+    //
+    // Measured before this existed, in Basecamp 0.2.2 with the owner console
+    // open: `wallet.send` reached the module at T; the console's next call, a
+    // bare `status()` clicked at T+3 s, reached it at T+30.0 s; and all six
+    // `ownerApprovalRequested` events were delivered to the app within four
+    // milliseconds of each other, also at T+30.0 s. T+30 s is when the wait
+    // gave up. The owner was told about the spend after the agent had stopped
+    // waiting for an answer, and the answer could not have got in before that
+    // either.
+    //
+    // `processEvents` is what breaks it: the queued events go out and the
+    // owner's verdict comes in, on the thread that is waiting. Two guards,
+    // because a pump on the wrong thread is worse than none:
+    //
+    //  - Only on the application's own thread. `processEvents` drains the
+    //    *calling* thread's loop, so on a worker thread it would do nothing
+    //    while still costing the sleep this branch replaced.
+    //  - Only when there is a QCoreApplication. Without one there is no loop
+    //    and no transport, which is every unit test in `module/tests`.
+    //
+    // The sleep stays. It is what keeps the poll at its 25 ms cadence instead
+    // of spinning a core, and `processEvents` returns immediately when there is
+    // nothing to do.
+    impl_.setOwnerIdle([] {
+        QCoreApplication *app = QCoreApplication::instance();
+        if (app && QThread::currentThread() == app->thread()) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     });
 }

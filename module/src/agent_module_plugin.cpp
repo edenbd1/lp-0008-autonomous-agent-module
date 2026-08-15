@@ -207,6 +207,12 @@ void AgentModuleImpl::setOwnerNotifier(
     ownerNotify_ = std::move(notify);
 }
 
+void AgentModuleImpl::setOwnerIdle(std::function<void()> idle)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ownerIdle_ = std::move(idle);
+}
+
 StdLogosResult AgentModuleImpl::approveSpend(const std::string &requestId,
                                              const std::string &verdict)
 {
@@ -479,9 +485,21 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
             };
         }
         if (!ports.ownerApproval.idle) {
-            ports.ownerApproval.idle = [] {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kApprovalPollSleepMs));
-            };
+            // The host's idle, when it has one. Inside a loaded module it pumps
+            // the `logos_host` event loop, which is the only reason the owner's
+            // answer can reach a wait that is running on that same loop —
+            // see setOwnerIdle(). Sleeping is the fallback, and it is right for
+            // every caller that has no event loop to pump.
+            std::function<void()> hostIdle;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                hostIdle = ownerIdle_;
+            }
+            ports.ownerApproval.idle =
+                hostIdle ? std::move(hostIdle) : std::function<void()>([] {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(kApprovalPollSleepMs));
+                });
         }
         if (!ports.ownerApproval.timeoutMs) {
             ports.ownerApproval.timeoutMs = [this] {

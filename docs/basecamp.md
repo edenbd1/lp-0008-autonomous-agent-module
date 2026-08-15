@@ -174,10 +174,16 @@ Stated plainly, because a reviewer will check.
 - **macOS arm64 only.** No `linux-amd64` variant is built or packaged, and
   nothing here was run on Linux. The install paths given for Linux below are
   read off Basecamp's `LogosBasecampPaths.h`, not tested.
-- **No owner-facing UI plugin.** What loads is the `core` module. The owner
-  reaches it over the owner channel and through the module's method table; there
-  is no Basecamp `ui` app in this repository yet, the way LP-0002 ships one.
-- **The registered skills have no ports wired.** All 21 are registered and
+- **The GUI click is now verified; two rows below it are not.** This bullet used
+  to read "No click in the Basecamp GUI" and then "No owner-facing UI plugin",
+  and both are closed — `app/` is the `ui` plugin, the tile is in Basecamp's
+  left rail, and the section "Inside the running app" below is the record of it
+  being clicked. What is still true is the sentence those bullets opened with:
+  Basecamp 0.2.2 has no "install from file" button — its Package Manager
+  installs from a configured package repository only — so **both** packages are
+  installed by hand, by the procedures below, and a reviewer cannot do it
+  through the GUI either.
+- **The registered skills have no ports wired.** All 22 are registered and
   dispatchable — that much is asserted above — but a host that loads this as a
   plugin cannot wire them, because a port is a `std::function` and there is no
   wire format for one. So each answers as itself and refuses:
@@ -458,7 +464,7 @@ $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 That prints root hash
-`ea0a0f789ece18742d1459975f4db10974ffa4d6a42fac810e6fe2689b802409`. Rebuilding
+`84e13bd5d50f861275529391abc96dbd9307e22c91be57aac2465676713c2ae2`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -644,25 +650,85 @@ once against the real one:
 Total modules: 3
 ```
 
-and `grep -ci agent` over the whole of that output returns **0**. So Basecamp
-does not merely leave the module unloaded — it never names it anywhere a person
-watching the app can see. Whether its App Manager pane *lists* it is not settled
-here either way: the app presented no window in this environment, so that pane
-was never read. What is settled is that nothing in Basecamp's own output
-acknowledges the module, and that the only things which have ever reached it
-inside Logos Core are the two harnesses above, which drive `liblogos_core`
-directly.
+and `grep -ci agent` over the whole of that output returns **0**. That is still
+true, and it is still the right thing to expect: an installed core module that
+nothing has loaded is not named anywhere, because Basecamp auto-loads only its
+own three. It is not evidence that the module is unreachable — it is evidence
+that nothing has asked for it yet.
 
-That is the whole of the "accessible from the Logos app" problem, and it is
-worth being exact about the cause, because the easy answer is the wrong one. It
-is **not** that Basecamp 0.2.2 ships no wallet, storage or messaging module —
-that is why a *different* criterion, about loading alongside them, cannot be
-met. Here the blockers are narrower and both are about surface: its Package
-Manager installs from a configured repository only, so a local `.lgx` cannot be
-installed through the GUI at all; and this repository ships no Basecamp `ui`
-app, so a `core` module has no window. A `ui` plugin against `logos-qt-sdk`,
-packaged `type: ui` into the plugins directory, is what would close it. The
-`core` half it would talk to already exists and already answers.
+What used to follow this paragraph was the conclusion that the criterion could
+not be met, on two grounds. One of them was wrong and the other was
+incomplete:
+
+- **"This repository ships no Basecamp `ui` app, so a `core` module has no
+  window."** True when written, and it was the whole blocker. `app/` is that
+  plugin now; the section below is the record of it loading.
+- **"Its Package Manager installs from a configured repository only, so a local
+  `.lgx` cannot be installed through the GUI at all."** Still true, and still
+  worth stating — but it was never a blocker on *accessibility*, only on the
+  install being a click. Both packages are installed by hand here, and a
+  reviewer does the same.
+
+## Inside the running app
+
+The same `grep -ci agent`, on a Basecamp launched with **both** packages
+installed — `module/agent.lgx` in the modules directory, `app/agent-ui.lgx` in
+the plugins directory:
+
+```
+$ grep -ci agent /tmp/out.log     # at startup, before anything is clicked
+0
+$ grep -ci agent /tmp/out.log     # after clicking the sidebar tile once
+30
+```
+
+Still 0 at startup, and that is correct rather than a shortfall: nothing has
+asked for the module yet. The click is what asks. Do not read the number
+itself as the result — it counts every line the console's calls produce and
+was 62 after an approval round trip in the same run. **0 → nonzero** is the
+result, and the lines under it are what it is made of, in order:
+
+```
+App launcher clicked: "agent-ui"
+Loading UI module: "agent-ui"
+Loading core dependency for "agent-ui" : "agent"
+[info] [logos] Module loaded: agent
+[info] [logos] [agent] [LogosProviderObject] LogosAPIProvider: successfully published "agent"
+MainContainer: Added plugin dock to WorkspaceArea: "LP-0008 Agent" (module: "agent-ui" )
+Successfully loaded UI module: "agent-ui"
+[info] [logos] [agent] ModuleProxy: callRemoteMethod "status" args: 0
+```
+
+`Loading core dependency` is the whole mechanism, and it is not a side effect:
+Basecamp's PluginLoader reads a `ui` plugin's `dependencies`, calls
+`logos_core_load_module` for each, has `capability_module` mint the plugin a
+token for it, and only then calls `createWidget(LogosAPI*)`. So declaring
+`"dependencies": ["agent"]` in `app/metadata.json` is what turns a click on a
+tile into a loaded module. The last line is the console's first call arriving.
+
+The app presents a window in this environment — the previous revision of this
+document said it did not, and that was a property of how it had been launched,
+not of the app. Both the window and the pane that could not be read before are
+now readable without a screenshot, through macOS's accessibility API, which
+makes the tile's own label an assertion rather than a description:
+
+```sh
+osascript -e 'tell application "System Events" to tell process "LogosBasecamp.bin" \
+  to tell window "Logos Basecamp" to get name of every button'
+#   LP-0008 Agent, lp-0002-multisig, lp-0003-airdrop, Applications,
+#   Package Manager, Settings
+```
+
+Before `app/` existed the same command returned that list without its first
+entry. That is the criterion's "accessible from the Logos app", read out of the
+app itself.
+
+What the window then does — bind the agent, start it, list its 22 skills,
+invoke any of them, and answer the spends it asks the owner to approve — is in
+`app/README.md`, with the transcript of a completed approval round trip. The
+two module-side facts that round trip depends on are in
+`docs/limitations.md` §"The owner channel inside Basecamp"; both were found by
+measurement and one of them changed `module/src`.
 
 ## What still has to be built for the criterion to be met
 
@@ -711,7 +777,19 @@ Honest list, in the order that matters:
    is a Delivery node this repository starts, not a second Basecamp. Keep the
    two apart when reading this list — item 2 is a plugin-boundary problem, and
    the live exercise does not make it go away.
-3. A `linux-amd64` variant, since a reviewer may be on Linux and a package with
-   only `darwin-arm64` is unopenable for them.
-4. A Basecamp `ui` app for the owner console, if the owner-facing surface is to
-   be a window rather than a method table reached over the owner channel.
+   One line of item 2 is now closed inside Basecamp and it is worth separating
+   from the rest: the owner really does answer a real spend from a window in the
+   app, and the agent acts on the answer. `app/README.md` has the transcript.
+   What that does *not* close is the criterion's wording — "from a separate
+   Logos app instance using Logos Messaging" — because the owner in that round
+   trip is a window in the *same* instance, reached over Logos Core's transport
+   and not over Delivery.
+3. A `linux-amd64` variant of **both** packages, since a reviewer may be on
+   Linux and a package with only `darwin-arm64` is unopenable for them.
+4. ~~A Basecamp `ui` app for the owner console.~~ Built: `app/`. It is a Qt
+   Widgets plugin implementing `IComponent`, packaged `type: ui`, and it drives
+   the loaded module through its published method table — no second
+   implementation of anything. `app/README.md` is its build, package and
+   install procedure, and `app/tests/ui_plugin_load_test.cpp` is the harness
+   that reproduces Basecamp's own PluginLoader and was watched failing against
+   two other real Qt plugins before it was believed.
