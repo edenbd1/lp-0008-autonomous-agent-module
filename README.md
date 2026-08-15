@@ -391,12 +391,18 @@ b=open('artifacts/programs/agent_verifier.bin','rb').read()
 print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
 
 $OUT/agent-console invoke program.query "{\"program_id\":\"$PROG\",\"method\":\"getTransaction\"}"
-# {"found":true,"included":true,"ok":true,"result":["AkReBgBSMEJG…", 8720]}
+# {"ok":true,"found":true,"included":true,"result":["<bytecode>", <block>]}
 
 PAY=$(col artifacts/agents.tsv pay_account storage)        # the helper from §2
 $OUT/agent-console --account "Public/$PAY" invoke wallet.balance '{}'
-# {"account":"5Sa13Ny…","balance":45,"ok":true,"shielded":false,"source":"sequencer.getAccount"}
+# {"ok":true,"account":"<base58>","balance":<n>,"shielded":false,"source":"sequencer.getAccount"}
 ```
+
+No hash, block height or balance is quoted above. A redeploy moves the first
+two and a settlement moves the third — that payee read 45 and then 95 while this
+section was being written. `"source":"sequencer.getAccount"` is the part that
+carries the claim: the module answered, and it answered from the chain rather
+than from a file in this repository.
 
 **It cannot move money, and that is deliberate.** Its `WalletPort::spend` is
 null, so `wallet.send` refuses — `{"ok":false,"submitted":false,"outcome":

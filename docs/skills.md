@@ -211,19 +211,25 @@ $OUT/agent-console --account "Public/$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++)if($i
     invoke wallet.balance '{}'
 ```
 
-Recorded answers, against `https://testnet.lez.logos.co`:
+The **shape** of the answers, against `https://testnet.lez.logos.co`:
 
 ```
-program.query   {"found":true,"included":true,"method":"getTransaction","ok":true,
-                 "program_id":"a780003b…","result":["AkReBgBSMEJG…", 8720]}
-wallet.balance  {"account":"5Sa13Ny…","balance":45,"ok":true,"shielded":false,
+program.query   {"ok":true,"found":true,"included":true,"method":"getTransaction",
+                 "program_id":"<derived above>","result":["<bytecode>", <block>]}
+wallet.balance  {"ok":true,"account":"<base58>","balance":<n>,"shielded":false,
                  "source":"sequencer.getAccount"}
 ```
 
-The program identifier above is *derived from the committed binary by the
-command itself*, never typed. `artifacts/anchored.tsv` and
-`artifacts/agents.tsv` are the manifests, and `scripts/verify-deployment.sh`
-checks them against the chain; this document quotes neither as a standing fact.
+**No program id, block height or balance is quoted here, and that is
+deliberate.** All three move: a redeploy changes the program and its block, and
+a settlement changes a balance — the payee account read 45 and then 95 during the
+writing of this section alone. Documents in this repository have twice been
+caught asserting a superseded program as current. So the identifiers live in one
+place, `artifacts/anchored.tsv` and `artifacts/agents.tsv`, and
+`./scripts/verify-deployment.sh` checks them against the chain and against
+`docs/DEPLOYMENT.md`, failing if any of the three has drifted. What matters for
+this section is `"ok":true` and `"source":"sequencer.getAccount"` — the module
+answered, and it answered from the chain rather than from a file.
 
 Two refusals matter more than the answers:
 
