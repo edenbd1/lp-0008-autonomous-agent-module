@@ -62,10 +62,10 @@ below was produced against it:
 
 | | |
 |---|---|
-| Binary | `artifacts/programs/agent_verifier.bin`, 417,348 bytes |
-| Deploy tx | `a780003b…8576841e` |
-| ImageID | `12fa95d9…b578c9d8` |
-| Block | 8720 |
+| Binary | `artifacts/programs/agent_verifier.bin`, 440,876 bytes |
+| Deploy tx | `697746f5…cb5370bf` |
+| ImageID | `778a9341…e670c4661` |
+| Block | 8839 |
 
 **Those four facts are not maintained here.**
 [`docs/DEPLOYMENT.md`](../DEPLOYMENT.md) is where the deployment is recorded and
@@ -76,12 +76,18 @@ chain stop agreeing. Everything below quotes the ImageID and the deploy hash by
 their short form only, so a redeploy changes this table and nothing else in this
 file.
 
-That matters because this document has already been wrong in exactly that way.
-It measured and named `8c87cc9b…2d20ebbe` / ImageID `26ed1580…0bad50be` —
-correct figures for a program the repository had stopped shipping. Every number
-was true on chain and none of them described the binary in the tree, which is
-the failure that is invisible to a reader checking the numbers against the
-explorer: the answers are right and the question is the wrong one.
+That matters because this document has now been wrong in exactly that way
+twice. It measured and named `8c87cc9b…2d20ebbe` / ImageID `26ed1580…0bad50be`,
+was corrected to `a780003b…8576841e` / `12fa95d9…b578c9d8`, and was stale again
+within a day when the two-signature migration deployed `697746f5…`. Every number
+in both wrong versions was true on chain and neither described the binary in the
+tree — the failure that is invisible to a reader checking the figures against
+the explorer, because the answers are right and the question is the wrong one.
+
+Being wrong twice is the argument for the guard rather than against the
+document. As of `scripts/verify-deployment.sh`'s benchmark check, a cu-budget.md
+whose `| Deploy tx |` row is not the committed binary's makes that script exit
+non-zero, so the third drift fails a command instead of waiting for a reader.
 
 ## What was measured, and how
 
@@ -111,19 +117,29 @@ matches nothing and every PDA below misses.
 
 `user_cycles` is the real work. `total_cycles` is that rounded up to the next
 power of two, which is what a proof of the segment would actually cost — risc0
-pads to a power-of-two segment, so 194,621 cycles and 262,143 cycles prove
+pads to a power-of-two segment, so 195,412 cycles and 262,143 cycles prove
 identically.
 
 | Program | Instruction | Accounts | user_cycles | total_cycles (2^po2) | % of the 32M cap |
 |---|---|---:|---:|---:|---:|
-| agent_verifier | `create_policy` | 2 | 116,093 | 262,144 | 0.35% |
-| agent_verifier | `approve_spend` | 3 | 199,903 | 262,144 | 0.60% |
-| agent_verifier | `spend` (autonomous, fresh period) | 3 | 194,621 | 262,144 | 0.58% |
-| agent_verifier | `spend` (autonomous, period already open) | 3 | 194,623 | 262,144 | 0.58% |
-| agent_verifier | `spend_approved` | 4 | 253,426 | 524,288 | 0.76% |
+| agent_verifier | `claim_agent` | 2 | 104,037 | 262,144 | 0.31% |
+| agent_verifier | `create_policy` | 3 | 170,011 | 262,144 | 0.51% |
+| agent_verifier | `update_policy` | 2 | 137,386 | 262,144 | 0.41% |
+| agent_verifier | `approve_spend` | 3 | 203,429 | 262,144 | 0.61% |
+| agent_verifier | `spend` (autonomous, fresh period) | 3 | 195,412 | 262,144 | 0.58% |
+| agent_verifier | `spend` (autonomous, period already open) | 3 | 195,413 | 262,144 | 0.58% |
+| agent_verifier | `spend_approved` | 4 | 259,326 | 524,288 | 0.77% |
 | authenticated_transfer | `Transfer`, payee already claimed | 2 | 81,767 | 131,072 | 0.24% |
 | authenticated_transfer | `Transfer`, payee unclaimed | 2 | 82,127 | 131,072 | 0.24% |
 | authenticated_transfer | `Transfer`, chained from `spend` | 2 | 84,349 | 131,072 | 0.25% |
+
+Two of those rows are new instructions, and the reason there are two is the
+whole of the security change: anchoring a policy is no longer one call. The
+agent signs `claim_agent`, which writes the account that says who may anchor
+over it, and only that account's signature is accepted by `create_policy`.
+`update_policy` is the recovery path for terms anchored wrongly, and it needs no
+second signature from the agent because the claim it reads was never about the
+terms.
 
 Every one of those runs exits `Halted(0)`; they are successful executions, not
 early rejections. A single segment each, so continuation overhead is zero.
@@ -139,9 +155,15 @@ under us rather than the program.
 no balance itself — LEZ rule 5 forbids a program from debiting an account it
 does not own — so it checks the envelope and chains a call into the transfer
 program, which does. The full autonomous settlement is therefore
-194,621 + 84,349 = **278,970 user cycles across two program executions**, or
+195,412 + 84,349 = **279,761 user cycles across two program executions**, or
 0.83% of one public-execution budget. Each execution in the chain is a separate
 session with its own cap, and the chain may be 10 deep; ours is 1.
+
+**Anchoring is likewise two rows, and they are two transactions rather than one
+chained pair.** `claim_agent` (104,037) then `create_policy` (170,011) is
+274,048 user cycles, and the two cannot be combined: they are signed by
+different accounts, and LEZ permits one program transaction per public signer.
+That constraint is why the sequencing exists at all rather than a cost of it.
 
 Three things fall out of the table:
 
@@ -150,19 +172,18 @@ Three things fall out of the table:
   Going from three accounts to four is what pushes `spend_approved` over the
   2^18 boundary and doubles its padded cost, even though the extra logic — one
   hash, one comparison — is a rounding error.
-- **The period ledger is now free, and that is a change from the previous
-  program rather than a re-measurement of it.** `spend` against a policy account
-  whose ledger is empty costs 194,621; against one already carrying a total for
-  the current period, 194,623. Two cycles, for a branch.
+- **The period ledger is free, and stays free.** `spend` against a policy
+  account whose ledger is empty costs 195,412; against one already carrying a
+  total for the current period, 195,413. One cycle, for a branch.
 
-  Under `8c87cc9b…` the same two rows differed by 6,666, and the difference was
+  Under `8c87cc9b…` the same two rows differed by 6,666, and that difference was
   real: that program decoded a 24-byte ledger only when there was one to decode.
-  The record this program writes is a fixed 97-byte `PolicyRecord` — version,
+  From `a780003b…` on, the record is a fixed 97-byte `PolicyRecord` — version,
   owner, three limits, window and total — so the ledger is deserialised on every
-  `spend` whether it holds anything or not, and the two paths then differ by one
+  `spend` whether it holds anything or not, and the two paths differ by one
   window comparison. The per-period accounting did not get cheaper; it moved
   into a cost that was already being paid. Anyone carrying the old 6,666 forward
-  would be describing a program this repository no longer ships.
+  would be describing a program two generations gone.
 - **`spend_approved` no longer has two prices.** Earlier revisions of this table
   listed it twice, below and above threshold, because the instruction used to
   skip the marker checks when the payment happened to fall inside the envelope.
@@ -193,21 +214,26 @@ that fell over on the first input it read.
 Sizes are the exact payload `getTransaction` returns, base64-decoded, for
 transactions this repository actually produced.
 
-Every row is under the program named at the top of this document. The three
-anchors are the `create_tx` column of [`artifacts/agents.tsv`](../../artifacts/agents.tsv)
-and the two settlements are the `settlement_tx` column of
-[`artifacts/a2a-task.tsv`](../../artifacts/a2a-task.tsv), so a redeploy
-regenerates the hashes in one place and this table is read out of it rather than
-maintained alongside it.
+Every row is under the program named at the top of this document. The anchors
+are the `claim_tx` and `create_tx` columns of
+[`artifacts/agents.tsv`](../../artifacts/agents.tsv) and the settlements are the
+rows of [`artifacts/a2a-task.tsv`](../../artifacts/a2a-task.tsv) whose `program`
+column is this one — read those **by header name**, because both manifests have
+gained columns and a positional read now returns a different field entirely.
+`scripts/verify-deployment.sh` checks each of these against the chain and, for
+the settlements, against the program they actually charged.
 
 | Operation | Transaction | Block | Bytes | Kind |
 |---|---|---:|---:|---|
-| Program deployment | `a780003b…8576841e` | 8720 | 417,353 | deploy |
-| `create_policy` (anchor an envelope) | `79c91ec7…a24b70f5` | 8729 | 397 | public |
-| `create_policy` | `eb294055…38e53249` | 8731 | 397 | public |
-| `create_policy` | `0266f48b…d3cae867` | 8732 | 397 | public |
-| `spend` settlement, chained transfer | `4e3a3454…a490ddb1` | 8740 | 271,471 | privacy-preserving |
-| `spend` settlement, chained transfer | `7cad4fbd…7168f019` | 8747 | 271,471 | privacy-preserving |
+| Program deployment | `697746f5…cb5370bf` | 8839 | 440,881 | deploy |
+| `claim_agent` (the agent names its owner) | `88f9ec5c…dc292dd0` | 8859 | 270,443 | privacy-preserving |
+| `claim_agent` | `78ce43c9…adaa126c` | 8875 | 270,443 | privacy-preserving |
+| `claim_agent` | `0dd4e49e…e52921a2` | 8883 | 270,443 | privacy-preserving |
+| `create_policy` (the owner anchors the envelope) | `6857ba23…631fe7d4` | 8868 | 429 | public |
+| `create_policy` | `ce557a0a…278e1918` | 8876 | 429 | public |
+| `create_policy` | `2f6b481c…ecec5eda` | 8884 | 429 | public |
+| `spend` settlement, chained transfer | `e691f593…26631047` | 8892 | 271,471 | privacy-preserving |
+| `spend` settlement, chained transfer | `aef14146…8bcb70b8` | 8901 | 271,471 | privacy-preserving |
 
 Reproduce any row:
 
@@ -220,30 +246,39 @@ print('block', r[1], len(base64.b64decode(r[0])), 'bytes')"
 
 What the sizes mean:
 
-- **A deployment is its own bytecode.** 417,353 = the 417,348-byte program
+- **A deployment is its own bytecode.** 440,881 = the 440,876-byte program
   binary plus a five-byte frame, and the deploy transaction hash is
   `SHA256(u32_le(len) || bytecode)` — content addressed, which is why
   `scripts/demo.sh` can recompute it from the committed file. Deployment is
   idempotent: redeploying identical bytes is a no-op.
-- **A policy anchor is 397 bytes.** `create_policy` is signed by a public owner
-  account and takes the public path, so it carries no proof — it re-executes on
-  the sequencer instead. The first byte is the transaction kind (`00`), followed
-  by the 32-byte ImageID of the program being called, so the anchor names the
-  program it anchors under and you can read that ImageID straight out of the
-  payload:
+- **Anchoring costs 270,872 bytes now, and 429 of them are the policy.** This is
+  the migration's real price and it is not in the cycle table. `claim_agent` is
+  signed by the **agent**, whose account is shielded, so it takes the
+  privacy-preserving path and carries a proof: 270,443 bytes, the same order as
+  a settlement. `create_policy` is signed by the owner's public account and takes
+  the public path, so it carries no proof at all — it re-executes on the
+  sequencer — and costs 429 bytes. Requiring two signatures therefore did not
+  double the cost of anchoring; it multiplied it by roughly 630, and every byte
+  of that is one proof.
+- **A public transaction names the program it calls, in the clear.** The first
+  byte of a `create_policy` payload is the transaction kind (`00`), and the next
+  32 are the ImageID being called:
 
   ```console
   $ curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-      -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["79c91ec796a14b7c0c2df11ac96ff944f915fe767db397b31331c48fa24b70f5"]}' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4"]}' \
     | python3 -c "import sys,json,base64; b=base64.b64decode(json.load(sys.stdin)['result'][0]); \
   print('kind', b[0], 'imageid', b[1:33].hex())"
-  kind 0 imageid 12fa95d9382121791f11feb4ac6f7e3ee19e20d296f2eb09a61a069eb578c9d8
+  kind 0 imageid 778a9341a00de46c4c056ac63a66f63156b068e61cce7f155a2b495e670c4661
   ```
 
   That is the check worth running rather than the size: an anchor made under a
   superseded program is a valid transaction that reads correctly and secures
   nothing this repository ships, and the ImageID in its payload is the only
-  thing that says which.
+  thing that says which. A privacy-preserving transaction does not put it at a
+  fixed offset, but it does still carry it — the circuit composes the call and
+  looks the callee up by ImageID — which is how `scripts/verify-deployment.sh`
+  attributes each settlement to a program without trusting the manifest.
 - **A settlement is about 271 kB,** two orders of magnitude larger, and
   essentially all of it is the proof. That the size is a property of the privacy
   circuit rather than of our instruction is visible in how little it moves
@@ -253,17 +288,21 @@ What the sizes mean:
   |---|---|---:|
   | `b028eabf…` | `c45d3f24…` (8605), `8d7aba60…` (8624) | 270,566 each |
   | `8c87cc9b…` | `5a488f28…` (8677), `f780df62…` (8686) | 270,718 and 270,814 |
-  | `a780003b…` (shipped) | `4e3a3454…` (8740), `7cad4fbd…` (8747) | 271,471 each |
+  | `a780003b…` | `4e3a3454…` (8740), `7cad4fbd…` (8747) | 271,471 each |
+  | `697746f5…` (shipped) | `e691f593…` (8892), `aef14146…` (8901) | 271,471 each |
 
-  A 905-byte spread across two program rebuilds, under 0.34%, while the guest
-  gained identity bindings on anchoring and paying and moved the period total on
-  chain. Upstream reports the proof itself as fixed-size — "`proof_bytes` is
-  constant: the outer succinct proof has fixed size" — and the residue is the
-  rest of the transaction rather than the proof. Under `8c87cc9b…` the two
-  settlements differed from *each other* by 96 bytes; under the shipped program
-  they are byte-identical in length. So "constant" is a claim about the proof,
-  not about the transaction carrying it, and the transaction's own variation is
-  what the payload happens to hold.
+  A 905-byte spread across three program rebuilds, under 0.34%, while the guest
+  gained identity bindings on anchoring and paying, moved the period total on
+  chain, and then gained a second required signature and an approval expiry.
+  Upstream reports the proof itself as fixed-size — "`proof_bytes` is constant:
+  the outer succinct proof has fixed size" — and the residue is the rest of the
+  transaction rather than the proof. Under `8c87cc9b…` the two settlements
+  differed from *each other* by 96 bytes; under both programs since, they are
+  byte-identical in length, and identical **across** the two programs as well —
+  271,471 either side of a rebuild that changed the instruction set. So
+  "constant" is a claim about the proof, not about the transaction carrying it,
+  and a `spend` settlement's payload does not depend on what else the guest
+  learned to refuse.
 
 Latency, for scale: blocks on this chain are 60 seconds apart, and each of the
 transactions above landed in the block after it was submitted. The wall-clock
@@ -324,12 +363,19 @@ serde = { version = "1", features = ["derive"] }
 
 The instruction enum is mirrored from the guest. Only the **order** of the
 variants and of their fields is on the wire — `#[lez_program]` generates the
-enum from the `#[instruction]` functions in declaration order, so
-`create_policy` is 0, `approve_spend` 1, `spend` 2, `spend_approved` 3. The
-`ctx: ProgramContext` parameter — taken by `approve_spend`, `spend` and
-`spend_approved`, though not by `create_policy` — is injected by the dispatcher
-from the trusted `ProgramInput` and is not part of the ABI, so it does not
-appear in the mirrored enum or in the published IDL.
+enum from the `#[instruction]` functions in declaration order, so `claim_agent`
+is 0, `create_policy` 1, `update_policy` 2, `approve_spend` 3, `spend` 4 and
+`spend_approved` 5. Those indices moved when the two new instructions were added
+at the front, which is a silent, total ABI break for any mirror that was not
+updated: a stale mirror sending "0" now claims an agent instead of anchoring a
+policy, with fields of the wrong shape. Take the enum from
+`crates/agent-verifier-adversarial/src/main.rs`, which is kept in step, rather
+than from this document.
+
+The `ctx: ProgramContext` parameter — taken by every instruction except
+`claim_agent` — is injected by the dispatcher from the trusted `ProgramInput`
+and is not part of the ABI, so it does not appear in the mirrored enum or in the
+published IDL.
 
 ```rust
 let words: Vec<u32> = risc0_zkvm::serde::to_vec(&instruction)?;
@@ -362,6 +408,17 @@ holds: `SpendLedger::default()` for the fresh row, and
 `{ window_start: 8000, spent: 100 }` for the open one, which leaves room for the
 200 so that row also halts 0. A ledger that left no room would halt with 6006,
 and a refusal's cycle count is not the operation's.
+
+The two anchoring rows each need their own account shape. `claim_agent` takes
+the *unwritten* claim account at `PDA(program, ["agent-owner/v1", agent])` plus
+the agent itself as an authorised signer — the address is derived from the
+signing account, so there is no `agent_id` argument to disagree with.
+`create_policy` takes the unwritten policy account at
+`PDA(program, ["agent-policy/v1", agent])`, the claim account written by the
+step before it holding an `OwnerClaim`, and the owner that claim names as an
+authorised signer; a different signer halts with 6020. `approve_spend` now also
+carries `expiry_block`, and `spend_approved` refuses an approval whose expiry is
+zero or already past.
 
 The same harness run against deliberately wrong inputs is what produces the
 refusal table in [`docs/security-model.md`](../security-model.md) — same binary,
