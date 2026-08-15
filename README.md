@@ -717,16 +717,29 @@ as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
 own transport: 22 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
+The loaded module also **opens its own Logos Delivery node**. That sentence used
+to be a limitation instead: a port is a `std::function` and a host reaching a
+core module over Qt Remote Objects has no wire format for one, so every skill on
+the wire refused. The premise is right; the conclusion was not. A host cannot
+*pass* a closure — a module can *build* one.
+`module/src/delivery_runtime.cpp` opens `liblogosdelivery` and
+`meta.configure("delivery","on")` — two strings, which the transport has always
+carried — starts a node inside the module's own `logos_host` process.
+`messaging.*`, `agent.discover`, `agent.task` and `agent.subscribe` then work,
+measured through `QPluginLoader`, through the real runtime out of the installed
+Basecamp, and between two loaded modules that discovered each other's signed
+Agent Cards on the public network: `./scripts/delivery-in-plugin.sh`, and
+[`docs/basecamp.md`](docs/basecamp.md) for the transcripts and the negative
+control.
+
 Stated plainly, because a reviewer will check: the packages are **macOS arm64
-only**, and 20 of the 22 registered skills **have no ports wired**, because a
-port is a `std::function` and a host that loads this as a plugin has no wire
-format for one. Each of those refuses *as itself* —
+only**, and the **storage, wallet, sequencer and toolchain skills have no ports
+wired** — those need a storage node, a signing wallet and a local `spel` inside
+the module's process, which is a different problem from the transport one and is
+not solved. Each of those refuses *as itself* —
 `{"ok":false,"error":"no account to read: …"}` — which is what the harness
 asserts, and is the opposite of the failure worth hiding: a module that loads,
-answers `skills()` with `[]`, and looks like it works. The two that do answer
-are `meta.status` and `meta.skills`, and they answer for one reason: both are
-questions about *this module*, which it wires to itself. Every other skill asks
-about the world outside it.
+answers `skills()` with `[]`, and looks like it works.
 
 ### 8a. The window: `app/agent-ui.lgx`
 

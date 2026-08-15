@@ -3,10 +3,16 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
+#include <memory>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 namespace {
 
@@ -60,6 +66,17 @@ constexpr const char *kTaskSnapshotFile = "/tasks.json";
 /// approval. Short enough that an owner answering promptly is not left waiting
 /// on a poll interval, long enough that a two-minute wait is not a busy loop.
 constexpr int kApprovalPollSleepMs = 25;
+
+/// What the Agent Card calls this agent when nobody has named it. The card is
+/// refused outright without a name, so there has to be one, and it has to be
+/// this module rather than a guess at a deployment.
+constexpr const char *kDefaultAgentName = "logos-agent";
+
+/// The agent's own version, which is the module's. Kept beside
+/// `module/metadata.json`'s `version` on purpose: the card advertises what this
+/// binary is, not what the A2A protocol is — `protocolVersion` is separate and
+/// the card sets it itself.
+constexpr const char *kModuleVersion = "0.1.0";
 
 } // namespace
 
@@ -240,6 +257,185 @@ StdLogosResult AgentModuleImpl::approveSpend(const std::string &requestId,
     return StdLogosResult{true, {}, {}};
 }
 
+std::string AgentModuleImpl::setting(const char *key) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = settings_.find(key);
+    return it == settings_.end() ? std::string{} : it->second;
+}
+
+void AgentModuleImpl::applySetting(const std::string &key, const std::string &value)
+{
+    // One key, and it is the one this whole file exists to make possible. The
+    // rest are stored and read back by whatever reads them; `meta.configure`
+    // already reports which of those are `effective` and which are not.
+    if (key != "delivery" || !delivery_) {
+        return;
+    }
+    if (value == "on") {
+        std::string err;
+        delivery_->bringUp(err);
+    } else if (value == "off") {
+        delivery_->shutDown();
+    }
+}
+
+std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signingInput) const
+{
+    const std::string signer = setting("card_signer");
+    if (signer.empty() || signingInput.empty()) {
+        return {};
+    }
+    // The input goes in on stdin, never on the command line: a signing input is
+    // attacker-influenced (it contains the peer-visible card, which carries
+    // every registered skill's name) and a shell interpolation of it would be a
+    // command injection with the agent's key on the other end.
+    //
+    // Through a file rather than a second pipe, and `mkstemp` rather than a
+    // name: `popen` is one-directional on every platform this builds for —
+    // macOS accepts only `"r"` and `"w"`, and asking it for `"w+"` returns null,
+    // which reads from here as a signer that refused. A predictable path in a
+    // world-writable directory would let anybody replace what gets signed, so
+    // the name comes from `mkstemp` and the file is removed either way.
+    std::string templatePath = "/tmp/lp0008-signing-input-XXXXXX";
+    if (const char *tmpdir = std::getenv("TMPDIR")) {
+        if (*tmpdir) {
+            templatePath = std::string(tmpdir);
+            if (templatePath.back() != '/') templatePath += '/';
+            templatePath += "lp0008-signing-input-XXXXXX";
+        }
+    }
+    std::vector<char> pathBuffer(templatePath.begin(), templatePath.end());
+    pathBuffer.push_back('\0');
+    const int fd = mkstemp(pathBuffer.data());
+    if (fd < 0) {
+        return {};
+    }
+    const std::string inputPath(pathBuffer.data());
+    const ssize_t written = write(fd, signingInput.data(), signingInput.size());
+    close(fd);
+    if (written < 0 || static_cast<std::size_t>(written) != signingInput.size()) {
+        unlink(inputPath.c_str());
+        return {};
+    }
+    std::unique_ptr<FILE, int (*)(FILE *)> pipe(popen((signer + " < " + inputPath).c_str(), "r"),
+                                                pclose);
+    if (!pipe) {
+        unlink(inputPath.c_str());
+        return {};
+    }
+    std::string out;
+    char buffer[256];
+    while (std::fgets(buffer, static_cast<int>(sizeof buffer), pipe.get()) != nullptr) {
+        out += buffer;
+    }
+    pipe.reset();
+    unlink(inputPath.c_str());
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) {
+        out.pop_back();
+    }
+    // A signer that printed a diagnostic instead of a signature would otherwise
+    // become a `signatures` entry no verifier can check, and a card carrying an
+    // unverifiable signature is worse than an unsigned one: it claims to have
+    // been checked. Base64url, and nothing else.
+    for (const char c : out) {
+        const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                             (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!allowed) return {};
+    }
+    return out;
+}
+
+bool AgentModuleImpl::publishApprovalOverDelivery(const std::string &requestJson)
+{
+    if (!delivery_ || !delivery_->ready()) {
+        return false;
+    }
+    const std::string ownerAccount = setting("owner_channel_account");
+    const std::string agentAccount = setting("agent_account");
+    if (ownerAccount.empty() || agentAccount.empty()) {
+        return false;
+    }
+
+    auto parsed = json::parse(requestJson, nullptr, false);
+    if (!parsed.is_object() || !parsed.contains("id") || !parsed["id"].is_string()) {
+        return false;
+    }
+    logos::agent::ApprovalRequest request;
+    request.id = parsed["id"].get<std::string>();
+    request.recipient = parsed.value("recipient", std::string{});
+    request.amount = parsed.value("amount", std::string{});
+    request.nonce = parsed.value("nonce", std::uint64_t{0});
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        request.policyHash = policyHashHex_;
+    }
+    // `markerSeed` is deliberately left empty here and the owner's reply must
+    // echo it as empty. It is the seed of the on-chain approval account and is
+    // derived by `agent-policy-core` from the four fields above; this module
+    // does not link that crate, and inventing a seed would produce an approval
+    // naming an account `spend_approved` would never look for.
+
+    std::lock_guard<std::mutex> lock(ownerChannelMutex_);
+    if (ownerWaits_.count(request.id) != 0) {
+        // Already asked, and a wait is running for it. `wallet.send` resends the
+        // byte-identical request while it waits; `OwnerChannel` does its own
+        // resending inside that wait, so a second one here would be two channel
+        // waits for one payment and two answers competing to settle it.
+        return true;
+    }
+    if (!ownerChannel_) {
+        logos::agent::OwnerChannelConfig cfg;
+        cfg.contentTopic = logos::agent::ownerTopic(ownerAccount);
+        cfg.ownerAccount = ownerAccount;
+        cfg.agentAccount = agentAccount;
+        cfg.ownerSenderId = ownerAccount;
+        cfg.timeoutMs = settingMs("approval_timeout_ms", logos::agent::kDefaultApprovalTimeoutMs);
+        cfg.resendIntervalMs = settingMs("approval_resend_ms", logos::agent::kDefaultApprovalResendMs);
+        if (cfg.contentTopic.empty()) {
+            return false;
+        }
+        auto channel = std::make_unique<logos::agent::OwnerChannel>(
+            std::move(cfg), delivery_->ownerChannelPort());
+        const auto opened = json::parse(channel->open(), nullptr, false);
+        if (!opened.is_object() || !opened.value("ok", false)) {
+            // Refused rather than remembered: an unopened channel that stayed
+            // in this member would make every later spend wait out a timeout
+            // against a channel that was never there.
+            return false;
+        }
+        ownerChannel_ = std::move(channel);
+    }
+
+    logos::agent::OwnerChannel *channel = ownerChannel_.get();
+    const std::string id = request.id;
+    ownerWaits_[id] = std::make_shared<std::thread>([this, channel, request, id] {
+        // `OwnerChannel::requestApproval` is the class `scripts/owner-channel-live.sh`
+        // drives between two processes, unmodified, and it blocks for as long as
+        // the wait allows. It runs here rather than on the caller's thread
+        // because `OwnerApprovalPort::requestApproval` is documented as one
+        // attempt to publish, with `pollDecision` as the answer path — a
+        // blocking publish would hold the module's transport thread for the
+        // whole timeout and the poll would never be reached.
+        const auto decision = channel->requestApproval(request);
+        std::string verdict;
+        if (decision.verdict == logos::agent::ApprovalVerdict::Approved) verdict = "approved";
+        if (decision.verdict == logos::agent::ApprovalVerdict::Denied) verdict = "denied";
+        if (verdict.empty()) {
+            // Unreachable and Refused both leave nothing here on purpose: the
+            // spend's own wait then ends in the terminal owner-unreachable
+            // outcome, which is the direction the prize requires. Writing
+            // "denied" for an owner who never answered would be a decision the
+            // owner did not make.
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        approvalAnswers_[id] = verdict;
+    });
+    ownerWaits_[id]->detach();
+    return true;
+}
+
 bool AgentModuleImpl::publishApprovalRequest(const std::string &requestJson)
 {
     std::function<bool(const std::string &, int)> notify;
@@ -266,6 +462,20 @@ bool AgentModuleImpl::publishApprovalRequest(const std::string &requestJson)
             return false;
         }
         attempt = ++pendingApprovals_[id];
+    }
+    // The owner's own app, over Logos Messaging, when this module has a node of
+    // its own and an owner channel configured on it. Tried first, because the
+    // criterion is about a SEPARATE Logos app instance: the event path below
+    // reaches whatever loaded this module, inside this machine's runtime, which
+    // is not a second app and never touches a network. This one is a reliable
+    // channel on the public relay, and the answer comes back the same way.
+    //
+    // It falls through rather than failing when there is no node, no owner
+    // channel configured, or the node is not up yet — a module that refused
+    // every approval until an operator had configured a topic would be a
+    // regression against the path that works today.
+    if (publishApprovalOverDelivery(requestJson)) {
+        return true;
     }
     // Outside the lock: the notifier reaches the host, and a host that called
     // back into the module from it would deadlock against a non-recursive
@@ -414,8 +624,14 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     // anchored envelope keys as *not* effective, because they still are not.
     if (!ports.config.set) {
         ports.config.set = [this](const std::string &key, const std::string &value) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            settings_[key] = value;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                settings_[key] = value;
+            }
+            // Outside the lock, and after the store rather than before it: the
+            // one setting that *does* something reads the map back from another
+            // thread, and a `delivery` that acted first would race its own value.
+            applySetting(key, value);
             return true;
         };
     }
@@ -424,6 +640,130 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
             std::lock_guard<std::mutex> lock(mutex_);
             const auto it = settings_.find(key);
             return it == settings_.end() ? std::string{} : it->second;
+        };
+    }
+
+    // ---- THE MODULE'S OWN TRANSPORT ---------------------------------------
+    //
+    // Everything above this line answers a question about the module itself.
+    // This block does not: it opens a Logos Delivery node and builds the wire
+    // ports out of it, which the header of `SkillPorts` says registration
+    // "cannot invent" and has to "be handed".
+    //
+    // That claim was half right, and the half it got wrong is the whole of what
+    // a loaded plugin can do. A HOST cannot hand over a `DeliveryPort`: its
+    // fields are `std::function`s, Logos Core reaches a core module over Qt
+    // Remote Objects, and there is no wire format for a closure. A MODULE
+    // constructing one for itself crosses no boundary at all — the functions
+    // are built here, held here, and called here. The only thing that has to
+    // travel is `meta.configure("delivery","on")`, which is two strings.
+    //
+    // Nothing starts on its own. `DeliveryRuntime` is constructed unstarted, so
+    // loading this module joins no network and opens no socket until an operator
+    // asks; every skill on the wire keeps refusing with the message it already
+    // had — `"delivery node is not started"` — which is true the entire time.
+    if (!delivery_) {
+        delivery_ = std::make_unique<DeliveryRuntime>();
+        // The same pump the owner wait uses, and for the same measured reason:
+        // every synchronous call into the Delivery library is reached from
+        // `invoke()`, which in a loaded module runs on the `logos_host` event
+        // loop that dispatches everything this module emits. See
+        // `setOwnerIdle`'s note, and `DeliveryRuntime::setIdle`'s.
+        std::function<void()> hostIdle;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            hostIdle = ownerIdle_;
+        }
+        if (hostIdle) {
+            delivery_->setIdle(std::move(hostIdle));
+        }
+    }
+    DeliveryRuntime *node = delivery_.get();
+
+    // A caller that wired its own transport keeps it. `ready` is the field to
+    // test on: it is the one every wire skill consults first, so a port with
+    // anything in it at all has a `ready`, and one with nothing in it has none.
+    if (!ports.delivery.ready) {
+        ports.delivery = node->deliveryPort();
+    }
+    if (!ports.task.ready) {
+        ports.task.ready = [node] { return node->ready(); };
+    }
+    if (!ports.task.send) {
+        ports.task.send = [node](const std::string &topic, const std::string &body) {
+            return node->publish(topic, body);
+        };
+    }
+    if (!ports.task.subscribe) {
+        ports.task.subscribe = [node](const std::string &topic) { return node->subscribe(topic); };
+    }
+    // `pay` and `refund` are deliberately NOT wired here, and this is the line
+    // in this file that most needs its reason written down. A settlement needs a
+    // wallet holding a private key and a sequencer to submit to; this module has
+    // neither, and inventing a `pay` that returned a transaction hash for a
+    // transfer nothing performed is the exact failure every port in this file is
+    // shaped to avoid. Unwired, `agent.task` runs the A2A lifecycle for a free
+    // task and refuses a priced one as unpayable — which is the truth.
+    if (!ports.discovery.fetch) {
+        ports.discovery.fetch = [node](const std::string &topic) { return node->received(topic); };
+    }
+
+    // ---- the Agent Card, from what an operator configured -----------------
+    //
+    // These read the settings map on every call rather than capturing a value,
+    // because they are wired at `start()` and `meta.configure` happens after it.
+    if (!ports.card.lezAccount) {
+        ports.card.lezAccount = [this] { return setting("agent_account"); };
+    }
+    if (!ports.card.payAccount) {
+        ports.card.payAccount = [this] { return setting("pay_account"); };
+    }
+    if (!ports.card.pricePerTask) {
+        ports.card.pricePerTask = [this] {
+            unsigned __int128 price = 0;
+            // A price that does not parse is zero, not "whatever was typed":
+            // zero advertises a free agent, and an agent that accidentally
+            // advertises a price it cannot honour is the worse direction. The
+            // same is true of one too large for the field the card carries it
+            // in — truncating it would advertise a number nobody chose.
+            if (!parseDecimal(setting("price_per_task"), price)) return std::uint64_t{0};
+            if (price > static_cast<unsigned __int128>(UINT64_MAX)) return std::uint64_t{0};
+            return static_cast<std::uint64_t>(price);
+        };
+    }
+    if (!ports.card.name) {
+        ports.card.name = [this] {
+            const std::string configured = setting("agent_name");
+            return configured.empty() ? std::string(kDefaultAgentName) : configured;
+        };
+    }
+    if (!ports.card.version) {
+        ports.card.version = [] { return std::string(kModuleVersion); };
+    }
+    if (!ports.card.sign) {
+        ports.card.sign = [this](const std::string &signingInput) {
+            return signWithConfiguredSigner(signingInput);
+        };
+    }
+    if (!ports.status.lezAccount) {
+        ports.status.lezAccount = [this] { return setting("agent_account"); };
+    }
+    if (!ports.status.delivery) {
+        ports.status.delivery = [node] {
+            json d{{"state", node->state()}, {"linked", DeliveryRuntime::linkedIn()}};
+            std::string err = node->lastError();
+            // The words for "this binary has no Delivery library in it" are
+            // composed here rather than inside `delivery_runtime.cpp`, because
+            // there they would sit in a preprocessor branch that the shipped
+            // build did not compile — and `scripts/check-package-fresh.py`
+            // corroborates the package by finding every source string literal
+            // inside the binary, which one of those can never satisfy.
+            if (!DeliveryRuntime::linkedIn()) {
+                err = "this build of the agent module was compiled without Logos Delivery "
+                      "support, so no node can be started in it";
+            }
+            if (!err.empty()) d["error"] = err;
+            return dumpSafe(d);
         };
     }
 

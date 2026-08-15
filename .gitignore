@@ -25,3 +25,7 @@ build-headless/
 
 build-ui/
 app/src/metadata.json
+
+# The delivery-linked build tree: `cmake -S module -B build-delivery
+# -DLOGOS_DELIVERY_ROOT=...`, which stages a 40 MB library beside the plugin.
+build-delivery/

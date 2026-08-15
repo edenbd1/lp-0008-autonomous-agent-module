@@ -125,12 +125,15 @@ LITERAL_EXCLUSIONS = {
         "module/generated_code/agent_qt_glue.h. moc reads that path at build "
         "time and inlines the file's *contents*; the path itself is never "
         "emitted as data.",
-    b"onChannelMessageReceived":
-        "an `inline constexpr const char *` in module/src/owner_channel.h that "
-        "nothing in the plugin ODR-uses — OwnerChannel is host-owned and is "
-        "linked but never constructed inside the plugin, see the note in "
-        "module/CMakeLists.txt. No use means no storage means no bytes.",
 }
+# `onChannelMessageReceived` used to be excluded here, with the reason "nothing
+# in the plugin ODR-uses it — OwnerChannel is host-owned and is linked but never
+# constructed inside the plugin". That reason stopped being true: the plugin now
+# opens its own Logos Delivery node and registers that listener on it
+# (module/src/delivery_runtime.cpp), so the literal is in the binary and the
+# check finds it like any other. The entry is gone rather than kept, because a
+# stale exclusion is a hole in exactly the check that closed the last two
+# stale-package defects.
 
 
 def sha256_bytes(b):

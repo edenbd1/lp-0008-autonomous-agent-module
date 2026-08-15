@@ -319,6 +319,7 @@ jobs:
             -I_external/logos-cpp-sdk/cpp \
             module/tests/skills_test.cpp \
             module/src/agent_module_plugin.cpp \
+            module/src/delivery_runtime.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
@@ -353,12 +354,14 @@ jobs:
             -I_external/logos-cpp-sdk/cpp \
             module/tests/module_recovery_test.cpp \
             module/src/agent_module_plugin.cpp \
+            module/src/delivery_runtime.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
             module/src/wallet_skills.cpp \
             module/src/program_skills.cpp \
             module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
             module/src/task_persistence.cpp \
             -o module_recovery_test
           ./module_recovery_test
@@ -379,12 +382,14 @@ jobs:
             -I_external/logos-cpp-sdk/cpp -Imodule/src \
             module/tests/module_recovery_test.cpp \
             broken_plugin.cpp \
+            module/src/delivery_runtime.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
             module/src/wallet_skills.cpp \
             module/src/program_skills.cpp \
             module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
             module/src/task_persistence.cpp \
             -o broken_recovery_test
           set +e

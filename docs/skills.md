@@ -280,11 +280,18 @@ question:
 
 Two further boundaries, for completeness:
 
-- **Twenty of the twenty-two built-in skills have no ports wired inside a loaded plugin**,
-  for the same `std::function` reason. Loaded by Basecamp, they register and
-  each refuses naming the port it is missing. `docs/basecamp.md` records that
-  run, and it is the opposite of the failure worth hiding: a module that loads,
-  answers `skills()` with `[]`, and looks like it works.
+- **The storage, wallet, sequencer and toolchain skills have no ports wired
+  inside a loaded plugin.** This used to say twenty of the twenty-two, "for the
+  same `std::function` reason", and the reason was the wrong one: a host cannot
+  *pass* a closure over Qt Remote Objects, and it does not follow that a module
+  cannot *build* one. The module now links `liblogosdelivery` and constructs its
+  own `DeliveryPort` (`module/src/delivery_runtime.cpp`), so `messaging.*`,
+  `agent.discover`, `agent.task` and `agent.subscribe` work in a loaded plugin —
+  see `docs/basecamp.md`. What is left needs a storage node, a signing wallet or
+  a local `spel` inside the module's process, which no amount of port plumbing
+  supplies. Each of those refuses naming the port it is missing, which is the
+  opposite of the failure worth hiding: a module that loads, answers `skills()`
+  with `[]`, and looks like it works.
 - **`meta.skills` is a registered skill, and for a while it was not.** It is
   worth recording because of what the failure looked like: three C++ doc
   comments and `docs/a2a-binding.md` described it as existing, and
@@ -677,6 +684,15 @@ One trap is worth recording, because it fails silently and looks exactly like a
 message that never left: **the name you register with is not the name that comes
 back.** You subscribe to `onMessageSent`, and the event payload carries
 `"eventType":"message_sent"`. Matching the registration name never fires.
+
+Its twin is on the receive side and fails the same way, silently and in the
+direction that reads as an empty network: a relay frame arrives as
+`{"eventType":"message_received","messageHash":…,"message":{"payload":[104,101,…],
+"contentTopic":…}}` — field `message`, and the payload an **array of bytes**.
+Not `wakuMessage`, and not base64; that is the *channel* encoding, and it is what
+`library/events/json_message_event.nim` describes, which is why reading the
+upstream file rather than the wire is how you get it wrong. Measured here against
+a live node ([`a2a-binding.md` §4.3](a2a-binding.md), which carries the frame).
 
 ### Why this is not in CI
 

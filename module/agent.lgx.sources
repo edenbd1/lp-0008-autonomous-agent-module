@@ -15,17 +15,19 @@
     "name, type or author."
   ],
   "built_from": {
-    "module/CMakeLists.txt": "25a7066474f65405eb7bfac6684d33d01ea9e2b23e951583558f26d1d25652ed",
+    "module/CMakeLists.txt": "6ce7ed2c28316fbf90a34263868cebf9e7f087df3a4bd337e8bbc5112129b317",
     "module/agent_module_plugin_export.h": "149a9597119d18ff7630b1bac939e1051d6c975129e17c4f33513a1dada85aa9",
     "module/generated_code/agent_dispatch.cpp": "26140ef3be69032b4006d43939843ad37ffd0660707d6f83d57cb1b27d88c2a1",
     "module/generated_code/agent_events.cpp": "544722ac079d102aa47c3613b458c7b559644b263727712cc9286f65ce9f93c2",
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "e9eec64945a1220c778e5e05a466b565f1a8ac96ae1dc0f6d700f4af78752398",
-    "module/src/agent_module_plugin.h": "f5c23f3d8945df6f91ca29b0441da1de34f396ca2d97002bf902cdb96af11599",
-    "module/src/agent_skills.cpp": "519cbd9cc64c8c49a1153c5ea25ba72c9e6f5f8be651eeacef6dd325cb427fba",
-    "module/src/agent_skills.h": "190c85275dc6694b3cf0d532ae8c1218d6bfcfddce9b27baa66546101c2dac68",
+    "module/src/agent_module_plugin.cpp": "42177990fff935f39f793897b2b8cb2b42bdc4386cd895269d7fbbe776fdf44b",
+    "module/src/agent_module_plugin.h": "22ddcbab70e3e3aae5575f36acd1c9ef6ed2161a8f1fa7df6292649ddf38d895",
+    "module/src/agent_skills.cpp": "cb3f811297d410130d21b7619bc1c45c5a429fcb682beeaa334139d2e60fbcd9",
+    "module/src/agent_skills.h": "06cf76ee24578aa3068494f70611987b772b02285f39a72be566d5aac004a665",
+    "module/src/delivery_runtime.cpp": "512c63c1148922bf1ff372418f0cdea3d4f307ae7bd92c7879b8a99e088350da",
+    "module/src/delivery_runtime.h": "af46557b965fa956d2daf79629485cb0fc5f361e8be4f844ee4416579e75c860",
     "module/src/inference.cpp": "ecb0d3048ee7c26688f31af1621db7da2bf52437547e16920ea323c82a34c3fa",
     "module/src/inference.h": "5c27af5158edd83fe9bcaaa355a86d90748f68cfc787f922d8190a5969ac2732",
     "module/src/messaging_skills.cpp": "fedc60715687885c0447fef051373a1089be881f1580d86f121ae7144b8d52ca",
@@ -42,7 +44,7 @@
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
   "package": "module/agent.lgx",
-  "package_root_hash": "84e13bd5d50f861275529391abc96dbd9307e22c91be57aac2465676713c2ae2",
+  "package_root_hash": "22b4e00b2324154662514ee143e47dcd80499a58727b1a6debeccf8bace107f0",
   "toolchain": {
     "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
     "host": "darwin-arm64",
@@ -51,9 +53,9 @@
   },
   "variants": {
     "darwin-arm64": {
-      "bytes": 3703968,
+      "bytes": 4096528,
       "main": "agent_plugin.dylib",
-      "sha256": "1716c14c674aa4a2331d56191109fe106ced08e5264cf55d27346e1a858f34df"
+      "sha256": "0b66ac38c2afcc1ccdf9fc42d67d9fdfd3093aa1a58ecc6b6112c703a0227ee0"
     }
   }
 }

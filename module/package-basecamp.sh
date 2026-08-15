@@ -117,6 +117,63 @@ cp "$plugin" "$stage/$variant/"
 # the binary at all.
 cp "$here/metadata.json" "$stage/$variant/"
 
+# Anything else the build staged beside the plugin travels with it.
+#
+# This is `liblogosdelivery`, and the package is unloadable without it: the
+# plugin's rpath is `@loader_path`/`$ORIGIN`, so the host resolves the library in
+# the module directory it unpacked, finds nothing, and the load fails with a
+# missing-symbol message nobody sees. A package that carries the plugin and not
+# its library is exactly the shape of defect this script exists to refuse, so
+# every sibling library is copied and then *checked for* below.
+for sibling in "$(dirname "$plugin")"/*.dylib "$(dirname "$plugin")"/*.so; do
+    [ -f "$sibling" ] || continue
+    [ "$sibling" = "$plugin" ] && continue
+    cp "$sibling" "$stage/$variant/"
+    echo "  ok    $(basename "$sibling") travels with the plugin"
+
+    # And so does its licence, because this is redistribution of somebody
+    # else's binary. MIT wants the copyright and permission notice carried "in
+    # all copies or substantial portions"; Apache-2.0 wants the licence and the
+    # notices retained. A package that ships the library and not the licence is
+    # not a packaging bug, it is a licensing one, so it fails here rather than
+    # shipping.
+    base="$(basename "$sibling")"; base="${base%%.*}"
+    third="$here/third-party/$base"
+    if [ -d "$third" ]; then
+        mkdir -p "$stage/$variant/third-party/$base"
+        cp "$third"/* "$stage/$variant/third-party/$base/"
+        echo "  ok    so does its licence ($(ls "$third" | tr '\n' ' '))"
+    else
+        echo "  FAIL  $(basename "$sibling") is redistributed inside this package" >&2
+        echo "        and module/third-party/$base does not exist, so the package" >&2
+        echo "        would ship somebody else's binary with no licence in it" >&2
+        exit 1
+    fi
+done
+
+# And the check that makes the copy above mean something.
+#
+# It cannot be an `otool -L` check, and the reason is the point: the plugin
+# does not LINK the delivery library, it `dlopen`s it by name at run time, so
+# there is no load command to read. That is deliberate — a link-time dependency
+# turns a missing file into a plugin that does not load, which Basecamp reports
+# to nobody (see the note in module/CMakeLists.txt). But it also means the
+# linker can no longer tell us what the binary needs, so the *name it will ask
+# for* is read out of the binary instead, and every name that is in there has to
+# be in the package.
+missing=""
+for wanted in liblogosdelivery.dylib liblogosdelivery.so libstorage.dylib libstorage.so; do
+    strings - "$plugin" 2>/dev/null | grep -qxF "$wanted" || continue
+    [ -f "$stage/$variant/$wanted" ] || missing="$missing $wanted"
+done
+if [ -n "$missing" ]; then
+    echo "  FAIL  the plugin opens these by name at run time and the package" >&2
+    echo "        carries none of them, so every skill on the wire would" >&2
+    echo "        refuse in an installation that looks complete:$missing" >&2
+    exit 1
+fi
+echo "  ok    every library the plugin opens by name at run time is in the package"
+
 rm -f "$out"
 ( cd "$(dirname "$out")" && "$lgx" create "$(basename "${out%.lgx}")" >/dev/null )
 "$lgx" add "$out" --variant "$variant" --files "$stage/$variant" \

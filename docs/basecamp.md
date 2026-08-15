@@ -161,6 +161,138 @@ Environment for run 2: **LogosBasecamp 0.2.2**, official macOS arm64 `.dmg`,
 package under test was the committed `module/agent.lgx`, unpacked into the user
 modules directory by the procedure below — not the build tree.
 
+## The ports a loaded module builds for itself
+
+For most of this repository's life the sentence above — "a port is a
+`std::function` and there is no wire format for one" — stood as the reason a
+loaded module could do nothing on the network. It is a true sentence about what
+a HOST can PASS. It was read as a statement about what a MODULE can HAVE, and
+those are different claims: a module that links `liblogosdelivery` can open a
+node from its own configuration and construct its own ports on the far side of
+the boundary, where nothing has to be serialised because nothing crosses.
+
+What crosses is `invoke("meta.configure", {"key":"delivery","value":"on"})` —
+two strings, which Qt Remote Objects has carried since the beginning. Nothing
+starts on its own: loading the module joins no network and opens no socket, and
+every skill on the wire keeps the refusal it already had (`"delivery node is not
+started"`) until an operator asks. `meta.status` reports which of the two
+situations a refusal means:
+
+```
+  {"linked":true, "state":"off"}       the library is in the binary, no node yet
+  {"linked":true, "state":"ready"}     a node is up
+  {"linked":false,"state":"absent"}    this build has no Delivery library at all
+```
+
+**3. The runtime loads it, and the module opens a Delivery node inside
+`logos_host`** (`module/tests/logos_core_delivery_test.cpp`). Harness 2 above
+proves the module is reachable; this one proves what it can do once reached. A
+core module does not run in the caller's process — Logos Core spawns
+`logos_host` for it — so the node below is opened inside a process the harness
+never enters, by a plugin it only caused to be `dlopen`ed. Run against the
+plugin unpacked from the committed `module/agent.lgx`:
+
+```
+  ok    logos_core_load_module() reports success
+  ok    configure() is accepted across the transport
+  ok    start() is accepted across the transport
+  <-    meta.status delivery: {"linked":true,"state":"off"}
+  ok    the module the RUNTIME loaded links Logos Delivery into itself
+  ok    and has started no node, because nobody has asked it to
+  <-    messaging.send: {"error":"delivery node is not started","ok":false}
+  ok    the wire skills refuse over the transport, exactly as documented
+  <-    meta.configure: {"effective":true,"key":"delivery","ok":true,"stored":"on","value":"on"}
+  ok    meta.configure('delivery','on') crosses Qt Remote Objects
+  ok    the module opened and started its own Delivery node inside logos_host
+  <-    messaging.join: {"ok":true,"topic":"/lp-0008/1/discovery-lp0008corelive/json"}
+  <-    messaging.send: {"bytes":7,"ok":true,"topic":"/lp-0008/1/owner-lp0008corelive/json"}
+  ok    messaging.send put a message on the public network
+  <-    agent.discover: {"agents":[],"ok":true,"rejected":[{"index":0,"reason":"the card is not valid JSON"}],"seen":1,…}
+  ok    agent.discover answers with a result, not 'no discovery transport is configured'
+  <-    agent.task: {"ok":true,"state":"submitted","task_id":"corelivetask","topic":"/lp-0008/1/task-lp0008corelive-corelivetask/json",…}
+  ok    agent.task opened a task and put the A2A request on the wire
+  ok    agent.subscribe subscribed to that task's topic
+  ok    meta.configure('delivery','off')
+  ok    the node is down and the module says so
+the module Logos Core loaded obtained a working Delivery port (0 failure(s))
+```
+
+`agent.discover`'s `"seen":1` is not decoration: the document it rejected is the
+seven bytes `messaging.send` published two lines earlier, which went out to the
+public relays and came back into the module's own inbox on that exact content
+topic. A card it cannot parse is reported as rejected; a topic nothing arrived
+on reports `"seen":0`.
+
+**4. Two loaded modules discover each other's signed Agent Cards**
+(`module/tests/plugin_delivery_test.cpp`, `peer` mode; run it with
+`./scripts/delivery-in-plugin.sh peers`). Harness 3 cannot be evidence for the
+discovery criterion on its own, because a Waku node receives its own published
+messages — a single process can satisfy any assertion about "a card arrived"
+with every other agent on earth switched off. So this is two processes, each
+loading the same plugin, each with its own node, its own working directory and
+its own LEZ account, sharing nothing but a content topic derived from one run
+id. Each accepts only a card whose `url` names the OTHER account, so neither can
+satisfy itself:
+
+```
+agent A                                    agent B
+  ok  this agent's own Delivery node came up  ok  this agent's own Delivery node came up
+  ok  the card names this agent's account     ok  the card names this agent's account
+  ok  and carries a signature                 ok  and carries a signature
+  ok  published its own signed card           ok  published its own signed card
+  ok  discovered the OTHER agent's signed Agent Card over the public network
+                                              ok  (the same, in the other direction)
+  ok  which is signed — `require_signed` was on
+two loaded modules discovered each other (0 failure(s))
+```
+
+The cards are real: `agent.card` is assembled by the loaded module out of its
+own registry — so it cannot advertise a skill the agent has not registered — and
+signed BIP-340 over secp256k1 by the LEZ account key, through the `card_signer`
+command `meta.configure` names. `CardPort::sign` has always declared exactly
+that contract ("given `<protected>.<payload>`, return the base64url signature"),
+and the curve arithmetic stays outside the module deliberately: this plugin
+links no crypto library, and a hand-rolled 256-bit field inside the binary that
+signs payment instructions is the last place to put one.
+
+**The negative control, which is what makes the four transcripts above mean
+anything.** Build without `-DLOGOS_DELIVERY_ROOT` — the default — and run the
+same harness against the same package layout. It reports:
+
+```
+  <-    meta.status delivery: {"error":"this build of the agent module does not link Logos
+        Delivery, so no node can be started in it","linked":false,"state":"absent"}
+  FAIL  this build links Logos Delivery into the plugin
+  FAIL  and has not started a node, because nobody has asked it to
+  ok    meta.configure('delivery','on') is accepted
+  FAIL  the module's own Delivery node came up and reported it
+```
+
+Note which line stays green: `meta.configure('delivery','on')` is *accepted* by
+a build that cannot act on it, because the setting is stored either way. A
+harness that stopped at "the call succeeded" would have called that a pass —
+which is the same shape as the Qt-version failure two sections down, where
+`logos_core_load_module` returns success for a plugin the host then cannot use.
+
+### What this needs at build time
+
+The library is not vendored. Point the build at a `logos-delivery` checkout that
+has been through `make liblogosdelivery` (see `scripts/exercise-nodes.sh`, which
+already builds it):
+
+```sh
+cmake -S module -B build-basecamp \
+      -DCMAKE_PREFIX_PATH=$HOME/logos/Qt/6.9.2/macos \
+      -DCMAKE_CXX_FLAGS=-I/opt/homebrew/include \
+      -DLOGOS_DELIVERY_ROOT=$PWD/_external/logos-delivery
+```
+
+Without that flag the module still builds and still ships `delivery_runtime.cpp`
+— every entry point answers "no" and `meta.status` says `absent`. That is a
+deliberate difference from leaving the file out: a build that cannot start a
+node has to be able to say so, and `"absent"` and `"off"` produce byte-identical
+refusals from every skill that touches the wire.
+
 ## What was NOT verified
 
 Stated plainly, because a reviewer will check.
@@ -183,25 +315,23 @@ Stated plainly, because a reviewer will check.
   installs from a configured package repository only — so **both** packages are
   installed by hand, by the procedures below, and a reviewer cannot do it
   through the GUI either.
-- **The registered skills have no ports wired.** All 22 are registered and
-  dispatchable — that much is asserted above — but a host that loads this as a
-  plugin cannot wire them, because a port is a `std::function` and there is no
-  wire format for one. So each answers as itself and refuses:
-  `invoke("wallet.balance", "{}")` returns `{"ok":false,"error":"no account to
-  read: the agent has none configured and none was given"}`, and
-  `meta.status` reports `balance: null` with `balance_error` rather than `0`.
-  Wiring real transports means linking the module and calling
-  `registerBuiltinSkills` before `start` — which is an in-process C++ API, not
-  something Basecamp can do. What loads in Basecamp is therefore a complete,
-  honest card of skills that will refuse until something wires them.
-- **The module links neither Logos Delivery nor Logos Storage.** The skills
-  reach them through `DeliveryPort` / `StoragePort` function objects, and no
-  translation unit in `module/src/` includes `liblogosdelivery.h` or
-  `libstorage.h`. `metadata.json` therefore declares `"external_libraries": []`,
-  which is the truth. Note that `docs/skills.md` says of Delivery and Storage
-  that "both are wired through the `nix` section of `metadata.json` —
-  `external_libraries` with a `vendor_path`" — that describes what wiring them
-  *would* take, not what is wired today. Nothing is.
+- **The storage skills have no ports wired**, and neither do the wallet, the
+  sequencer or the local toolchain. `invoke("wallet.balance", "{}")` returns
+  `{"ok":false,"error":"no account to read: the agent has none configured and
+  none was given"}`, and `meta.status` reports `balance: null` with
+  `balance_error` rather than `0`. Those need a signing wallet and a `spel`
+  toolchain in the module's process, which is a different problem from the
+  transport one below and is not solved.
+- **The module reaches Logos Delivery and not Logos Storage.** This bullet used
+  to say it linked neither, and to give the reason: "a port is a `std::function`
+  and there is no wire format for one, so a host that loads this as a plugin
+  cannot wire them". The premise is right and the conclusion was wrong — see
+  §"The ports a loaded module builds for itself" above.
+  `module/src/delivery_runtime.cpp` opens `liblogosdelivery` with `dlopen` at
+  the moment a node is asked for, `module/agent.lgx` carries the library and its
+  licence beside the plugin, and the messaging, discovery and task transports
+  work in a module Logos Core loaded. `libstorage.h` is still included by
+  nothing, so `storage.*` still refuses.
 - **`logos_protocol_version`.** The runtime logs
   `Module agent carries no usable logos_protocol_version (pre-protocol build) —
   loading permissively` and loads it. That is a property of the pinned
@@ -446,10 +576,58 @@ Qt patch level and `nlohmann/json` all reach the bytes and none of them is
 pinned by this repository — which is why `--rebuild` is a local command and not
 a CI step. It fails loudly when the toolchain is absent rather than passing.
 
-The committed package is `module/agent.lgx` (674 KB at the moment of writing —
-it was 589 KB when this sentence was first written and nobody noticed it grow,
-which is the whole argument for the checked record above; one `darwin-arm64`
-variant). Check it against itself rather than trusting this document:
+### The 16 MB in it, and why it is committed rather than downloaded
+
+The committed package is `module/agent.lgx` (16 MB at the moment of writing; one
+`darwin-arm64` variant). It was 674 KB, and 589 KB before that, and nobody
+noticed either change — which is the whole argument for the checked record
+above. This one is not an accident and it is not free, so the reasoning is here
+rather than in a commit message nobody re-reads.
+
+**What is in it.** `liblogosdelivery.dylib`, 42 MB uncompressed, because the
+module opens its own Delivery node (§"The ports a loaded module builds for
+itself") and the library has to be somewhere the module can find. Compressed it
+is 16 MB; stripped and compressed it is 14.3 MB, and it is deliberately *not*
+stripped — a 1.7 MB saving is not worth shipping a modified copy of somebody
+else's binary, because "this is what `make liblogosdelivery` produced" is a
+property worth keeping.
+
+**Why not fetch it at install time with a pinned checksum**, which is what the
+`storage-node` CI job does for `libstorage` and is plainly the better shape:
+because there is nothing to fetch. Upstream's releases since `v0.37.0-beta`
+carry **zero assets**; its `release-assets.yml` does build a darwin-arm64
+`liblogosdelivery` and then uploads it to the GitHub *run artefact store* —
+authenticated, expiring, no stable URL — with no release-upload step anywhere in
+the file, so even a green run would publish nothing installable; and no run of
+it has been green since 2025-10-16. Nimble ships source, there is no Homebrew
+formula, the container images are linux executables with a 30-day expiry, and
+the one Logos nix cache that really does hold an `aarch64-darwin` build holds it
+at version `dev` from a pull-request commit, in a cache that garbage-collects,
+signed with a key `flake.nix` does not publish. The full check, with what was
+run, is in
+[`module/third-party/liblogosdelivery/README.md`](../module/third-party/liblogosdelivery/README.md).
+`libstorage` is fetched because `logos-storage/logos-storage-nim` — a different
+organisation — publishes a full asset matrix including darwin-arm64. The pattern
+is right; the delivery repository does not offer it.
+
+**Licence.** `liblogosdelivery` is **MIT OR Apache-2.0**, © 2025-2026 Logos, so
+redistributing the binary inside this package is permitted. It is not free of
+obligations: MIT requires the copyright and permission notice to travel with the
+copy. `package-basecamp.sh` therefore stages
+`module/third-party/liblogosdelivery/` into every package that carries the
+library — and **fails** if a library is staged with no licence directory beside
+it, because shipping someone else's binary without one is a licensing defect and
+not a packaging one. The statically-linked `librln` v2.0.2 is Apache-2.0 OR MIT
+(© 2022 Vac Research). The only GPL-family files anywhere upstream are four
+Solidity test harnesses under `vendor/waku-rlnv2-contract/lib/`, which are never
+compiled and are not linked in.
+
+**What would delete all of this**: one release-upload step upstream, and one
+green run of it. Nothing in the module would have to change, because the library
+is opened by name at run time rather than linked — where it comes from is the
+installer's business.
+
+Check the package against itself rather than trusting this document:
 
 `lgx` is not on `PATH` after building `logos-package` — it stays in that
 checkout's `build/`, which is where `package-basecamp.sh` looks for it. Written
@@ -464,7 +642,7 @@ $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 That prints root hash
-`84e13bd5d50f861275529391abc96dbd9307e22c91be57aac2465676713c2ae2`. Rebuilding
+`22b4e00b2324154662514ee143e47dcd80499a58727b1a6debeccf8bace107f0`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -500,10 +678,33 @@ mkdir -p "$DEST" && cd "$DEST"
 tar xzf /path/to/lp-0008/module/agent.lgx
 mv variants/darwin-arm64/* . && rm -rf variants
 printf 'darwin-arm64' > variant
-ls   # agent_plugin.dylib  manifest.json  metadata.json  variant
+ls   # agent_plugin.dylib  liblogosdelivery.dylib  manifest.json  metadata.json
+     # third-party/  variant
 ```
 
-## Running the two checks
+`liblogosdelivery.dylib` belongs in that directory and not somewhere on a
+library path: the plugin asks for it by name and looks beside itself first, so
+the module directory is where it is found. `third-party/liblogosdelivery/` is
+upstream's licence, which travels with the binary because this is
+redistribution — see below.
+
+**Leaving it out is survivable, and that is the point.** The plugin does not
+link the library; it opens it with `dlopen` when a node is first asked for. A
+module directory missing it still loads, still registers all 22 skills, and
+answers `meta.status` with the file it wanted and every path it tried:
+
+```json
+{"linked":true,"state":"failed",
+ "error":"liblogosdelivery.dylib could not be opened. Tried: …/modules/agent/liblogosdelivery.dylib,
+          liblogosdelivery.dylib. It belongs in the module directory, beside the plugin"}
+```
+
+Linked instead, the same mistake makes the *plugin* fail to load —
+`Library not loaded: @rpath/liblogosdelivery.dylib` — which Basecamp reports to
+nobody: the tile is inert and the reason goes to stderr. That was measured, both
+ways, before the choice was made.
+
+## Running the checks
 
 Harness 2 — install, then Logos Core headless — is also
 `./scripts/logos-core-headless.sh <category>`, which does everything in this
@@ -515,10 +716,18 @@ configured with the envelope anchored on chain for that agent rather than with
 the placeholder below; the harness defaults to the placeholder when those
 arguments are absent, so the invocation recorded here still works unchanged.
 
-The by-hand version is kept because it is what the wrapper does, and because
-when the wrapper fails it is the way to find out where.
+Harnesses 3 and 4 — the transport ones — have a runner of their own, for the
+same reason and with the same shape:
 
-Both harnesses are plain compiles — no CMake target, so they cannot silently
+```sh
+./scripts/delivery-in-plugin.sh          # 3, and 1 again through QPluginLoader
+./scripts/delivery-in-plugin.sh peers    # 4: two loaded modules, two nodes
+```
+
+The by-hand versions are kept because they are what the wrappers do, and because
+when a wrapper fails they are the way to find out where.
+
+All four harnesses are plain compiles — no CMake target, so they cannot silently
 stop being built.
 
 ```sh
@@ -735,12 +944,18 @@ measurement and one of them changed `module/src`.
 Honest list, in the order that matters:
 
 1. The skills need their ports wired from inside the loaded module. This item
-   used to read "the plugin has to construct and register the skill objects";
-   it does now, and the shipped package is the one that does — all 22 are
-   registered and every one dispatches. What remains is narrower and harder:
-   `registerBuiltinSkills` takes `std::function` ports that cannot cross a
-   plugin boundary, so what a reviewer sees is a full card whose entries refuse
-   for want of a transport rather than for want of a skill.
+   has been rewritten twice and is now mostly done. It first read "the plugin
+   has to construct and register the skill objects"; it does, and all 22
+   dispatch. It then read "`registerBuiltinSkills` takes `std::function` ports
+   that cannot cross a plugin boundary", which was the wrong conclusion from a
+   right premise — a host cannot pass a closure, and a module can build one. The
+   transport ports are now built by the module itself
+   (`module/src/delivery_runtime.cpp`), so `messaging.*`, `agent.discover`,
+   `agent.task` and `agent.subscribe` work in a loaded plugin. What remains
+   needs something in the module's process that no port can supply: a Logos
+   Storage node for `storage.*`, a signing wallet for `wallet.*`, a sequencer
+   endpoint for `program.query`, and a local `spel` for `program.call` /
+   `program.deploy`. Those are four separate pieces of work, not one boundary.
 2. The owner channel over **Logos Messaging** has to be driven from inside the
    loaded module, so that "the owner can interact with the agent in real time
    from a separate Logos app instance using Logos Messaging" is demonstrable.
@@ -761,10 +976,29 @@ Honest list, in the order that matters:
    ```
 
    That closes the Reliability half — a spend that does not reach its owner is
-   retried, timed out, reported and not executed. It does not close the
-   Usability half, which names Logos Messaging and a second app instance
-   specifically, and `OwnerChannel` (which does speak Delivery) still needs a
-   `DeliveryPort` the plugin cannot be handed.
+   retried, timed out, reported and not executed.
+
+   The last sentence of this item used to read: "It does not close the Usability
+   half, which names Logos Messaging and a second app instance specifically, and
+   `OwnerChannel` (which does speak Delivery) still needs a `DeliveryPort` the
+   plugin cannot be handed." The reason in it is now wrong: the plugin builds
+   its own `OwnerChannelPort` from its own node and constructs `OwnerChannel` on
+   it (`AgentModuleImpl::publishApprovalOverDelivery`), preferring it over the
+   runtime event when `owner_channel_account` and `agent_account` are configured
+   and the node is up.
+
+   **The conclusion is still open, and for a smaller reason: nobody has watched
+   an approval cross that composition.** Each part is exercised — the class by
+   `owner_channel_test` and `owner-channel-live.sh`, the node by the three
+   harnesses above, the fallback by `module_recovery_test` — and the assembly of
+   them is not. Measuring it needs an owner-side responder that answers the
+   module's own terms (correlation id `spend-<nonce>`, the configured policy
+   hash, an empty marker seed) rather than terms both sides derive from a shared
+   run id, which is all `owner_channel_live.cpp`'s owner mode can do. Until that
+   exists this item stays open, because "the code is there and every piece of it
+   is tested" is the exact shape of the three claims this repository has already
+   had to retract. The second app instance is open too: the owner end is a
+   program written for the purpose, not Basecamp with a person in front of it.
 
    What *has* since been settled is the other side of that sentence: the class
    the plugin cannot be handed a port for now runs over the public network,

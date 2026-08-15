@@ -535,7 +535,36 @@ the payload carries `"eventType":"message_sent"`; you register
 `"eventType":"channel_message_received"`. Matching the registration name never
 fires. Two constants exist for exactly this reason
 (`owner_channel.h`), and `parseInboundEvent` matches the second
-(`owner_channel.cpp`). Channel payloads also cross the FFI base64-encoded.
+(`owner_channel.cpp`).
+
+**And the two event families do not carry their payload the same way, which is
+the second half of the same trap.** A *channel* frame crosses the FFI
+base64-encoded, as `library/events/json_message_event.nim` documents. A *relay*
+frame does not: `onMessageReceived` is emitted through
+`library/json_event.nim`'s flattening of the Nim `MessageReceivedEvent`, whose
+fields are `messageHash` and `message`, and `std/json` renders that message's
+`seq[byte]` payload as an array of numbers. Measured against a live node rather
+than read off the upstream file — the upstream file that *looks* authoritative
+describes the REST surface, and following it produces a decoder that is wrong in
+the worst available direction:
+
+```json
+{"eventType":"message_received",
+ "messageHash":"0x35bb29aac1b9240ae3a95cd000bdf9ce7183cfda95d1975f6e76cc2a30d7d182",
+ "message":{"payload":[104,101,108,108,111,32,115,104,97,112,101],
+            "contentTopic":"/lp-0008/1/owner-shapeprobe/json",
+            "meta":[],"version":0,"timestamp":1786825616942219008,
+            "ephemeral":false,"proof":[]}}
+```
+
+Not `wakuMessage`, and not base64. A decoder looking for either returns false for
+every frame it is given: the inbox stays empty, `agent.discover` answers with no
+agents, and **an agent that hears nothing looks exactly like an agent nobody is
+talking to.** It cost a full two-process run to find here, and it was found only
+because that run asserted on a card published by the *other* agent — a
+single-process test would have passed, since a Waku node receives its own
+messages. `parseMessageEvent` in `module/src/delivery_runtime.cpp` is written
+against the bytes above.
 
 ### 4.4 There is no response
 
@@ -1188,9 +1217,12 @@ A checklist for someone writing a peer, in the order the work has to happen.
 
 1. **Run a Delivery node.** `createNode` with `entryLayer: "channels"`, `start`,
    and **wait for the `nodeStarted` event** — not for `start` to return (§4.3).
-   Register listeners under `onMessageReceived` / `onChannelMessageReceived` and
+   Register listeners under `onMessageReceived` / `onChannelMessageReceived`,
    match `eventType` against `message_received` / `channel_message_received`, not
-   against the registration name.
+   against the registration name — and read a relay payload out of
+   `message.payload` as an array of bytes, not out of `wakuMessage.payload` as
+   base64. That is the channel encoding, and it is the one the upstream file
+   describes; §4.3 has the frame this repository measured off a live node.
 2. **Get two LEZ accounts**: a shielded identity, and a public receiving account
    initialised under the transfer program.
 3. **Build a card** per §3.1 and validate it against §3.4 before publishing.

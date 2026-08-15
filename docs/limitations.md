@@ -563,12 +563,31 @@ the first attempt, and three watched failures showing the pass is not free.
 It does not answer the *app instance* half, and the distance is worth stating
 because it is easy to read the run as more than it is. The owner side is a
 process this repository starts and links against `liblogosdelivery` — not Logos
-Basecamp with a person in front of it. Two Logos apps have still never talked to
-each other over this channel, and they cannot yet: the class that speaks
-Delivery, `OwnerChannel`, needs a `DeliveryPort`, which is a `std::function` and
-cannot cross the plugin boundary into a Basecamp-loaded module
-([`docs/basecamp.md`](basecamp.md)). So the same object runs on the public
-network from a plain process and cannot be reached from the app.
+Basecamp with a person in front of it.
+
+The second half of that paragraph used to read: "they cannot yet: the class that
+speaks Delivery, `OwnerChannel`, needs a `DeliveryPort`, which is a
+`std::function` and cannot cross the plugin boundary into a Basecamp-loaded
+module." **That was wrong, and it was wrong in a way worth keeping on the page.**
+The premise is true — a host cannot PASS a `std::function` over Qt Remote
+Objects — and the conclusion does not follow from it, because the module does
+not need to be handed a port it can build. It now links `liblogosdelivery`,
+opens a node from its own configuration on `meta.configure("delivery","on")`,
+and constructs its own `DeliveryPort` and `OwnerChannelPort` on the far side of
+the boundary; two strings cross, and no closure does. Measured through
+`QPluginLoader`, through the real runtime out of the installed Basecamp, and
+between two loaded modules on the public network —
+[`scripts/delivery-in-plugin.sh`](../scripts/delivery-in-plugin.sh),
+[`docs/basecamp.md`](basecamp.md).
+
+What is still true is narrower, and is two things. The *owner-side* process in
+`owner-channel-live.sh` is still not a second Basecamp, and no owner-facing UI
+plugin exists in this repository. And the agent end being a loaded module is
+wired but not yet watched: `AgentModuleImpl::publishApprovalOverDelivery`
+constructs `OwnerChannel` on the module's own node, every piece of that is
+exercised separately, and no approval has been observed leaving a loaded module
+and coming back. That needs an owner-side responder answering the module's own
+terms rather than terms derived from a shared run id.
 
 Two smaller things the run does not claim. Both processes were on one machine,
 so the frames went out to public relays (DigitalOcean, Google Cloud, and others
@@ -838,3 +857,12 @@ What *is* met: on a prepared machine each half is a single command that takes no
 arguments beyond the agent's category, deploys, configures, and verifies itself
 by reading back what it wrote — the policy record byte for byte off the chain,
 and the owner and policy account out of the running module's `meta.status`.
+
+Two other things in this repository drive Logos Core, and neither is part of the
+deployment path this section is about — both are checks:
+`module/tests/logos_core_load_test.cpp`, which loads the module and asks it for
+its skills, and `module/tests/logos_core_delivery_test.cpp`, which is where the
+loaded module opens its own Logos Delivery node inside `logos_host`.
+`scripts/delivery-in-plugin.sh` runs the second. So `grep -rn 'logos_core'
+scripts/`, which used to return nothing at all, now returns both the deployment
+half and the transport checks.

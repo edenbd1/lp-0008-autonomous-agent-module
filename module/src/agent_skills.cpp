@@ -1515,6 +1515,17 @@ std::string StatusSkill::invoke(const std::string &paramsJson)
         out["balance"] = balance;
     }
 
+    // The transport. Reported the same way as storage — parsed, never copied
+    // blind — and `null` when nothing answered, so "no delivery record" cannot
+    // be mistaken for "a delivery node that is off".
+    const std::string deliveryJson = call(port_.delivery);
+    if (deliveryJson.empty()) {
+        out["delivery"] = nullptr;
+    } else {
+        auto parsedDelivery = json::parse(deliveryJson, nullptr, false);
+        out["delivery"] = parsedDelivery.is_discarded() ? json(nullptr) : parsedDelivery;
+    }
+
     const std::string storage = call(port_.storage);
     if (storage.empty()) {
         out["storage"] = nullptr;
@@ -1581,7 +1592,9 @@ std::string ConfigureSkill::parameterSchema() const
     return R"({"type":"object","required":["key","value"],)"
            R"("properties":{"key":{"type":"string","enum":["owner_address","policy_hash",)"
            R"("per_tx","per_period","period_blocks","price_per_task","discovery_topic",)"
-           R"("approval_timeout_blocks","approval_timeout_ms","approval_resend_ms"]},)"
+           R"("approval_timeout_blocks","approval_timeout_ms","approval_resend_ms",)"
+           R"("delivery","agent_account","agent_name","pay_account","card_signer",)"
+           R"("owner_channel_account"]},)"
            R"("value":{"type":"string"}}})";
 }
 
@@ -1606,7 +1619,23 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
     // there.
     const bool anchored = key == "per_tx" || key == "per_period" || key == "period_blocks";
 
-    if (key == "owner_address" || key == "discovery_topic") {
+    // The transport switch. `on` is what makes a *loaded* module — one Logos
+    // Core runs in its own process and reaches over Qt Remote Objects — open a
+    // Logos Delivery node of its own and build its own wire ports out of it,
+    // which is the one thing a host cannot do for it: a port is a set of
+    // `std::function`s and there is no wire format for a closure. Two strings
+    // travel; the ports are constructed on the far side.
+    //
+    // Two words and no third, for the same reason `approveSpend` takes two: a
+    // value the module cannot read is not a reason to guess, and here the guess
+    // would be "join the public network".
+    if (key == "delivery") {
+        if (value != "on" && value != "off") {
+            return fail("'delivery' must be 'on' or 'off'");
+        }
+    } else if (key == "owner_address" || key == "discovery_topic" ||
+               key == "agent_account" || key == "agent_name" || key == "pay_account" ||
+               key == "card_signer" || key == "owner_channel_account") {
         if (value.empty()) return fail("'" + key + "' cannot be empty");
     } else if (key == "policy_hash") {
         if (!isLowerHex64(value)) {
@@ -1623,7 +1652,9 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
         return fail("'" + key +
                     "' is not a configurable key. Known keys: owner_address, policy_hash, "
                     "per_tx, per_period, period_blocks, price_per_task, discovery_topic, "
-                    "approval_timeout_blocks, approval_timeout_ms, approval_resend_ms");
+                    "approval_timeout_blocks, approval_timeout_ms, approval_resend_ms, "
+                    "delivery, agent_account, agent_name, pay_account, card_signer, "
+                    "owner_channel_account");
     }
 
     if (!port_.set || !port_.set(key, value)) {

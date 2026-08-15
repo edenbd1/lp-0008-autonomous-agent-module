@@ -4,14 +4,17 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include <logos_module_context.h>
 #include <logos_result.h>
 
 #include "agent_module_interface.h"
 #include "agent_skills.h"
+#include "delivery_runtime.h"
 #include "inference.h"
 #include "messaging_skills.h"
+#include "owner_channel.h"
 #include "program_skills.h"
 #include "storage_skills.h"
 #include "task_persistence.h"
@@ -349,6 +352,33 @@ private:
     /// not a number this build can use.
     std::int64_t settingMs(const char *key, std::int64_t fallback) const;
 
+    /// One `meta.configure` setting, or empty. Takes the module's lock.
+    std::string setting(const char *key) const;
+
+    /// Act on a setting that does something rather than only being stored.
+    ///
+    /// `delivery` is the one that matters: `on` brings this module's OWN Logos
+    /// Delivery node up, which is what turns every `"delivery node is not
+    /// started"` refusal into a working transport without anything crossing the
+    /// plugin boundary except these two strings. See @ref delivery_.
+    void applySetting(const std::string &key, const std::string &value);
+
+    /// Sign `signingInput` by running the operator's signer, or empty.
+    ///
+    /// The curve arithmetic is deliberately somebody else's: BIP-340 over
+    /// secp256k1 needs 256-bit modular arithmetic, this plugin links no crypto
+    /// library, and a hand-rolled one inside a module that signs payment
+    /// instructions is the last place to put one. `CardPort::sign` already
+    /// declares exactly this contract — "given `<protected>.<payload>`, return
+    /// the base64url signature" — and `module/tests/a2a_drive.cpp` already
+    /// satisfies it by delegating. Empty means the key refused or none is
+    /// configured, and an unsigned card is not published.
+    std::string signWithConfiguredSigner(const std::string &signingInput) const;
+
+    /// Publish one approval request over this module's own Delivery node, and
+    /// answer it from the owner's reply. Started once per correlation id.
+    bool publishApprovalOverDelivery(const std::string &requestJson);
+
     mutable std::mutex mutex_;
     /// Declared before `skills_` so it is destroyed after them: the three task
     /// skills and `meta.status` hold a reference to whichever store is in use.
@@ -415,4 +445,33 @@ private:
     /// skill did really did happen, and the thing that failed is the record of
     /// it — which is exactly what an operator needs told.
     std::string lastSaveError_;
+
+    // ---- the module's own transport ---------------------------------------
+    //
+    // The distinction this repository had documented as a limitation and never
+    // tested: a HOST cannot PASS a `std::function` across Qt Remote Objects, and
+    // that is not the same as the MODULE being unable to CONSTRUCT one. The node
+    // below is opened by this module, from its own configuration, and the ports
+    // built out of it are ordinary function objects that never cross a
+    // boundary — only `meta.configure("delivery","on")` does, and that is two
+    // strings.
+    //
+    // Constructed in `installBuiltinSkills`, because the skills capture ports
+    // that point at it and it therefore has to outlive them; it is declared
+    // after `skills_` in a class whose members are destroyed in reverse order,
+    // so the skills go first. Nothing is *started* until asked: joining the
+    // public network takes tens of seconds and is a decision an operator makes,
+    // not a side effect of loading a module.
+    std::unique_ptr<logos::agent::DeliveryRuntime> delivery_;
+
+    /// The owner channel, on this module's own node, when one is configured.
+    /// Guarded by `ownerChannelMutex_` rather than `mutex_`: opening it and
+    /// waiting on it both take seconds, and holding the module's lock for that
+    /// would stall every other skill.
+    mutable std::mutex ownerChannelMutex_;
+    std::unique_ptr<logos::agent::OwnerChannel> ownerChannel_;
+    /// Approval waits in flight over Delivery, by correlation id, so a resend
+    /// from `wallet.send` is one more attempt on the wire and not a second
+    /// channel wait for the same payment.
+    std::map<std::string, std::shared_ptr<std::thread>> ownerWaits_;
 };

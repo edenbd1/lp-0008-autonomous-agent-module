@@ -353,6 +353,17 @@ struct StatusPort {
     /// the module was not asked to report on it at all, and is reported as
     /// `null` — never as "durable".
     std::function<std::string()> durability;
+
+    /// The transport, as JSON: `{"state":"ready","linked":true}`, or with an
+    /// `"error"` when the node failed to come up.
+    ///
+    /// Here because bringing a Delivery node up takes tens of seconds and is
+    /// asynchronous, so "did it work" is a question whose real answer is not yes
+    /// or no yet — and because `"state":"absent"` (this build links no Delivery
+    /// library) and `"state":"off"` (it does, and nobody has asked it to start)
+    /// are two situations that produce byte-identical refusals from every skill
+    /// that touches the wire. Empty means nothing reported, and is `null`.
+    std::function<std::string()> delivery;
 };
 
 /// Where a runtime setting goes once it has been validated.
