@@ -68,3 +68,13 @@ logos_module(
 # per-instance directory, recovered from in `start()`, and checkpointed after
 # every `invoke()` that moved the task store. Compiled in CI is not shipped, and
 # shipped-but-never-constructed is not running.
+#
+# There is a third step in that sequence and it is the one that has actually
+# gone wrong twice: shipped is not necessarily built from what is committed.
+# Everything above describes the relationship between this file and the binary
+# it produces, and says nothing about whether `agent.lgx` — the file a reviewer
+# downloads — was produced from the sources named above or from the sources as
+# they stood ten commits ago. `module/package-basecamp.sh` writes
+# `module/agent.lgx.sources` at packaging time and
+# `scripts/check-package-fresh.py` recomputes it on every CI run, which is what
+# closes it.

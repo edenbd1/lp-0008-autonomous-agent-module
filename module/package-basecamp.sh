@@ -202,6 +202,28 @@ if failures:
     sys.exit("\n".join("  FAIL  " + f for f in failures))
 PY
 
+# The record of what this package was built from.
+#
+# The mtime check at the top of this script catches a build tree older than the
+# source. It cannot catch the other half of the same defect, which is the one
+# that has now shipped twice: a package that was correct when it was made and
+# was left behind by later commits to module/src. Nothing in the package says
+# what source it came from, so the answer is written down beside it, at the one
+# moment it is known for certain — here — and checked on every CI run by
+# scripts/check-package-fresh.py.
+#
+# Only for the canonical artefact. Packaging to some other path is a throwaway
+# and must not rewrite the record for the committed one.
+canonical="$here/agent.lgx"
+if [ "$(cd "$(dirname "$out")" && pwd)/$(basename "$out")" = "$canonical" ]; then
+    QT_VERSIONS="${qtrefs:+$(printf '%s\n' "$qtrefs" | tr -d ')' | awk '{print $NF}' | sort -u | tr '\n' ' ')}" \
+    COMPILER="$( (c++ --version 2>/dev/null || echo unknown) | head -1)" \
+    VARIANT="$variant" \
+    python3 "$here/../scripts/write-package-record.py" "$out" "$plugin"
+else
+    echo "  <-    not $canonical, so module/agent.lgx.sources is left alone"
+fi
+
 "$lgx" verify "$out"
 "$lgx" manifest "$out"
 echo

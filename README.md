@@ -571,6 +571,24 @@ open, and it is a host problem now rather than a transport one —
 The loadable asset is committed: `module/agent.lgx`, one `darwin-arm64`
 variant. Check it against itself rather than trusting this page.
 
+It is a binary built by hand from `module/src`, so the question that matters
+about it is not whether it is a valid package — it always was, twice while
+containing the wrong code — but whether it was built from the source committed
+beside it. That is asserted rather than assumed, on every push, and needs
+nothing but `python3`:
+
+```sh
+./scripts/check-package-fresh.py
+#   ok    all 25 build inputs hash exactly as they did when the package was made
+#   ok    every one of the 654 source literals of >= 8 bytes is in the darwin-arm64 binary
+```
+
+The `package` job in `.github/workflows/ci.yml` runs it, together with four
+controls that each put the repository back into a state it has actually shipped
+and require a red — including the one where `agent.lgx` signed Agent Cards
+`alg: EdDSA`, which [`scripts/use-cases/verify-agent-card.py`](scripts/use-cases/verify-agent-card.py)
+rejects, for the eight commits between the source fix and the repackage.
+
 **This step needs `lgx`, and nothing installs it for you** — it is not on a
 reviewer's `PATH` and it is not in this repository. It is the packager
 Basecamp's own packages are built with, `logos-co/logos-package` pinned at
@@ -807,12 +825,16 @@ module/src                        the Logos Core module: skill registry, owner
 module/tests                      the suites, plus the two load harnesses and
                                   the C node drivers
 module/agent.lgx                  the loadable package (darwin-arm64)
+module/agent.lgx.sources          what that package was built from, written by
+                                  package-basecamp.sh and checked by CI
 examples/agent-console            §5 — the module's dispatcher, from a shell
 examples/skills/notary-digest     §5 — a third-party skill, outside module/src
 scripts/demo.sh                   §1 — the whole thing from a clean clone
 scripts/deploy-agents.sh          §3 — three agents, funded and anchored
 scripts/verify-deployment.sh      checks docs/DEPLOYMENT.md and artifacts/
                                   against the chain, and fails if they disagree
+scripts/check-package-fresh.py    checks module/agent.lgx against module/src,
+                                  and fails if the package is stale
 scripts/a2a-task.sh               §6 — two agents, one A2A task, one settlement
 scripts/exercise-nodes.sh         §7 — real Delivery and Storage nodes
 scripts/owner-channel-live.sh     §7b — the owner channel between two processes

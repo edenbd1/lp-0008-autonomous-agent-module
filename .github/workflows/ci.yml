@@ -514,6 +514,218 @@ jobs:
       #     Driven meanwhile by scripts/exercise-nodes.sh, which owns the paths.
       # ---------------------------------------------------------------------
 
+  # The job above compiles module/src. It says nothing about module/agent.lgx,
+  # which is the file a reviewer downloads, and which is a binary built from that
+  # source by hand on a Mac. Twice now the source changed and nothing repackaged:
+  #
+  #   f53f822's agent.lgx stayed committed across five commits to module/src, so
+  #   the downloadable module had no content-topic validation, no owner-channel
+  #   hardening, no flag checking in program.call and no task persistence, while
+  #   README §7 offered it as the loadable asset.
+  #
+  #   d995d85 made the module sign Agent Cards `secp256k1-bip340` instead of
+  #   `EdDSA`, because scripts/use-cases/verify-agent-card.py — this repository's
+  #   own verifier — rejects EdDSA outright. The source was fixed and the package
+  #   was not rebuilt, so the published .lgx signed cards this repository's own
+  #   tooling refuses. It would have failed in front of a reviewer.
+  #
+  # Neither was caught by a test. The second was found by counting strings in the
+  # two binaries, and that is worth dwelling on, because it says what could not
+  # have caught it: the stale binary and the fresh one are both 3699040 bytes,
+  # both load, both cast across the plugin boundary and both answer skills() with
+  # all 22 entries. Size, load and the whole plugin-contract harness pass on the
+  # wrong one.
+  #
+  # WHY THERE IS NO REBUILD HERE, named rather than implied, because "prefer
+  # failing loudly to guessing" applies to the workflow as much as to the script:
+  #
+  #   - The package ships one variant and it is darwin-arm64. ubuntu-latest
+  #     cannot emit a Mach-O arm64 dylib: that needs the macOS SDK, which is not
+  #     redistributable and is not on this runner. So the rebuild-and-compare
+  #     that would settle the question outright is not available in this job at
+  #     any price, and pretending otherwise by comparing a linux-amd64 .so
+  #     against a darwin-arm64 dylib would be a check in the shape of a check.
+  #
+  #   - macos-14 is arm64 and could do it — aqtinstall for the pinned Qt 6.9.2,
+  #     the three logos checkouts docs/basecamp.md pins, brew nlohmann-json, and
+  #     a build that takes 3.5 seconds. It is not added here because it has never
+  #     been watched run, and by this repository's own standard a guard nobody
+  #     has watched fail is not a guard. It is one command away for whoever wants
+  #     to watch it: `scripts/check-package-fresh.py --rebuild build-basecamp`,
+  #     which is run locally and which fails loudly rather than skipping when the
+  #     toolchain is absent.
+  #
+  #   - A whole-file comparison would also need honesty about determinism.
+  #     Measured: the plugin IS byte-reproducible — rebuilt into a different
+  #     build directory, from a source tree at a different absolute path, under a
+  #     different TZ and locale, it comes out at the identical sha256. But that
+  #     is one machine. The compiler, the macOS SDK, the Qt patch level and
+  #     nlohmann/json are none of them pinned by this repository, and a gate that
+  #     goes red because GitHub bumped Xcode is a gate people learn to skip.
+  #
+  # So what runs here is what CAN run here, and it needs nothing but python3:
+  # a provenance record written at packaging time and recomputed on every push,
+  # plus a reading of the shipped binary's own bytes that is the same evidence
+  # the human investigation used. The three controls below are the point of the
+  # job — each one puts the repository back into a state it has actually shipped
+  # and requires a red.
+  package:
+    name: The shipped .lgx was built from the committed source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The package agrees with the source committed beside it
+        run: |
+          set -euo pipefail
+          ./scripts/check-package-fresh.py 2>&1 | tee package.out
+          # The exit code is the assertion; the banner proves it got that far.
+          # No step may go green by skipping.
+          grep -q "^OK the shipped package was built from the source" package.out \
+            || { echo "check-package-fresh.py exited 0 without reporting a full pass"; exit 1; }
+          if grep -q SKIPPED package.out; then
+            echo "check-package-fresh.py reported SKIPPED"; exit 1
+          fi
+
+          # How many build inputs there are, and how many it says it checked.
+          # Not a hardcoded number — module/src has grown twice this month, and
+          # the invariant that matters is that NONE were silently passed over.
+          on_disk=$(( $(find module/src module/generated_code -type f \
+                          \( -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \
+                             -o -name '*.cc' -o -name '*.json' -o -name '*.txt' \) \
+                        | wc -l) + 3 ))
+          got=$(sed -n 's/.*commit: \([0-9][0-9]*\) build input(s) recorded.*/\1/p' package.out)
+          echo "build inputs on disk=$on_disk  checked=${got:-none}"
+          [ -n "$got" ] || { echo "it exited 0 without saying how many it checked"; exit 1; }
+          [ "$got" -eq "$on_disk" ] \
+            || { echo "it checked $got of $on_disk build inputs — some were skipped"; exit 1; }
+
+          # And the second layer really read the binary. 654 literals today; a
+          # floor rather than an equality, because literals come and go with
+          # ordinary edits and only "essentially none" is a defect.
+          lits=$(sed -n 's/.*unchanged, \([0-9][0-9]*\) literal(s) found.*/\1/p' package.out)
+          echo "literals cross-checked against the shipped binary=${lits:-none}"
+          [ -n "$lits" ] && [ "$lits" -ge 400 ] \
+            || { echo "the binary was barely read: ${lits:-0} literals"; exit 1; }
+          rm -f package.out
+
+      # Control 1, and it is the defect itself rather than an analogue of it:
+      # change what the module signs cards with, exactly as d995d85 did, and
+      # repackage nothing. This is the state main was in at 04c9c79.
+      - name: Negative control — source moves, package does not
+        run: |
+          set -euo pipefail
+          sed -i 's|alg = "secp256k1-bip340"|alg = "secp256k1-bip340-strict-v2"|' \
+            module/src/agent_skills.cpp
+          ! git diff --quiet module/src/agent_skills.cpp \
+            || { echo "the control edited nothing; agent_skills.cpp no longer has the line"; exit 1; }
+          set +e
+          ./scripts/check-package-fresh.py > stale.out 2>&1; rc=$?
+          set -e
+          cat stale.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a stale package passed the freshness check"; exit 1; }
+          # Red for the right reason, not because the script fell over.
+          grep -q "module/src/agent_skills.cpp has changed since the package was made" stale.out \
+            || { echo "it went red without naming the file that changed"; exit 1; }
+          grep -q "secp256k1-bip340-strict-v2" stale.out \
+            || { echo "the binary was not read: the new literal was never looked for"; exit 1; }
+          git checkout -- module/src/agent_skills.cpp
+          rm -f stale.out
+
+      # Control 2. The record is a record, so the obvious way past it is to
+      # rewrite it by hand and never rebuild — which is the *only* thing anyone
+      # would do if the record were the whole guard. So do exactly that, and
+      # require the second layer to catch it alone. Without this step the
+      # literal check is decoration sitting behind a hash comparison that
+      # already fired.
+      - name: Negative control — a rewritten record cannot cover for a stale binary
+        run: |
+          set -euo pipefail
+          sed -i 's|alg = "secp256k1-bip340"|alg = "secp256k1-bip340-strict-v2"|' \
+            module/src/agent_skills.cpp
+          python3 - <<'PY'
+          import hashlib, json
+          rec = json.load(open("module/agent.lgx.sources"))
+          p = "module/src/agent_skills.cpp"
+          assert p in rec["built_from"], "the record does not cover the file being forged"
+          rec["built_from"][p] = hashlib.sha256(open(p, "rb").read()).hexdigest()
+          json.dump(rec, open("module/agent.lgx.sources", "w"), indent=2, sort_keys=True)
+          print("record rewritten by hand for", p, "- nothing was rebuilt")
+          PY
+          set +e
+          ./scripts/check-package-fresh.py > forged.out 2>&1; rc=$?
+          set -e
+          cat forged.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a hand-written record was enough to pass"; exit 1; }
+          # Layer 1 must be satisfied — otherwise this proves nothing about
+          # layer 2 — and layer 2 must be the thing that went red.
+          grep -q "all .* build inputs hash exactly as they did" forged.out \
+            || { echo "the forgery did not actually satisfy the record check"; exit 1; }
+          grep -q "source literals are absent from the darwin-arm64 binary" forged.out \
+            || { echo "the literal check is not what caught it"; exit 1; }
+          git checkout -- module/src/agent_skills.cpp module/agent.lgx.sources
+          rm -f forged.out
+
+      # Control 3, from the other end: leave the source alone and alter the
+      # package. A .lgx is a gzipped tar, so this rewrites it as one — reading it
+      # as a zip gets BadZipFile, which reads like a corrupt package and is not.
+      - name: Negative control — a package whose binary was swapped
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import io, tarfile
+          src = tarfile.open("module/agent.lgx", "r:gz")
+          members = [(m, src.extractfile(m).read() if m.isfile() else None)
+                     for m in src.getmembers()]
+          hit = 0
+          out = tarfile.open("module/agent.lgx", "w:gz", format=tarfile.GNU_FORMAT)
+          for m, data in members:
+              if data is not None and m.name.endswith((".dylib", ".so")):
+                  # One byte, deep in __TEXT. Same length, so the size and the
+                  # manifest's own idea of the file are untouched.
+                  data = data[:0x40000] + bytes([data[0x40000] ^ 0xFF]) + data[0x40001:]
+                  hit += 1
+              out.addfile(m, io.BytesIO(data)) if data is not None else out.addfile(m)
+          out.close()
+          assert hit == 1, "expected exactly one plugin binary in the package, found %d" % hit
+          print("one byte flipped in the packaged plugin; the archive is otherwise identical")
+          PY
+          set +e
+          ./scripts/check-package-fresh.py > swapped.out 2>&1; rc=$?
+          set -e
+          cat swapped.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a package holding a different binary passed"; exit 1; }
+          grep -q "the package holds a different build from the one that was recorded" swapped.out \
+            || { echo "it went red without naming the binary"; exit 1; }
+          git checkout -- module/agent.lgx
+          rm -f swapped.out
+
+      # Control 4, one level up. docs/basecamp.md quotes the package's root hash
+      # as evidence, and that citation was found reading cf07408e… — the package
+      # whose Agent Cards this repository's own verifier rejects — long after
+      # that package had been replaced. Same failure as the three superseded
+      # transactions in SUBMISSION-DRAFT.md: a literal in prose that has to be
+      # hand-edited on every rebuild is a literal that will be forgotten.
+      - name: Negative control — the document may not cite a superseded package
+        run: |
+          set -euo pipefail
+          root=$(python3 -c "import json,tarfile;print(json.loads(tarfile.open('module/agent.lgx','r:gz').extractfile('manifest.json').read())['hashes']['root'])")
+          grep -q "$root" docs/basecamp.md \
+            || { echo "docs/basecamp.md does not cite the committed package at all"; exit 1; }
+          sed -i "s/$root/0000000000000000000000000000000000000000000000000000000000000000/" docs/basecamp.md
+          set +e
+          ./scripts/check-package-fresh.py > cite.out 2>&1; rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a document citing a package that is not the committed one passed"; exit 1; }
+          grep -q "does not quote this package's root hash" cite.out \
+            || { echo "it went red for some other reason"; cat cite.out; exit 1; }
+          git checkout -- docs/basecamp.md
+          rm -f cite.out
+
   # A real Storage node, on the runner, doing the thing the skill claims.
   #
   # The fake-port suites above prove the skills behave when the node misbehaves.

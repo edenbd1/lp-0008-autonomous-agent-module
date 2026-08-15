@@ -400,7 +400,49 @@ once, with `main` naming `agent_module_plugin` while the builder emits
 fails on the absolute `/opt/homebrew/...` paths before the version even matters,
 because those resolve on the build machine and on no other.
 
-The committed package is `module/agent.lgx` (589 KB, one `darwin-arm64`
+### The package records what it was built from
+
+Packaging also writes `module/agent.lgx.sources`: the SHA-256 of every build
+input, the SHA-256 of the plugin binary that came out, and the package's
+manifest root hash. `scripts/check-package-fresh.py` reads it back, and the
+`package` job in `.github/workflows/ci.yml` runs that on every push.
+
+It exists because the two checks above cannot see the defect that has now
+shipped twice from this directory — a package that was correct when it was made
+and was left behind by later commits to `module/src`. `f53f822`'s `agent.lgx`
+stayed committed across five commits to the sources; and `d995d85` made the
+module sign Agent Cards `secp256k1-bip340` instead of the `EdDSA` that
+`scripts/use-cases/verify-agent-card.py` rejects, without repackaging, so the
+published `.lgx` signed cards this repository's own verifier refuses. Both
+binaries load, cast, and answer `skills()` with all 22 entries, and the stale
+one is the same 3699040 bytes as the fresh one, so nothing in `module/tests/`
+could tell them apart.
+
+Do not hand-edit that file. If CI says the package is stale, the fix is to
+rebuild and repackage; editing the hashes is a claim about a build that did not
+happen, and the checker's second layer — every string literal in `module/src` of
+8 bytes or more must be present in the shipped binary — is there to catch
+exactly that.
+
+Locally, and only locally, the same script will also rebuild and compare:
+
+```sh
+./scripts/check-package-fresh.py --rebuild build-basecamp
+#   ok    a rebuild of the committed source is byte-identical to the
+#         darwin-arm64 binary in the package (sha256 595c225721ab998a)
+```
+
+That comparison is whole-file, and it holds: rebuilt into a different build
+directory, from a source tree at a different absolute path, under a different
+`TZ` and a different locale, the plugin comes out at the identical SHA-256. What
+it does not survive is a different toolchain — the compiler, the macOS SDK, the
+Qt patch level and `nlohmann/json` all reach the bytes and none of them is
+pinned by this repository — which is why `--rebuild` is a local command and not
+a CI step. It fails loudly when the toolchain is absent rather than passing.
+
+The committed package is `module/agent.lgx` (674 KB at the moment of writing —
+it was 589 KB when this sentence was first written and nobody noticed it grow,
+which is the whole argument for the checked record above; one `darwin-arm64`
 variant). Check it against itself rather than trusting this document:
 
 `lgx` is not on `PATH` after building `logos-package` — it stays in that
@@ -415,12 +457,17 @@ $LGX verify   module/agent.lgx    # contents match the manifest hashes
 $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
-At the time of writing that prints root hash
-`cf07408ea4d97a0efa11d32fea6ab7487c05faa522bce9c2077f05d7aa246c8b`. Rebuilding
-the module changes it; none of the checks below depend on the value. (The
-archive's own sha256 changes on every repackage even when the root hash does
-not — gzip records a timestamp. The root hash is the one that describes the
-contents.)
+That prints root hash
+`ea0a0f789ece18742d1459975f4db10974ffa4d6a42fac810e6fe2689b802409`. Rebuilding
+the module changes it; none of the checks below depend on the value, and this
+line no longer has to be remembered — the same hash is in
+`module/agent.lgx.sources`, written by the packaging script and checked by CI,
+so a stale copy of it here is now a CI failure rather than a paragraph nobody
+re-reads. (This line was stale: it said `cf07408e…`, which is the package as it
+stood at `04c9c79` — the one whose Agent Cards this repository's own verifier
+rejects. The archive's own sha256 changes on every repackage even when the root
+hash does not, because gzip records a timestamp. The root hash is the one that
+describes the contents.)
 
 ## Installing it into Basecamp
 
