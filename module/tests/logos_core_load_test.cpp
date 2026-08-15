@@ -180,6 +180,27 @@ const char *const kUnregistered = "no skill named";
 /// says the module is not up, the other says the name is not in its registry.
 const char *const kNotStarted = "agent is not started";
 
+/// THE SHAPE BOTH OF THOSE STRINGS EXIST TO GUARD AGAINST, stated once so the
+/// checks below can be read against it.
+///
+/// An assertion whose pass condition is *"the answer did not contain X"* is
+/// satisfied by every answer that is not X — including the ones that mean
+/// nothing ran. The same defect wearing its other hat is *"the field is not
+/// true"*: `QJsonValue::toBool()` on a key that is absent returns `false`, so
+/// `answer.value("submitted").toBool() == false` passes for
+/// `{"ok":false,"error":"agent is not started"}`, which carries no `submitted`
+/// key at all. And its third hat is *"the call did not succeed"*: `resultOk()`
+/// is false both for a `LogosResult` that failed and for a call that never
+/// arrived, so `!resultOk(...)` reads a dead transport as a refusal.
+///
+/// Three checks in this file had one of those three shapes, and all three
+/// printed `ok` in a run where the module never started. Every check that is
+/// about the *behaviour* of a running module therefore now asserts something
+/// positive: a field is **present** and has a value, an answer echoes the terms
+/// it was asked about, a `LogosResult` **came back** and says why it refused.
+/// The rule of thumb, since it will come up again: if breaking the module makes
+/// a line print `ok`, the line is checking the wrong thing.
+
 /// The installed layout is the package flattened: `manifest.json` beside the
 /// binary it names, plus a `variant` file saying which variant was unpacked.
 /// `main` is resolved by the host against that directory, and a `main` that
@@ -426,18 +447,23 @@ int main(int argc, char **argv)
           QStringLiteral("it lists exactly %1 — no more, no fewer (got %2)")
               .arg(kSkillCount)
               .arg(entries.size()));
-    // The count is in the message on purpose: "every listed skill carries a
-    // schema" is also true of a card with nothing on it, and a check that
-    // passes for an empty answer is the failure mode this whole harness exists
-    // to catch.
-    check(unschemad.isEmpty(),
-          unschemad.isEmpty()
-              ? QStringLiteral("every listed skill carries a parameter schema "
-                               "(%1 checked)")
-                    .arg(entries.size())
-              : QStringLiteral("%1 skill(s) list no parameter schema: %2")
-                    .arg(unschemad.size())
-                    .arg(unschemad.join(QStringLiteral(", "))));
+    // `!entries.isEmpty()` is the load-bearing half. "Every listed skill
+    // carries a schema" is also true of a card with nothing on it, and this
+    // line used to say so out loud in its message — `(0 checked)` — while still
+    // printing `ok`. It did exactly that in a run where `start()` had failed and
+    // `skills()` answered `{"error":"agent is not started"}`. Naming the failure
+    // mode in the message is not the same as failing on it.
+    check(!entries.isEmpty() && unschemad.isEmpty(),
+          entries.isEmpty()
+              ? QStringLiteral("the card is empty, so there is no schema to check: this line "
+                               "must not pass for that")
+              : unschemad.isEmpty()
+                    ? QStringLiteral("every listed skill carries a parameter schema "
+                                     "(%1 checked)")
+                          .arg(entries.size())
+                    : QStringLiteral("%1 skill(s) list no parameter schema: %2")
+                          .arg(unschemad.size())
+                          .arg(unschemad.join(QStringLiteral(", "))));
 
     // ---- and that the card is not a list of names nothing answers to -------
     //
@@ -565,7 +591,34 @@ int main(int argc, char **argv)
             .toString();
     const QJsonObject send = QJsonDocument::fromJson(sendJson.toUtf8()).object();
     note(QStringLiteral("wallet.send above threshold: %1").arg(sendJson.left(300)));
-    check(send.value(QStringLiteral("submitted")).toBool() == false,
+
+    // Did a *running* agent answer this, about *this* spend?
+    //
+    // Asked first, and separately, because the check under it used to be
+    // `send.value("submitted").toBool() == false` on its own — and that passes
+    // for `{"ok":false,"error":"agent is not started"}`, which has no
+    // `submitted` key: an absent key reads back as `false`, and `false == false`
+    // is a pass. So "an above-threshold spend is not submitted" printed `ok`
+    // against a module that was not serving at all, which is the worst place in
+    // this harness for that shape to be — it is half of the criterion this
+    // repository claims to meet.
+    //
+    // Presence of the key is the minimum, and the echoed terms are what make it
+    // an answer about the payment that was asked about rather than about some
+    // other refusal that happens to carry the field.
+    const bool spendWasAnswered =
+        send.contains(QStringLiteral("submitted"))
+        && send.value(QStringLiteral("recipient")).toString().endsWith(
+               QLatin1String("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb72Ntu8bT"))
+        && send.value(QStringLiteral("amount")).toString() == QLatin1String("100");
+    check(spendWasAnswered,
+          spendWasAnswered
+              ? QStringLiteral("a running agent answered the spend, naming the recipient and "
+                               "amount it was asked about")
+              : QStringLiteral("wallet.send was not answered by a running agent (%1): every "
+                               "check below is about what a running one does")
+                    .arg(sendJson.left(120)));
+    check(spendWasAnswered && send.value(QStringLiteral("submitted")).toBool() == false,
           "an above-threshold spend nobody approved is not submitted by the loaded module");
     check(send.value(QStringLiteral("outcome")).toString() == QLatin1String("owner_unreachable"),
           "and the outcome is the terminal owner-unreachable one, not a fallback to acting alone");
@@ -580,11 +633,33 @@ int main(int argc, char **argv)
     // about a request nobody made, so this cannot accidentally authorise
     // anything: a *refusal* here is the pass, and it proves `approveSpend` is
     // dispatched rather than swallowed.
+    //
+    // "A refusal is the pass" is the third hat of the shape above, and it needs
+    // two conditions rather than one. `!resultOk(...)` alone is true when the
+    // call never arrived — `resultOk` reports "no LogosResult came back" through
+    // the same `false` it reports a refusal with — so a dead transport, an
+    // unloaded module or a method that does not exist would all have read as
+    // "reachable, and refuses". So: a `LogosResult` must actually have come
+    // back, it must be a failure, and it must be *this* failure.
+    //
+    // These two lines stay green in the corrupted-snapshot run below, and that
+    // is correct rather than another instance of the shape: `approveSpend` is
+    // not gated on `start()`, so a module that is loaded but not started really
+    // does answer, and really does refuse. Do not "fix" it into a failure — the
+    // check is about the answer path being reachable, and it was.
     QString approveWhy;
     const QVariant approved = client->invokeRemoteMethod(
         target, QStringLiteral("approveSpend"), QVariant(QStringLiteral("spend-nobody-asked")),
         QVariant(QStringLiteral("approved")));
-    check(!resultOk(approved, &approveWhy),
+    const bool approveAnswered = approved.canConvert<LogosResult>();
+    const bool approveRefused = approveAnswered && !resultOk(approved, &approveWhy);
+    check(approveAnswered,
+          approveAnswered
+              ? QStringLiteral("approveSpend answered across the transport")
+              : QStringLiteral("approveSpend never answered (%1): a call that did not arrive "
+                               "is not a refusal")
+                    .arg(approveWhy));
+    check(approveRefused && approveWhy.contains(QLatin1String("no spend is waiting")),
           QStringLiteral("approveSpend is reachable, and refuses a request nobody is waiting "
                          "on: %1")
               .arg(approveWhy));
