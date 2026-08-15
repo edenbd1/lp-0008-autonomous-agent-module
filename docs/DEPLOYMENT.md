@@ -17,9 +17,18 @@ A LEZ program-deployment tx hash is `SHA256(borsh(bytecode))`, content
 addressed, so the binary committed under `artifacts/programs/` hashes to exactly
 this transaction — recompute it rather than trusting the table.
 
-| Program | ImageID | Deploy tx | Explorer |
-|---|---|---|---|
-| Agent spending policy (`agent_verifier.bin`) | `15d234e5…32062e6a` | `b028eabf…b8c18549` | [link](https://explorer.testnet.lez.logos.co/transaction/b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549) |
+| Program | ImageID | Deploy tx | Block | Explorer |
+|---|---|---|---|---|
+| Agent spending policy (`agent_verifier.bin`) | `26ed1580…0bad50be` | `8c87cc9b…2d20ebbe` | 8646 | [link](https://explorer.testnet.lez.logos.co/transaction/8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe) |
+
+Its ProgramId — the id accounts record as their owner — is
+`3cxAuaA7Xqy7gGrxPKXFDuRniatvnedkc8LvtjYQ1FgZ`, or
+`2148920614,3576134543,3415609557,259224239,1770396588,3252552076,3201387284,3192958219`
+in the decimal words `getAccount` answers with.
+
+The program deployed before this one, `b028eabf…b8c18549`, is still on chain and
+is referenced below: the attack it accepted is what makes the defect this
+release fixes a matter of record rather than a claim.
 
 Recompute the deploy hash from the repository:
 
@@ -34,14 +43,14 @@ and read it back off the chain:
 
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549"]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe"]}'
 ```
 
 Rebuild it and get the same ImageID:
 
 ```bash
 cargo risczero build --manifest-path crates/agent-verifier-spel/methods/guest/Cargo.toml
-# ImageID: 15d234e5d4199b3a0b98d6c6f5fb4540fa41e46eba5fa14fabbd323832062e6a
+# ImageID: 26ed15808f7b27d5d51096cbaf72730fac1b86698c01dec1144bd1be0bad50be
 ```
 
 ### The second program
@@ -76,14 +85,28 @@ One per default skill category. Each has its own shielded account — a shared k
 would not be "indistinguishable on-chain from any other account holder" — and its
 own anchored policy.
 
-| Category | Agent (shielded) | Paid at (public) | Policy hash | Limits | create_policy |
-|---|---|---|---|---|---|
-| storage | `7o9PT8uE…PGPEUM6` | `5Sa13NyN…dHtjnZ` | `b040065d…ec749a87` | 50 / 500 per 1000 blocks | [`ab017c9c…d67735f2`](https://explorer.testnet.lez.logos.co/transaction/ab017c9c9d55ac6ea198e692c5ed2b1dea4a2a70a1863495e48e7a91d67735f2) |
-| messaging | `25LLt4Zx…gMdsafw` | `Dxh7ZLHF…fpEwD` | `885981bf…e8e0f5aa` | 25 / 250 per 1000 blocks | [`9373d809…92df8104`](https://explorer.testnet.lez.logos.co/transaction/9373d8094e3eb4a7efac5ce2514fbb58d188e84ad45582f2fe60738192df8104) |
-| blockchain | `9KdQSJ2t…VXicNe` | `BzYks91a…H2wLnu` | `a03fb8fb…0496725e` | 200 / 1000 per 1000 blocks | [`b4a73bef…390428bf`](https://explorer.testnet.lez.logos.co/transaction/b4a73befe7d653805588ddaf7eccba5020cd0576db40039373d79d2d390428bf) |
+| Category | Agent (shielded) | Paid at (public) | Policy hash | Limits | create_policy | Block |
+|---|---|---|---|---|---|---|
+| storage | `7o9PT8uE…PGPEUM6` | `5Sa13NyN…dHtjnZ` | `610135ad…86047ac3` | 50 / 500 per 1000 blocks | [`d3a0fc9b…988db74b`](https://explorer.testnet.lez.logos.co/transaction/d3a0fc9b75d71440686ec55503172b7a81a0897e02cae47c8a982242988db74b) | 8649 |
+| messaging | `GpRdooEW…Zpe5FS` | `Dxh7ZLHF…fpEwD` | `2a1e2940…815d3a60` | 25 / 250 per 1000 blocks | [`b0c78a6e…dcfe40ec`](https://explorer.testnet.lez.logos.co/transaction/b0c78a6e26e3f854386c7d1262e27cc03681ace18032fa92c1cba7ebdcfe40ec) | 8651 |
+| blockchain | `9KdQSJ2t…VXicNe` | `BzYks91a…H2wLnu` | `1a317aae…c6e7c356` | 200 / 1000 per 1000 blocks | [`e68411fa…f218513c10`](https://explorer.testnet.lez.logos.co/transaction/e68411fa8aec0c8a3fff4d428a0e8705fbb7dc368e367fc8d2da96f218513c10) | 8652 |
 
-Blocks 8591, 8594 and 8596. Manifest, with the full ids and the account that
-anchored each policy: [`artifacts/agents.tsv`](../artifacts/agents.tsv).
+Manifest, with the full ids and the account that anchored each policy:
+[`artifacts/agents.tsv`](../artifacts/agents.tsv).
+
+Every anchor has its **own** signer, and each of those was made by
+`wallet account new public` and had never signed anything. `spel` builds each
+transaction against nonce 0 while the sequencer checks the nonce for exact
+equality, so a signer's second program transaction is built stale, submitted,
+given a hash, and then silently dropped. Nothing reports it — which is why this
+is written down rather than discovered again.
+
+The ids committed into a policy hash are the **32 raw bytes of the accounts**,
+not a hash of how they are printed. That changed with this deployment because
+the program now compares them: `owner_id` against the account that signed
+`create_policy`, `agent_id` against the account presenting itself as the payer
+in `spend`. A sha256 of a base58 string is not something the chain can check
+against anything.
 
 The envelopes differ on purpose: identical limits under one owner collapse to
 one policy hash, and anchoring-by-address is easier to see when three envelopes
@@ -102,18 +125,114 @@ Read any of it back:
 ```bash
 # the policy account for the blockchain agent's envelope
 spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
-  pda policy --policy-hash a03fb8fb318b01d43c9d1a6c7a651210de14c1677fbdd83faa8488fc0496725e
-# 8zsfnzAk… for storage; each envelope gives a different address
+  pda policy --policy-hash 1a317aae885143298b3b033539273a02ff9c0c4f55e586f979a22b15c6e7c356
+# BLHNchq8haEZ8w1UPk68Qr6sGLzYZB6haBrZLZ4GhpsS
+# 5fEo2TGt… for storage and 7fExSPpR… for messaging: each envelope, a different
+# address
 
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["<that address>"]}'
-# program_owner = 2UBUEH2tvc9xrYy21ZcQ6Bm4thn86cs2NPQJJNozuisb, the policy program
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["BLHNchq8haEZ8w1UPk68Qr6sGLzYZB6haBrZLZ4GhpsS"]}'
+# program_owner = 3cxAuaA7Xqy7gGrxPKXFDuRniatvnedkc8LvtjYQ1FgZ, the policy program
+# data         = the running total, 24 bytes: window_start then spent
+```
+
+That `data` field is worth a second look, because it is the second defect this
+release fixes. It was empty at anchoring and the settlements below wrote it:
+
+```bash
+curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["BLHNchq8haEZ8w1UPk68Qr6sGLzYZB6haBrZLZ4GhpsS"]}' \
+| python3 -c "
+import json,sys
+d=bytes(json.load(sys.stdin)['result']['data'])
+print('period', int.from_bytes(d[:8],'little'), 'spent', int.from_bytes(d[8:],'little'))"
 ```
 
 Agent keys live outside the repository, under `~/.lp0008-agents/`. An agent
 whose key is committed is not an agent, and one whose key is thrown away cannot
 sign again — the first version of the deploy script created each account in a
 temporary directory and lost it, which is why this is stated rather than assumed.
+
+## What this deployment fixes, and the transactions that show it
+
+Two defects, both found by executing the deployed binary rather than by reading
+it, and both of which made a headline claim in this repository false.
+
+### 1. An agent could anchor its own policy
+
+`create_policy` took `owner_id` as caller-supplied bytes and never compared them
+to the account that signed. So "an attacker who takes the agent process cannot
+raise the ceiling" was wrong: they could not *edit* a policy, but they could
+anchor a fresh one and use that. Here is the transaction, against the previous
+program:
+
+```bash
+curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["c0b21ba6325e451d61408692b4f897ff6e5d22535abeecb671c59a4b1af554c2"]}'
+```
+
+`c0b21ba6…` is a `create_policy` with `per_tx = per_period = u128::MAX`, signed
+by `3KcCpbGL…fZ8pm2` and naming owner `aaaa…aaaa`, an account nobody controls.
+Program `b028eabf…`, block 8652. Accepted.
+
+The identical call to the program deployed today is `30c93c61…`, and
+`getTransaction` answers `null` for it: submitted, never included.
+
+That second half proves nothing by itself — a refused hash, a pending one and a
+hash nobody ever sent all answer `null`, which is what `demo.sh`'s
+cannot-exist-hash control has always demonstrated. The refusal is shown where it
+can be, against the binary itself:
+
+```bash
+cd crates/agent-verifier-adversarial && cargo run --release
+```
+
+That runs `artifacts/programs/agent_verifier.bin` — the bytes whose SHA-256 is
+the deploy transaction — in the risc0 executor, with pre-states built the way
+the state machine builds them, and asserts the error code each hostile call
+halts with:
+
+| Call | Halts |
+|---|---|
+| anchoring a policy naming an owner the signer does not control | 6012 |
+| spending under a policy anchored for a different agent | 6013 |
+| a spend that would carry the period total past the per-period limit | 6006 |
+| a period that does not start on a multiple of `period_blocks` | 6014 |
+
+Each is paired with the honest call it differs from in one field, because a
+check that only ever refuses says nothing about what is accepted. `demo.sh`
+runs the whole thing.
+
+Three bindings were needed, not one. Fixing `create_policy` alone would have
+changed nothing: an attacker who cannot invent an owner id can anchor a policy
+under an account it really controls and point the compromised agent at that
+hash, so `spend` and `spend_approved` also had to check that the account paying
+is the agent the policy names. And `approve_spend` took a signer without asking
+whether it was the policy's owner, so the agent could sign its own approvals and
+cross the threshold from the other side.
+
+### 2. The per-period limit counted nothing
+
+`spent_this_period` was an instruction argument. Both callers passed 0, the
+policy account held no data, and `period_blocks` was folded into the address and
+never compared to anything — so the enforced ceiling was `min(per_tx,
+per_period)` **per transaction**, unbounded in aggregate.
+
+The running total now lives in the policy account's `data`, written by the
+program that owns that account (LEZ rule 6 permits it there and nowhere else).
+The period is harder, because no program on this chain can read the block
+height: `ProgramInput` carries the program id, the caller, the pre-states and
+the instruction, and nothing else. What a program *can* do is constrain where
+its transaction lands, so `spend` takes the period as an argument and makes the
+argument binding — it must be a multiple of `period_blocks`, it may not be older
+than the period the ledger records, and the transaction is pinned to
+`[window_start, window_start + period_blocks)` via `ProgramOutput`'s block
+validity window, which the state machine enforces with `OutOfValidityWindow`.
+Naming a later period yields a transaction no current block accepts; naming an
+earlier one is refused outright.
+
+`data` on `BLHNchq8…`, above, is that ledger, and the two settlements below are
+what wrote it.
 
 ## Two agents settling a task in LEZ, unattended
 
