@@ -2,6 +2,40 @@
 
 What does not work, stated before anyone has to discover it.
 
+## Paying another agent needs its keys, not its account id
+
+`spend` now declares the recipient and moves balance (program `6e4a2000…`,
+ImageID `c2f56a0a…`), and the three policies anchor against funded agents. The
+settlement still does not go through, and the reason is worth stating exactly
+because it is a property of the shielded model rather than a bug to patch:
+
+```
+❌ Failed to submit privacy-preserving transaction: KeyNotFoundError
+```
+
+The payer signs from its own wallet home. Building a transaction that touches a
+*private* recipient requires that recipient's state, and a private account's
+state cannot be constructed without its viewing key. The payer's wallet does not
+have the storage agent's keys, so `--recipient Private/<id>` cannot be resolved
+at all. It is the same wall as funding: `auth-transfer` reaches a shielded
+account through `--to-keys`, never through an account id.
+
+Two ways out, neither yet built:
+
+- **Publish the payment keys in the Agent Card.** A2A cards already advertise
+  how to reach a service; `x-logos` could carry the recipient's `npk`/`vpk`
+  alongside the price. This keeps both agents shielded and is the honest fit
+  for the protocol, but it needs spel to accept a key-addressed recipient
+  account, which its CLI does not currently expose.
+- **Give each agent a public receiving account.** `--recipient Public/<id>`
+  resolves without any key exchange. It works today, at the cost of making the
+  amount and the recipient of every task payment public, which contradicts the
+  claim that an agent is "indistinguishable on-chain from any other account
+  holder".
+
+The first is right and the second is quick. Choosing the second silently would
+be the kind of trade that reads as met and is not.
+
 ## The settlement authorises a payment; it does not move tokens
 
 This is the significant one, and it was overstated here and in
