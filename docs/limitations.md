@@ -2,6 +2,32 @@
 
 What does not work, stated before anyone has to discover it.
 
+## One signer anchors exactly one policy
+
+Unresolved, and the most concrete thing to pick up next.
+
+With the funder separated from the signer, a fresh public signer anchors its
+first policy and lands it (`3dcb2378…`, storage). Every later anchor from that
+same signer is built, submitted, given a hash, and never lands. Four further
+passes changed nothing.
+
+The signer is not the problem in the obvious way: it is still owned by the
+default program, so it was never claimed.
+
+```
+Public/G8Aky5Rd…  {"balance":0,"program_owner":"1111…1111","nonce":1}
+```
+
+`nonce: 1` — it signed once and the chain knows it. Refetching with
+`account get` between anchors, which does rewrite the stored state, does not
+make the second one land.
+
+So the working assumption for the morning is a stale local nonce: the wallet
+builds the second transaction against nonce 0 and the sequencer drops it as a
+replay, silently, like everything else here. A signer per policy would sidestep
+it — three owners rather than one — but that changes `owner_id` and so every
+policy hash, and it papers over the question rather than answering it.
+
 ## Funding from the owner account breaks anchoring from the same account
 
 Root cause of the criterion-1 regression, and it is self-inflicted.
