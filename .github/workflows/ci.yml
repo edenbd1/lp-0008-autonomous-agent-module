@@ -111,3 +111,47 @@ jobs:
             module/src/inference.cpp \
             -o inference_test
           ./inference_test
+
+      # The remaining four suites existed and were never run here, which by this
+      # repository's own standard means they were not run at all. Each is its own
+      # step so a red X names the suite that broke rather than "the skills job".
+      #
+      # -Wall -Wextra, but deliberately not -Werror: the compiler is whatever
+      # ubuntu-latest ships, and -Werror would turn a clang upgrade into a red
+      # build on a change that is not ours — the same failure the Rust job spends
+      # `--locked` to avoid. Warnings stay visible in the log; the assertions are
+      # what gate the merge.
+      - name: Exercise the wallet skills
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/wallet_skills_test.cpp \
+            module/src/wallet_skills.cpp \
+            -o wallet_skills_test
+          ./wallet_skills_test
+
+      - name: Exercise the program skills
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/program_skills_test.cpp \
+            module/src/program_skills.cpp \
+            -o program_skills_test
+          ./program_skills_test
+
+      - name: Exercise the agent-coordination skills
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/agent_skills_test.cpp \
+            module/src/agent_skills.cpp \
+            -o agent_skills_test
+          ./agent_skills_test
+
+      # No Logos node again, and again on purpose. What decides whether money
+      # moves is not that a message crosses the network: it is that a channel
+      # which will not open is reported rather than pretended, that an answer to
+      # another request cannot settle this one, that an approval naming different
+      # terms is refused, and that an owner who never replies is terminal instead
+      # of a quiet fallback to acting alone. A fake owner can be made silent,
+      # late, or hostile on demand; a real one cannot.
+      - name: Exercise the owner channel
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/owner_channel_test.cpp \
+            module/src/owner_channel.cpp \
+            -o owner_channel_test
+          ./owner_channel_test

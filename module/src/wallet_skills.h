@@ -131,6 +131,13 @@ struct WalletPort {
 /// Separate from `WalletPort` for the same reason `SharePort` is separate from
 /// `StoragePort`: it is a messaging act, over the owner channel, and a failure
 /// to reach the owner must be reported as that and not as a chain failure.
+///
+/// A *port*, and named one. `owner_channel.h` declares the class that satisfies
+/// it — `OwnerChannel`, the correlated retrying implementation — and this used to
+/// carry that same name in the same namespace, so the interface and the thing
+/// that implements it could not be included in one translation unit. That is the
+/// wiring this port exists for, so the collision would have surfaced exactly when
+/// somebody first tried to do it.
 struct OwnerApprovalPort {
     /// Deliver an approval request. False means the owner was not reached — and
     /// the prize is explicit that such a spend must not execute.

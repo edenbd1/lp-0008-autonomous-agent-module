@@ -19,7 +19,7 @@
  * describe — the entire contract was the comment. A declared type reads as an
  * implemented one, so it claimed more than the absent code did.
  *
- * The envelope is real; it is simply not C++. It is defined in
+ * The envelope is real, and the authority over it is not C++. It is defined in
  * `crates/agent-policy-core` (`SpendPolicy::is_autonomous`,
  * `compute_policy_hash`) and *enforced* by the anchored policy account in
  * `crates/agent-verifier-spel`, whose address is derived from the limits
@@ -30,11 +30,24 @@
  * can write — and an above-threshold spend that never reaches the owner has
  * nothing to present, so it does not execute.
  *
- * If a C++ mirror is ever wanted for display, note that a u128 has no portable
- * spelling in C++17. The deleted struct used `unsigned __int128`, which is a
- * GCC/Clang extension, is unavailable on MSVC and on 32-bit targets, and this
- * is a header third parties are told to include. Carry the amount as a pair of
- * `uint64_t` or as a decimal string instead.
+ * WHERE THE TWO DELETED TYPES WENT
+ *
+ * Both now exist, in the headers that own them rather than in this one, and
+ * both have code behind them — which is the whole difference from before:
+ *
+ * - The display mirror of the envelope is `SpendEnvelope` in `wallet_skills.h`,
+ *   next to the one call that reads it. Its limits are decimal strings, not
+ *   `unsigned __int128`: a u128 has no portable spelling in C++17, the extension
+ *   the deleted struct used is unavailable on MSVC and on 32-bit targets, and
+ *   this is a header third parties are told to include.
+ * - The terminal "the owner could not be reached" state is
+ *   `ApprovalDecision::ownerUnreachable()` in `owner_channel.h`, which is a
+ *   function over a real exchange rather than an enumerator over nothing.
+ *
+ * Neither belongs here. A type in this header reads as part of the module's
+ * contract with third-party skills, and neither is: no skill implementer needs
+ * to name the envelope, and nothing outside `wallet.send` may treat those
+ * numbers as a permission.
  */
 namespace logos::agent {
 

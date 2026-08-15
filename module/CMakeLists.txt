@@ -32,4 +32,12 @@ logos_module(
         src/storage_skills.cpp
         src/inference.h
         src/inference.cpp
+        src/wallet_skills.h
+        src/wallet_skills.cpp
+        src/program_skills.h
+        src/program_skills.cpp
+        src/agent_skills.h
+        src/agent_skills.cpp
+        src/owner_channel.h
+        src/owner_channel.cpp
 )
