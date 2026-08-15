@@ -161,8 +161,12 @@ if [ -z "$TX" ]; then
 fi
 echo "  settlement $TX"
 LANDED=0
-for _ in $(seq 1 50); do
-  sleep 6
+# Blocks are 60 seconds apart on this chain, so the old 300s window gave a
+# settlement five chances at inclusion. Absence inside a short window is not
+# evidence of rejection — and the RPC cannot tell the two apart, since a
+# dropped, a pending and a never-submitted hash all return the same null.
+for _ in $(seq 1 24); do
+  sleep 30
   curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$TX\"]}" \
     | grep -qE '"result":\[' && { echo "  landed"; LANDED=1; break; }
@@ -172,7 +176,7 @@ done
 # evidence failure that closed five earlier submissions, so refuse to write it
 # and leave any previous, confirmed manifest intact.
 if [ "$LANDED" -eq 0 ]; then
-  echo "  NOT CONFIRMED after 300s — $TX never landed" >&2
+  echo "  NOT CONFIRMED after 12 minutes — $TX never landed" >&2
   echo "  the manifest is left untouched: an unconfirmed hash is not evidence" >&2
   exit 1
 fi
