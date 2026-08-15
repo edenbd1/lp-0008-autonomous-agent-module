@@ -384,7 +384,7 @@ accounts of one mechanism is how they come to disagree.
 |---|---|---|
 | `meta.skills` | — | `{"ok":true,"count":N,"skills":[…]}` — every registered skill and its parameter schema, including itself. Reads the same registry `agent.card` publishes, so the catalogue and the card are one answer |
 | `meta.status` | — | balance, storage usage, active tasks, and what the module is bound to |
-| `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks` — **`value`** string | whether the setting took effect |
+| `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks`, `approval_timeout_ms`, `approval_resend_ms`, `delivery`, `agent_account`, `agent_name`, `pay_account`, `card_signer`, `pay_signer`, `policy_source`, `owner_channel_account` — **`value`** string | whether the setting took effect |
 
 `meta.configure` reports `"effective":false` when no config port is wired,
 rather than storing a value nothing reads. Note what it cannot do: writing
@@ -392,6 +392,34 @@ rather than storing a value nothing reads. Note what it cannot do: writing
 nothing about what the chain accepts. The ceiling is the policy account's data,
 which only the policy program may write. See
 [`security-model.md`](security-model.md).
+
+**The three delegate keys.** `card_signer`, `pay_signer` and `policy_source` are
+each a *command*. The module runs it, hands it its input on stdin, and checks
+the one line it prints before believing any of it — base64url for a signature,
+64 lower-case hex for a settlement, decimal digits for each limit. They exist
+because a plugin Basecamp loads has no crypto library, no wallet and no HTTP
+client, and `SkillPorts` is a struct of `std::function`s, so a host cannot hand
+it any of the three either. `scripts/sign-agent-card.py --sign-input` is the
+first; `scripts/agent-spend.py --settle` and `--envelope` are the other two.
+
+`policy_source` is what makes `agent.task` able to pay unattended: it is the
+agent's own **anchored** policy account, read off the chain on every priced task.
+Anything the module cannot read out of it — no source, prose, a missing field,
+an unreachable sequencer — is *unknown*, and unknown is outside the envelope, so
+the payment is held for the owner rather than made. It is deliberately not
+`per_tx`/`per_period`, which stay `"effective":false`: a spending limit an
+operator can type is worth nothing, which is the argument
+`crates/agent-policy-core` opens with.
+
+Neither `pay_signer` nor `policy_source` is a way around the anchored policy.
+`agent-spend.py --settle` performs the policy program's `spend` instruction —
+the same call `scripts/a2a-task.sh` makes — so the chain applies the same limits
+to a module's payment as to that script's, and there is no path in it that
+reaches `authenticated_transfer` without going through the policy account first.
+What the delegate does add is that whoever can run the command can spend up to
+the envelope; that is already true of `card_signer`, which is a signing oracle
+for the same key, and it is the premise the anchored policy exists to bound.
+`./scripts/delivery-in-plugin.sh signers` is the check, and it costs nothing.
 
 ### Not one of the prize's default skills
 

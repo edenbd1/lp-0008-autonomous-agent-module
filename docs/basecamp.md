@@ -255,6 +255,70 @@ and the curve arithmetic stays outside the module deliberately: this plugin
 links no crypto library, and a hand-rolled 256-bit field inside the binary that
 signs payment instructions is the last place to put one.
 
+**5. A loaded module pays for the task it was served**
+(`module/tests/plugin_delivery_test.cpp`, `peer` mode with a payment configured;
+run it with `./scripts/delivery-in-plugin.sh settle`). Harness 4 ends with two
+agents that have found each other and served each other, and no money moving.
+That was not a limitation of the plugin boundary either — it was
+`TaskPort::pay` left unwired, with a note in `agent_module_plugin.cpp` saying a
+settlement needs a wallet and a sequencer "and this module has neither". It is
+the same sentence as the one about ports, and it has the same answer: the module
+does not need to HAVE a wallet, it needs to be able to REACH one, and
+`card_signer` had already shown how.
+
+So `pay_signer` is `card_signer`'s mechanism with a different command behind it —
+literally the same function, `AgentModuleImpl::runConfiguredCommand`, of which
+the card signer is now one of three callers. `policy_source` is the third, and it
+is what makes the payment *unattended*: it reads the agent's anchored policy
+account off the chain, so `agent.task` can see that the price is inside the
+envelope its owner anchored and pay it without asking anyone. Both are named in
+`meta.configure`, both take their input on stdin, and both have their answer
+checked character by character before it is believed — 64 lower-case hex for a
+settlement, decimal digits for a limit.
+
+The buyer is handed no price and no payee. It reads both off the seller's signed
+card, which arrived over Waku a few seconds earlier:
+
+```
+buyer                                       seller
+  ok  discovered the OTHER agent's signed Agent Card over the public network
+  ok  the discovered card advertises a price to pay: 1 LEZ
+  ok  and a public account to pay it into: Public/BzYks91a…
+  ok  this agent opened an A2A task addressed to the other one
+  ok  it paid the price the peer's card advertised, 1 LEZ
+  ok  and settled it on chain, from inside the loaded module, with no owner in
+      the path: <64 hex>
+                                              ok  the card this agent was handed
+                                                  advertises no price, so there
+                                                  is nothing to pay
+                                              ok  and no settlement hash came
+                                                  back for it
+  ok  and READ the other agent's A2A request off its own task topic
+```
+
+The seller's two lines are the control, and they are the same code path: one
+`agent.task` call, one card, and the answer differs only because the card does.
+Without them "the module reported a transaction hash" would be indistinguishable
+from "the module reports a transaction hash whenever it opens a task".
+
+**The refusals are a separate harness, because this one costs money.**
+`./scripts/delivery-in-plugin.sh signers` needs no second agent, no key and no
+chain, and pins nine decisions: an envelope the module cannot read is *unknown*
+and unknown is outside, a price over the anchored limits never reaches the
+signer at all, and neither an empty answer nor a diagnostic from the signer
+becomes a settlement. Its assertions were watched failing against three mutated
+builds — with the hash check removed the module writes `error: this signer holds
+no key` into the task record as a settlement, and a module that reads "I do not
+know" as "no limit" pays a task nobody configured it for.
+
+**What the module still cannot do here.** `TaskPort::refund` stays unwired: a
+refund would have to be signed by the payee, whose key this agent does not hold.
+And an above-envelope *task* price is refused immediately with
+`owner_unreachable` rather than put to the owner — `wallet.send` has that path
+and `agent.task` does not, because on this chain the owner who anchored a policy
+cannot approve under it (one program transaction per public signer), so wiring
+it would add a two-minute wait that can never succeed.
+
 **The negative control, which is what makes the four transcripts above mean
 anything.** Build without `-DLOGOS_DELIVERY_ROOT` — the default — and run the
 same harness against the same package layout. It reports:
@@ -315,13 +379,21 @@ Stated plainly, because a reviewer will check.
   installs from a configured package repository only — so **both** packages are
   installed by hand, by the procedures below, and a reviewer cannot do it
   through the GUI either.
-- **The storage skills have no ports wired**, and neither do the wallet, the
-  sequencer or the local toolchain. `invoke("wallet.balance", "{}")` returns
-  `{"ok":false,"error":"no account to read: the agent has none configured and
-  none was given"}`, and `meta.status` reports `balance: null` with
-  `balance_error` rather than `0`. Those need a signing wallet and a `spel`
-  toolchain in the module's process, which is a different problem from the
-  transport one below and is not solved.
+- **The storage skills have no ports wired**, and neither do the sequencer, the
+  local toolchain, or the *reading* half of the wallet.
+  `invoke("wallet.balance", "{}")` returns `{"ok":false,"error":"no account to
+  read: the agent has none configured and none was given"}`, and `meta.status`
+  reports `balance: null` with `balance_error` rather than `0`. Those need a
+  Logos Storage node and a sequencer client in the module's process, which is a
+  different problem from the transport one below and is not solved.
+
+  The *spending* half is a third case and it is now closed, by delegation rather
+  than by linking: `agent.task` pays through a `pay_signer` command and reads
+  its anchored envelope through a `policy_source` command, the same shape
+  `card_signer` has always had. `wallet.send` deliberately does not — its
+  envelope is a struct of strings fixed at `start()`, so wiring a spend there
+  would let one out under an envelope that was empty when the module came up.
+  See §5 above and [`docs/skills.md`](skills.md).
 - **The module reaches Logos Delivery and not Logos Storage.** This bullet used
   to say it linked neither, and to give the reason: "a port is a `std::function`
   and there is no wire format for one, so a host that loads this as a plugin
@@ -722,7 +794,13 @@ same reason and with the same shape:
 ```sh
 ./scripts/delivery-in-plugin.sh          # 3, and 1 again through QPluginLoader
 ./scripts/delivery-in-plugin.sh peers    # 4: two loaded modules, two nodes
+./scripts/delivery-in-plugin.sh signers  # what the two delegates say, free
+./scripts/delivery-in-plugin.sh settle   # 5: discover, serve and pay, one flow
 ```
+
+`signers` needs nothing but the package and a network for the node. `settle`
+needs a funded agent wallet and moves real testnet LEZ, so it is the one to
+think before running.
 
 The by-hand versions are kept because they are what the wrappers do, and because
 when a wrapper fails they are the way to find out where.
@@ -953,9 +1031,17 @@ Honest list, in the order that matters:
    (`module/src/delivery_runtime.cpp`), so `messaging.*`, `agent.discover`,
    `agent.task` and `agent.subscribe` work in a loaded plugin. What remains
    needs something in the module's process that no port can supply: a Logos
-   Storage node for `storage.*`, a signing wallet for `wallet.*`, a sequencer
-   endpoint for `program.query`, and a local `spel` for `program.call` /
-   `program.deploy`. Those are four separate pieces of work, not one boundary.
+   Storage node for `storage.*`, a sequencer endpoint for `program.query` and
+   `wallet.balance`, and a local `spel` for `program.call` / `program.deploy`.
+   Those are three separate pieces of work, not one boundary.
+
+   `agent.task`'s settlement was on that list and is not any more, and the way
+   it came off it is worth reading as a pattern rather than as a fix: it did not
+   need a wallet **in** the module's process, it needed the module to be able to
+   **reach** one. `card_signer` had shown that a loaded plugin can run a command
+   and check its answer; `pay_signer` and `policy_source` are the same function
+   with a wallet and a sequencer on the other end of them. Two of the three
+   remaining items are the same shape and could go the same way.
 2. The owner channel over **Logos Messaging** has to be driven from inside the
    loaded module, so that "the owner can interact with the agent in real time
    from a separate Logos app instance using Logos Messaging" is demonstrable.

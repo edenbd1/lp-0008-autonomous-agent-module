@@ -640,24 +640,36 @@ one of them — `meta.skills` — was documented in three headers before it exis
   own**: A2A v0.3.0 publishes no transition table, `docs/a2a-binding.md` §5.2 says
   so, and only 13 of the 81 cells are asserted anywhere.
 
-- [ ] **UNMET — Two or more agents discover each other via Agent Cards, execute a
+- [x] **MET — Two or more agents discover each other via Agent Cards, execute a
   task following the A2A lifecycle, and transfer LEZ payment autonomously, without
   owner intervention.**
-  This is a conjunction of four things. Three hold, on the public network and on
-  chain, and they have never yet held **in one flow** — which is what the sentence
-  says.
+  This is a conjunction, and until today its parts held separately: discovery on
+  the public network between two loaded modules, serving between the same two,
+  and settlements on chain from a shell script. `./scripts/delivery-in-plugin.sh
+  settle` (exit 0) is the three of them in one flow, in one call.
 
-  **Discovery: now real, and this is new.** `./scripts/delivery-in-plugin.sh peers`
-  (exit 0) starts two modules loaded through `QPluginLoader`, each with its own
-  Delivery node, its own LEZ account, its own wallet and its own working
-  directory, on one public topic:
+  Two modules loaded through `QPluginLoader`, each with its own Delivery node,
+  its own LEZ account, its own wallet and its own working directory, on one
+  public topic. The buyer is handed no price and no payee — it reads both off the
+  seller's signed card, which arrived over Waku seconds earlier — checks the
+  price against the envelope its owner anchored **on chain**, sends the A2A
+  request, and settles:
 
   ```
-  ok this agent published its own signed card on the topic
-  ok and discovered the OTHER agent's signed Agent Card over the public network
-  ok which is signed — `require_signed` was on, so an unsigned card would not be
-     in this list at all
+  buyer                                       seller
+  ok published its own signed card on the topic
+  ok discovered the OTHER agent's signed Agent Card over the public network
+  ok the discovered card advertises a price to pay: 1 LEZ
+  ok and a public account to pay it into: Public/BzYks91a…
   ok this agent opened an A2A task addressed to the other one
+  ok it paid the price the peer's card advertised, 1 LEZ
+  ok and settled it on chain, from inside the loaded module, with no owner in
+     the path
+                                              ok the card this agent was handed
+                                                 advertises no price, so there is
+                                                 nothing to pay
+                                              ok and no settlement hash came back
+                                                 for it
   ok and READ the other agent's A2A request off its own task topic
   ```
 
@@ -665,26 +677,54 @@ one of them — `meta.skills` — was documented in three headers before it exis
   published messages, so a single process can satisfy any "a card arrived"
   assertion with every other agent on earth switched off; each side here accepts
   only a card naming the **other** account, so neither could satisfy its own
-  assertion. An earlier version of this entry claimed MET while the shipped plugin
-  answered `agent.discover` with *no discovery transport is configured*. That is
-  fixed, and the fix is the module building its own port rather than being handed
-  one.
+  assertion. The seller's two lines are the control, and they are the same code
+  path — one `agent.task` call, one card, and the answer differs only because the
+  card does. Without them, "the module reported a transaction hash" would be
+  indistinguishable from "the module reports one whenever it opens a task".
 
-  **Payment: real, and independent of the owner.** The generated table below
-  decodes four settlements under the shipped program out of the transactions
-  themselves. `spend` takes no owner and no approval account; no agent wallet
-  holds its owner's key.
+  **What made the payment possible from inside a plugin.** `TaskPort::pay` was
+  unwired, with a note saying a settlement needs a wallet and a sequencer "and
+  this module has neither". That is the same sentence the repository believed
+  about Delivery ports for months, and it has the same answer: the module does
+  not need to HAVE a wallet, it needs to REACH one. `card_signer` had already
+  shown how — `agent.card` produces a real BIP-340 signature from a loaded plugin
+  by running a command — so `pay_signer` and `policy_source` are literally that
+  same function with different commands behind them.
 
-  **What is still missing is the serving half.** The lifecycle transitions above
-  are driven **locally by the client** through the real `TaskStore`; no agent has
-  received a peer's request, moved it to a terminal state, published status back,
-  and triggered the settlement. Discovery, the request crossing, the lifecycle and
-  the payment are four exercises rather than one. `messaging.receive` — the skill
-  that reads a request off a task topic — landed for exactly this reason and is
-  the first half of it.
+  **It is not a way around the anchored policy.** `scripts/agent-spend.py
+  --settle` performs the policy program's `spend` instruction, the same call
+  `scripts/a2a-task.sh` makes, so the chain applies the per-transaction and
+  per-period limits the owner anchored to this payment exactly as to that one;
+  there is no branch in it that reaches `authenticated_transfer` without going
+  through the policy account first. `policy_source` reads those limits off the
+  chain rather than out of `meta.configure`, which still reports `per_tx` and
+  `per_period` as **not** effective — a spending limit an operator can type is
+  worth nothing. Anything the module cannot read out of that source is *unknown*,
+  and `agent.task` treats unknown as OUTSIDE the envelope, so an unconfigured
+  module holds every priced task for its owner and pays nothing.
+
+  **The refusals are their own harness, because this one costs money.**
+  `./scripts/delivery-in-plugin.sh signers` needs no second agent, no key and no
+  chain, and pins nine decisions — unknown limits are outside; a price over the
+  anchored limits never reaches the signer; neither an empty answer nor a
+  diagnostic from the signer becomes a settlement. Its assertions were watched
+  failing against three mutated builds: with the hash check removed the module
+  writes `error: this signer holds no key` into the task record as a settlement,
+  and a module that reads "I do not know" as "no limit" pays a task nobody
+  configured it for.
+
+  **Two things this does not claim.** `TaskPort::refund` is still unwired — a
+  refund would have to be signed by the payee, whose key the payer does not hold.
+  And an above-envelope *task* price is refused immediately rather than put to
+  the owner: `wallet.send` has that path, `agent.task` does not, because on this
+  chain the owner who anchored a policy can never approve under it (one program
+  transaction per public signer), so the wait could not succeed.
 
   The settlement table is **generated**, not transcribed; reproduce it with
-  `./scripts/submission-evidence.py`.
+  `./scripts/submission-evidence.py`. The last row is this flow's, and the number
+  in it comes from the transaction's own committed post-state —
+  `scripts/record-settlement.py` refuses to write a row whose payee balance did
+  not rise by exactly the price.
 
 <!-- BEGIN GENERATED settlements -- scripts/submission-evidence.py; do not edit by hand -->
 

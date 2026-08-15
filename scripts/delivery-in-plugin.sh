@@ -292,6 +292,17 @@ if [ "$MODE" = "settle" ]; then
     say "[3/4] the envelope the buyer's owner anchored, read off the chain"
     $SPEND --envelope || die "the anchored policy could not be read"
 
+    # The payee's balance BEFORE, and it is the only thing here read with
+    # `getAccount`. It has to be: this chain has no historical-state RPC, so a
+    # balance as it stood before a settlement can only be captured before the
+    # settlement happens. Everything after it comes out of the transaction.
+    BEFORE=$(curl -s -m 25 -X POST "${SEQUENCER_URL:-https://testnet.lez.logos.co}" \
+        -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$SERVER_PAY\"]}" \
+      | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['balance'])")
+    [ -n "$BEFORE" ] || die "could not read the payee's balance before the run"
+    echo "  payee  Public/$SERVER_PAY holds $BEFORE now"
+
     RUN="s$(date +%H%M%S)"
     rm -rf "$WORK/c" "$WORK/s"; mkdir -p "$WORK/c" "$WORK/s"
     say "[3/4] two loaded modules, run id $RUN, price $PRICE LEZ"
@@ -316,17 +327,38 @@ if [ "$MODE" = "settle" ]; then
     rc=$(( $(cat "$WORK/c.rc") + $(cat "$WORK/s.rc") ))
     TX=$(grep -oE 'settled it on chain.*: [0-9a-f]{64}' "$WORK/c.log" | tail -1 \
          | grep -oE '[0-9a-f]{64}')
-    say "[4/4] result"
+    say "[4/4] what the chain says about it"
     [ "$rc" -eq 0 ] || { echo "FAILED — logs at $WORK/c.log and $WORK/s.log" >&2; exit 1; }
+    [ -n "$TX" ] || die "the run passed but no settlement hash was printed"
+
+    # THE LAST WORD BELONGS TO THE TRANSACTION, NOT TO THE HARNESS.
+    #
+    # The buyer asserted that its signer returned a hash, and the signer asserted
+    # that a block holds it. Neither of those is "the money moved" — a confirmed,
+    # on-chain proof that a policy PERMITTED a payment and moved nothing is a
+    # thing this repository has produced before and wrote up as a settlement.
+    # `record-settlement.py` decodes the payee's balance out of the settlement's
+    # own committed post-state and refuses to record anything unless it rose by
+    # exactly the price.
+    #
+    # A command rather than fifteen lines here, and the reason is this branch
+    # itself: it takes half an hour and costs a settlement, so a bug in its last
+    # fifteen lines would be found once, in the one run that cannot be repeated.
+    AFTER=$(python3 "$ROOT/scripts/record-settlement.py" --tx "$TX" \
+        --client "$CLIENT" --server "$SERVER" --recipient "$SERVER_PAY" \
+        --policy "$CLIENT_POLICY" --price "$PRICE" --before "$BEFORE" \
+        --task-id "t$RUN") || die "the settlement was not recorded, and this run claims nothing"
+
+    echo
     echo "Two loaded modules discovered each other's signed Agent Cards on the"
     echo "public network, ran the A2A lifecycle across their own Delivery nodes,"
     echo "and the buyer paid the seller's advertised price on the public testnet"
     echo "from inside the plugin, with no owner in the path."
     echo
     echo "settlement $TX"
-    echo "the claim that money moved belongs to the transaction, not to this line:"
-    echo "  python3 scripts/use-cases/settlement-facts.py --tx $TX \\"
-    echo "      --recipient $SERVER_PAY --policy $CLIENT_POLICY"
+    echo "Public/$SERVER_PAY  $BEFORE -> $AFTER, decoded from the transaction itself"
+    echo "manifest  ${A2A_MANIFEST:-artifacts/a2a-task.tsv}"
+    echo "explorer  https://explorer.testnet.lez.logos.co/transaction/$TX"
     exit 0
 fi
 

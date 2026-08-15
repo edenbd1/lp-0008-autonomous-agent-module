@@ -732,11 +732,25 @@ Agent Cards on the public network: `./scripts/delivery-in-plugin.sh`, and
 [`docs/basecamp.md`](docs/basecamp.md) for the transcripts and the negative
 control.
 
+A loaded module also **pays** for the task it was served, in the same flow and
+the same call. `./scripts/delivery-in-plugin.sh settle` runs the two modules
+above, and the buyer reads the price and the payee off the seller's discovered
+card, checks them against the envelope its owner anchored on chain, and settles
+on the public testnet — no owner key anywhere in the path. That works by the
+mechanism the module already signs its Agent Card with: `card_signer`,
+`pay_signer` and `policy_source` are three commands `meta.configure` names, all
+three run by one function, each answer checked character by character before it
+is believed. `scripts/agent-spend.py` is the last two, and what it performs is
+the anchored policy program's own `spend` instruction, so the chain applies the
+same limits to a module's payment as to `scripts/a2a-task.sh`'s.
+
 Stated plainly, because a reviewer will check: the packages are **macOS arm64
-only**, and the **storage, wallet, sequencer and toolchain skills have no ports
-wired** — those need a storage node, a signing wallet and a local `spel` inside
-the module's process, which is a different problem from the transport one and is
-not solved. Each of those refuses *as itself* —
+only**, and the **storage, sequencer and toolchain skills have no ports wired** —
+those need a storage node and a local `spel` inside the module's process, which
+is a different problem from the transport one and is not solved. `wallet.send`
+still cannot move money from a loaded module either: its envelope is fixed at
+`start()` and there is no live read behind it, so only `agent.task` pays.
+Each of those refuses *as itself* —
 `{"ok":false,"error":"no account to read: …"}` — which is what the harness
 asserts, and is the opposite of the failure worth hiding: a module that loads,
 answers `skills()` with `[]`, and looks like it works.

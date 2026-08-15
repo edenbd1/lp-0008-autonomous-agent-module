@@ -300,6 +300,36 @@ The residual the two-signature fix closes is therefore griefing and
 impersonation rather than theft from a key-holder, and it is worth being exact
 about that rather than claiming more.
 
+**Where the module's `pay_signer` sits in that picture, since it is the obvious
+place to look for a hole.** `agent.task` settles by running a command an operator
+named in `meta.configure`, and the command runs `scripts/agent-spend.py --settle`
+with the agent's wallet home. Two things follow, and they point in opposite
+directions.
+
+It does not widen the *policy* surface at all. The command performs the policy
+program's `spend` instruction — the autonomous branch, the same call
+`scripts/a2a-task.sh` makes — so the chain applies both anchored limits to it.
+There is no branch in that script that reaches `authenticated_transfer` without
+going through the policy account first, and `./scripts/delivery-in-plugin.sh
+signers` pins the module's side of the same discipline: an envelope it cannot
+read is *unknown*, unknown is outside, and a price outside never reaches the
+signer.
+
+It does widen who can *run* the key, and that is worth saying plainly: anyone who
+can run the configured command can spend up to the envelope. But that is already
+true of `card_signer`, which is a signing oracle over the same account key, and
+it is bounded by the paragraphs above rather than by the delegate — a party who
+can run commands in the agent's account can call the transfer program directly
+and is not limited by any envelope at all. The delegate is strictly the more
+constrained of the two things such a party could do.
+
+That is also why `examples/agent-console/console.cpp` still leaves
+`WalletPort::spend` null. Its argument — "a console that could sign would be a
+second, unaudited spending path around the anchored policy" — is about a tool an
+*operator* drives, where the spending would be additional to the agent's. The
+module's own settlement is the agent's, through the policy, and is the same path
+rather than a second one.
+
 ## A shielded agent can pay, but cannot be paid at its shielded account
 
 `spel` resolves a `Private/<id>` account only for accounts the **signing**
