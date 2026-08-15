@@ -128,7 +128,7 @@ echo "  ->    agent-console --offline --skill … skills   (names only)"
 echo
 count="$("$OUT/agent-console" --offline --skill "$OUT/libnotary_digest.$SO" skills \
          | grep -o '"name"' | wc -l | tr -d ' ')"
-echo "  ok    $count skills registered (21 built in, plus each --skill library)"
+echo "  ok    $count skills registered (22 built in, plus each --skill library)"
 
 # The reference table in docs/skills.md is a snapshot of a thing that moves, and
 # a snapshot nobody checks is how a document comes to describe a skill that was

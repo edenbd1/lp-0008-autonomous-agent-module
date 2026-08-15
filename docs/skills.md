@@ -94,7 +94,7 @@ Three rules, all enforced rather than documented:
   one skill per name, so the card cannot advertise anything `invoke()` will not
   dispatch. Whichever skill holds the name answers for it.
 
-The module's own twenty-one arrive the same way, through
+The module's own twenty-two arrive the same way, through
 `registerBuiltinSkills(SkillPorts)`, which is a convenience over `registerSkill`
 and not a privileged path.
 
@@ -274,22 +274,28 @@ question:
 
 Two further boundaries, for completeness:
 
-- **The twenty-one built-in skills have no ports wired inside a loaded plugin**,
+- **Twenty of the twenty-two built-in skills have no ports wired inside a loaded plugin**,
   for the same `std::function` reason. Loaded by Basecamp, they register and
   each refuses naming the port it is missing. `docs/basecamp.md` records that
   run, and it is the opposite of the failure worth hiding: a module that loads,
   answers `skills()` with `[]`, and looks like it works.
-- **`meta.skills` is not registered as a skill.** The prize's default list names
-  it; this module exposes the same capability as the module-level method
-  `skills()` — which is what `agent-console skills` calls and what the Logos
-  Core transport exposes — but `invoke("meta.skills", …)` answers
-  `{"ok":false,"error":"no skill named 'meta.skills' is registered"}`. That is a
-  gap against the prize's list, it is not a documentation shortcut, and it is
-  recorded here rather than in a place a reviewer would have to find.
+- **`meta.skills` is a registered skill, and for a while it was not.** It is
+  worth recording because of what the failure looked like: three C++ doc
+  comments and `docs/a2a-binding.md` described it as existing, and
+  `AgentModuleImpl::skills()` — the function that produces exactly the catalogue
+  it returns — had existed the whole time. What was missing was an entry in the
+  registry. `invoke()` is a plain map lookup with no special case, so
+  `invoke("meta.skills", …)` answered `no skill named 'meta.skills' is
+  registered`: every reader of the source saw a working feature and every caller
+  of the binary got a refusal. It is a normal registered skill now, reading the
+  same registry `agent.card` reads, so the catalogue and the card cannot become
+  two answers to one question. The general lesson is the one §4 is built on — a
+  skill is registered or it is not, and only loading the binary and calling it
+  can tell you which.
 
 ## 7. Reference: the registered skills
 
-The module registers **21** skills; each `--skill` library adds one more. This
+The module registers **22** skills; each `--skill` library adds one more. This
 table is a snapshot. **The module is the authority**, and it prints itself:
 
 ```sh
@@ -362,6 +368,7 @@ accounts of one mechanism is how they come to disagree.
 
 | Skill | Parameters | Answers |
 |---|---|---|
+| `meta.skills` | — | `{"ok":true,"count":N,"skills":[…]}` — every registered skill and its parameter schema, including itself. Reads the same registry `agent.card` publishes, so the catalogue and the card are one answer |
 | `meta.status` | — | balance, storage usage, active tasks, and what the module is bound to |
 | `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks` — **`value`** string | whether the setting took effect |
 
