@@ -22,8 +22,8 @@ The keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 ### 1.1 The version this is written against
 
 A2A **v0.3.0**. That is the version this repository's cards declare
-(`protocolVersion: "0.3.0"`, `module/src/agent_skills.cpp:640`), the version its
-card validator was written against (`agent_skills.cpp:469-471`), and the version
+(`protocolVersion: "0.3.0"`, `CardSkill` in `module/src/agent_skills.cpp`), the version its
+card validator was written against (`validateAgentCard` in `agent_skills.cpp`), and the version
 whose `TaskState` enum the lifecycle copies verbatim.
 
 A2A v1.0 exists and this binding does not target it. Three of its changes are
@@ -64,11 +64,11 @@ implements this document's twelve pages of transport rules. The prize's
 
 | Namespace | Value | Where |
 |---|---|---|
-| Transport name (`preferredTransport`) | `logos-messaging` | `agent_skills.cpp:647` |
-| URL scheme | `logos-messaging://` | `agent_skills.cpp:646` |
-| Card extension block | `x-logos` | `agent_skills.cpp:711-721` |
-| Skill parameter-schema extension | `x-logos-parameters` | `agent_skills.cpp:695` |
-| Content-topic application | `lp-0008` | `messaging_skills.cpp:12-20` |
+| Transport name (`preferredTransport`) | `logos-messaging` | `CardSkill` in `agent_skills.cpp` |
+| URL scheme | `logos-messaging://` | `CardSkill` in `agent_skills.cpp` |
+| Card extension block | `x-logos` | `CardSkill` in `agent_skills.cpp` |
+| Skill parameter-schema extension | `x-logos-parameters` | `CardSkill` in `agent_skills.cpp` |
+| Content-topic application | `lp-0008` | `discoveryTopic` in `messaging_skills.cpp` |
 
 `preferredTransport` is typed as a free `string` in the A2A v0.3.0 JSON schema —
 the `JSONRPC | GRPC | HTTP+JSON` list is `examples`, not an `enum` — so
@@ -101,9 +101,9 @@ with `application = lp-0008`, `version = 1`, `encoding = json`.
 
 | Purpose | Topic | Function |
 |---|---|---|
-| Owner channel, and one-to-one traffic with any account | `/lp-0008/1/owner-<account>/json` | `ownerTopic()`, `messaging_skills.cpp:12` |
-| Agent Card discovery, per namespace | `/lp-0008/1/discovery-<namespace>/json` | `discoveryTopic()`, `messaging_skills.cpp:17` |
-| One A2A task | `/lp-0008/1/task-<agentAccount>-<taskId>/json` | `taskTopic()`, `agent_skills.cpp:199` |
+| Owner channel, and one-to-one traffic with any account | `/lp-0008/1/owner-<account>/json` | `ownerTopic` in `messaging_skills.cpp` |
+| Agent Card discovery, per namespace | `/lp-0008/1/discovery-<namespace>/json` | `discoveryTopic` in `messaging_skills.cpp` |
+| One A2A task | `/lp-0008/1/task-<agentAccount>-<taskId>/json` | `taskTopic` in `agent_skills.cpp` |
 
 `<account>` and `<agentAccount>` are base58 LEZ account ids. `<taskId>` is the
 A2A task id.
@@ -112,7 +112,7 @@ A task topic is derived from **the peer's account and the task id**, and both
 ends compute it the same way, so no rendezvous or session setup is needed: the
 client publishes its request there and the server publishes its status updates
 there. `agent.subscribe` subscribes to exactly the same string
-(`agent_skills.cpp:1052`).
+(`SubscribeSkill` in `agent_skills.cpp`).
 
 Two consequences a third party must understand before deploying this:
 
@@ -144,7 +144,7 @@ which is the agent's identity. It is *not* the account that gets paid; see §6.2
 A card that names `logos-messaging` as its preferred transport and whose `url`
 does not start with `logos-messaging://` MUST be rejected. This is one of the two
 rules the validator adds on top of A2A's own schema
-(`agent_skills.cpp:543-553`).
+(`validateAgentCard` in `agent_skills.cpp`).
 
 `additionalInterfaces` is not emitted, because there is no second transport to
 declare. A2A §5.6.4 requires at least one transport declared through
@@ -157,7 +157,7 @@ so the requirement is met.
 
 ### 3.1 What a conforming card looks like
 
-The card `agent.card` builds (`agent_skills.cpp:639-721`), and the one
+The card `agent.card` builds (`CardSkill` in `agent_skills.cpp`), and the one
 `scripts/a2a-task.sh` publishes to testnet, field for field:
 
 ```json
@@ -205,10 +205,10 @@ The live one is in [`artifacts/agent-cards/storage.json`](../artifacts/agent-car
 Rules a producer MUST follow:
 
 - **`skills` comes from the skill registry, not from a literal.** `agent.card`
-  reads the module's own `skills()` output (`agent_skills.cpp:900-953`, wired at
-  `agent_module_plugin.cpp:216-218`), so a card cannot advertise a skill the
+  reads the module's own `skills()` output (`CardSkill` in `agent_skills.cpp`, wired at
+  `agent_module_plugin.cpp`), so a card cannot advertise a skill the
   agent has not registered, and cannot omit one it has. The `meta.skills` skill
-  reads the *same* function (wired at `agent_module_plugin.cpp:222-224`), so the
+  reads the *same* function (wired at `agent_module_plugin.cpp`), so the
   catalogue a peer can ask for and the card it can read are one answer rather
   than two. This bullet used to call that output "`meta.skills()`" while no
   skill of that name was registered — the card was right, and the thing it
@@ -227,7 +227,7 @@ Rules a producer MUST follow:
 - **`provider` is optional, but if present both `organization` and `url` are
   required** — A2A's own rule, and one this repository has published a card
   violating before. `agent.card` refuses to emit a half-filled provider rather
-  than emitting one (`agent_skills.cpp:657-663`).
+  than emitting one (`CardSkill` in `agent_skills.cpp`).
 
 ### 3.2 Publication
 
@@ -255,9 +255,9 @@ agent.discover({"topic": "/lp-0008/1/discovery-<ns>/json",
 ```
 
 `agent.discover` passes the topic through **exactly as given**
-(`agent_skills.h:220-223`); turning a namespace into a content topic is
+(`DiscoveryPort` in `agent_skills.h`); turning a namespace into a content topic is
 `discoveryTopic()`'s job, and `messaging.join(group_id)` is the call that
-subscribes to it (`messaging_skills.cpp:108`).
+subscribes to it (`messaging_skills.cpp`).
 
 For each document fetched it returns either a summary — `name`, `url`,
 `version`, `signed`, `transport`, `skills` (ids only), `price`, `lez_account`,
@@ -275,24 +275,24 @@ A card published before you joined is retrievable only through the Delivery
 module's `storeQuery(jsonQuery, peerAddr, timeoutMs)` against a store service
 peer — which its own header marks "⚠️ USE AT YOUR OWN RISK: backed by the kernel
 API, subject to change at any point without a deprecation cycle"
-(`_external/logos-delivery-module/src/delivery_module_plugin.h:150-183`). A
+(`_external/logos-delivery-module/src/delivery_module_plugin.h`). A
 conforming implementation therefore MUST do one of:
 
 1. republish cards on a timer, and accept that discovery has a warm-up window; or
 2. use `storeQuery` with `contentTopics: ["/lp-0008/1/discovery-<ns>/json"]` and
    accept the stability warning.
 
-`DiscoveryPort.fetch` (`agent_skills.h:218-224`) is the seam where either goes.
+`DiscoveryPort.fetch` (`DiscoveryPort` in `agent_skills.h`) is the seam where either goes.
 **Nothing in this repository wires it.** The skill refuses with "no discovery
-transport is configured" when it is empty (`agent_skills.cpp:780`), which is the
+transport is configured" when it is empty (`DiscoverSkill` in `agent_skills.cpp`), which is the
 correct failure and is not the same as working.
 
 ### 3.4 Validation
 
-`validateAgentCard(cardJson)` (`agent_skills.cpp:596`) returns an empty string
+`validateAgentCard(cardJson)` (`validateAgentCard` in `agent_skills.cpp`) returns an empty string
 for a valid card and the reason otherwise. It is applied in three places — to
 cards read off a discovery topic, to a peer's card passed to `agent.task`, and to
-the agent's *own* output before signing (`agent_skills.cpp:725-728`), so an agent
+the agent's *own* output before signing (`CardSkill` in `agent_skills.cpp`), so an agent
 cannot publish a card its own peers would reject.
 
 It enforces the A2A v0.3.0 `AgentCard.required` set:
@@ -327,7 +327,7 @@ removed, serialised as compact, key-sorted JSON — no whitespace, members in
 ascending key order. Both signers in this repository do this
 (`nlohmann::json::dump()` sorts by key and emits no spaces;
 `json.dumps(card, sort_keys=True, separators=(",", ":"))` in
-`scripts/sign-agent-card.py:226`). See §7.5 for the case where those two do
+`scripts/sign-agent-card.py`). See §7.5 for the case where those two do
 *not* agree.
 
 **Algorithm.** LEZ account keys are BIP-340 Schnorr over secp256k1
@@ -340,7 +340,7 @@ therefore specifies:
 ```
 
 The 32-byte message BIP-340 signs is `SHA-256(signing input)`
-(`sign-agent-card.py:228-229`) — BIP-340 takes a 32-byte message, and the signing
+(`sign-agent-card.py`) — BIP-340 takes a 32-byte message, and the signing
 input is not 32 bytes, so a prehash is unavoidable and both ends MUST use the
 same one. The signature is deterministic (`aux_rand = 0`), so re-signing an
 unchanged card produces a byte-identical document rather than a new one that
@@ -354,7 +354,7 @@ asked to trust.
 
 **No unsigned fallback.** `agent.card` refuses to emit a card when there is no
 signing key, and refuses when the key returns nothing
-(`agent_skills.cpp:744-749`). "Refuse" rather than "emit unsigned", because a
+(`CardSkill` in `agent_skills.cpp`). "Refuse" rather than "emit unsigned", because a
 document that reads like a signed card and is not one is worse than no card.
 
 **The two signers in this repository disagree with each other**, and a third
@@ -384,7 +384,7 @@ defect in the binding as shipped, and it was found by trying it:
 - `getAccount` returns `program_owner`, `balance`, `data`, `nonce` and no public
   key, so the chain does not close the gap through the documented RPC.
 
-The docstring at `scripts/sign-agent-card.py:18-21` claims "a reader who has the
+The docstring at `scripts/sign-agent-card.py` claims "a reader who has the
 card has everything needed to check it". **That claim is false** and is recorded
 here rather than repeated.
 
@@ -398,7 +398,7 @@ The fix this binding specifies, and which is not implemented:
 
 And what the code does today, so nobody mistakes it for the above:
 `agent.discover` checks that a `signatures` array **exists and is non-empty**
-(`agent_skills.cpp:798-799`). It performs no cryptography whatsoever. `signed:
+(`DiscoverSkill` in `agent_skills.cpp`). It performs no cryptography whatsoever. `signed:
 true` in a discovery summary means "carries a signatures member", not "verified".
 
 ---
@@ -409,10 +409,10 @@ true` in a discovery summary means "carries a signatures member", not "verified"
 
 | A2A method | Direction | Topic | Emitted by |
 |---|---|---|---|
-| `message/send` (new task) | client → server | `taskTopic(server, taskId)` | `agent_skills.cpp:966-978` |
-| `message/send` (continuation) | client → server | `taskTopic(server, taskId)` | `agent_skills.cpp:889-901` |
-| `tasks/cancel` | client → server | `taskTopic(server, taskId)` | `agent_skills.cpp:1097-1100` |
-| `TaskStatusUpdateEvent` | server → client | `taskTopic(server, taskId)` | consumed by `TaskStore::applyUpdate`, `agent_skills.cpp:288` |
+| `message/send` (new task) | client → server | `taskTopic(server, taskId)` | `TaskSkill` in `agent_skills.cpp` |
+| `message/send` (continuation) | client → server | `taskTopic(server, taskId)` | `TaskSkill` in `agent_skills.cpp` |
+| `tasks/cancel` | client → server | `taskTopic(server, taskId)` | `CancelSkill` in `agent_skills.cpp` |
+| `TaskStatusUpdateEvent` | server → client | `taskTopic(server, taskId)` | consumed by `TaskStore::applyUpdate`, `applyUpdate` in `agent_skills.cpp` |
 | Agent Card | publisher → all | `discoveryTopic(ns)` | §3.2 |
 | `tasks/get` | — | — | **not implemented**, §7.1 |
 | `message/stream`, `tasks/resubscribe` | — | — | not sent; §4.5 |
@@ -461,7 +461,7 @@ A status update, in the shape the receiving side accepts:
 ```
 
 `{"id": …, "status": {…}}` — an A2A `Task` object — is accepted too
-(`agent_skills.cpp:296-300`). See §7.2 for where this diverges from A2A's
+(`applyUpdate` in `agent_skills.cpp`). See §7.2 for where this diverges from A2A's
 `TaskStatusUpdateEvent` and what a conforming sender should emit.
 
 ### 4.2 Reliable channel or bare topic
@@ -499,17 +499,17 @@ yet wired where it matters most:
 
 | Traffic | Mechanism | Status |
 |---|---|---|
-| Owner approval channel | reliable channel — `channelCreate(channelId, contentTopic, agentAccount)`, `channelSend` | wired, `owner_channel.cpp:286-321` |
-| `messaging.create_group` | reliable channel — `channelCreate(group)` | wired, `messaging_skills.cpp:137` |
-| `messaging.send` | bare topic — `send(ownerTopic(recipient), payload)` | wired, `messaging_skills.cpp:84-88` |
+| Owner approval channel | reliable channel — `channelCreate(channelId, contentTopic, agentAccount)`, `channelSend` | wired, `owner_channel.cpp` |
+| `messaging.create_group` | reliable channel — `channelCreate(group)` | wired, `messaging_skills.cpp` |
+| `messaging.send` | bare topic — `send(ownerTopic(recipient), payload)` | wired, `messaging_skills.cpp` |
 | A2A task traffic | **`TaskPort.send(topic, json)` — an unbound seam** | **not wired by anything in this repository** |
 
-`TaskPort` (`agent_skills.h:227-241`) is shaped as "publish this JSON to this
+`TaskPort` (`TaskPort` in `agent_skills.h`) is shaped as "publish this JSON to this
 content topic". That shape admits either mechanism: a host may bind it to
 `send()` and get a bare topic, or to `channelCreate` + `channelSend` and get a
 reliable channel. **A host implementing this binding MUST bind it to the
 reliable-channel path.** No shipped code binds it at all — `SkillPorts.task`
-(`agent_module_plugin.h:69`) is default-constructed to nothing, the skills refuse
+(`SkillPorts` in `agent_module_plugin.h`) is default-constructed to nothing, the skills refuse
 with "delivery node is not started", and §7.1 records what that means for the
 end-to-end claim.
 
@@ -523,8 +523,9 @@ vanishes without an error.
 
 So every skill on this transport checks `ready()` *before* it does anything
 irreversible, and refuses rather than returning success:
-`agent.task` at `agent_skills.cpp:888` and `:960`, `agent.subscribe` at `:1050`,
-`agent.cancel` at `:1095`, `messaging.*` at `messaging_skills.cpp:80, 106, 133`.
+`TaskSkill`, `SubscribeSkill` and `CancelSkill` in `agent_skills.cpp` each call it
+on both the open and the continue path, and the messaging skills do the same in
+`messaging_skills.cpp`.
 
 There is a related trap worth carrying into any implementation, because it fails
 silently and looks exactly like a peer that never answered: **the event name you
@@ -533,8 +534,8 @@ the payload carries `"eventType":"message_sent"`; you register
 `onChannelMessageReceived` and the payload carries
 `"eventType":"channel_message_received"`. Matching the registration name never
 fires. Two constants exist for exactly this reason
-(`owner_channel.h:71-81`), and `parseInboundEvent` matches the second
-(`owner_channel.cpp:238`). Channel payloads also cross the FFI base64-encoded.
+(`owner_channel.h`), and `parseInboundEvent` matches the second
+(`owner_channel.cpp`). Channel payloads also cross the FFI base64-encoded.
 
 ### 4.4 There is no response
 
@@ -561,7 +562,7 @@ expected. Consequences, all of which a third party must design around:
 
 A conforming implementation of this binding therefore MUST treat every request as
 fire-and-forget and MUST derive all knowledge of the peer's state from status
-updates. That is the meaning of the design rule stated at `agent_skills.h:32-35`:
+updates. That is the meaning of the design rule stated at `TaskState` in `agent_skills.h`:
 *local state is never a claim about the remote agent.*
 
 ### 4.5 Streaming
@@ -569,7 +570,7 @@ updates. That is the meaning of the design rule stated at `agent_skills.h:32-35`
 A2A §3.3 makes streaming explicitly transport-specific. Here it is topic
 subscription: the server publishes `TaskStatusUpdateEvent`s to the task topic,
 and `agent.subscribe(agent_address, task_id)` subscribes the client to that same
-topic (`agent_skills.cpp:1052-1055`) and records `subscribed: true` on the task.
+topic (`SubscribeSkill` in `agent_skills.cpp`) and records `subscribed: true` on the task.
 
 No `message/stream` and no `tasks/resubscribe` request is ever sent. On this
 transport that is not a gap in the same way it is over HTTP: there is no
@@ -602,7 +603,7 @@ that inference is not established here.
 ### 5.1 The states
 
 A2A's `TaskState` enum, spelled exactly as A2A v0.3.0 spells it and with no
-additions (`agent_skills.h:51-61`, `agent_skills.cpp:113-146`):
+additions (`agent_skills.h`, `agent_skills.cpp`):
 
 ```
 submitted  working  input-required  auth-required
@@ -615,7 +616,7 @@ deliberately.
 
 An unrecognised state name is a **protocol error**, not a reason to invent a
 state: `taskStateFromName` returns false and `applyUpdate` refuses the whole
-update (`agent_skills.cpp:316-319`).
+update (`applyUpdate` in `agent_skills.cpp`).
 
 ### 5.2 The legal transitions
 
@@ -623,7 +624,7 @@ A2A v0.3.0 defines the state *names* normatively and says only that a terminal
 task cannot be restarted (§6.1). It publishes no transition matrix. The matrix
 below is therefore **this binding's**, it is stricter than anything A2A requires,
 and it is enforced in exactly one place — `canTransition`,
-`agent_skills.cpp:161-197` — so that a failing skill cannot corrupt the lifecycle
+`canTransition` in `agent_skills.cpp` — so that a failing skill cannot corrupt the lifecycle
 and two callers cannot disagree.
 
 | From ↓ To → | submitted | working | input-required | auth-required | completed | canceled | failed | rejected | unknown |
@@ -655,7 +656,7 @@ The reasoning behind each rule, because a third party will otherwise relax them:
 
 ### 5.3 What each skill does, precisely
 
-**`agent.task(agent_address, skill, params, …)`** — `agent_skills.cpp:846`.
+**`agent.task(agent_address, skill, params, …)`** — `TaskSkill` in `agent_skills.cpp`.
 
 Order of operations, and it is deliberate: *check, post, pay.*
 
@@ -684,12 +685,12 @@ Order of operations, and it is deliberate: *check, post, pay.*
    request; it has not seen the other agent start work. `working` arrives as a
    status update or not at all.
 
-**`agent.subscribe(agent_address, task_id)`** — `agent_skills.cpp:1031`. Refuses
+**`agent.subscribe(agent_address, task_id)`** — `SubscribeSkill` in `agent_skills.cpp`. Refuses
 an unknown task, a task with a different peer, a task already in a terminal state
 ("there are no further updates to stream"), and a transport that is not ready.
 Otherwise subscribes to the task topic and sets `subscribed`.
 
-**`agent.cancel(agent_address, task_id)`** — `agent_skills.cpp:1073`. Refuses an
+**`agent.cancel(agent_address, task_id)`** — `CancelSkill` in `agent_skills.cpp`. Refuses an
 unknown task, a mismatched peer, and a task already terminal. **Refuses while the
 transport is down** rather than marking the task canceled locally, because a
 cancel that never leaves the node is not a cancel: the peer keeps working and
@@ -716,7 +717,7 @@ party MUST NOT read a local `canceled` as a statement about the peer.
 
 The last row is the one to read twice. The request is out and the money is not.
 It is reported as a failure rather than retried silently, because a second
-attempt would risk paying twice for one task (`agent_skills.cpp:998-1006`).
+attempt would risk paying twice for one task (`TaskSkill` in `agent_skills.cpp`).
 
 ### 5.5 Restarts
 
@@ -724,14 +725,14 @@ The prize counts losing pending task state across a node restart as a reliabilit
 failure. `TaskStore` provides `snapshot()` → a JSON array of every task with its
 id, context, peer, skill, state, price paid, payment account, settlement tx,
 subscription flag, full state history and last note; and `restore(json)`
-(`agent_skills.cpp:386-461`).
+(`TaskStore` in `agent_skills.cpp`).
 
 `restore` builds into a scratch map and swaps only on success, so a snapshot with
 malformed JSON, a duplicate id or a state name A2A does not define leaves the
 store **untouched**. A half-restored store is worse than an empty one.
 
 A host that must survive a restart owns the store and passes it in through
-`SkillPorts.tasks` (`agent_module_plugin.h:106-110`); the module's internal store
+`SkillPorts.tasks` (`SkillPorts` in `agent_module_plugin.h`); the module's internal store
 runs fine but cannot be snapshotted from outside. Persisting the snapshot is the
 host's job and is not implemented here.
 
@@ -753,15 +754,15 @@ The `x-logos` block on the Agent Card:
 | `pricePerTask` | unsigned integer | LEZ per task. `0` advertises a free agent |
 | `settlement` | string | `lez-chained-authenticated-transfer` — how the payment is built |
 
-Validator rules (`agent_skills.cpp:571-590`): `x-logos` MUST be an object;
+Validator rules (`validateAgentCard` in `agent_skills.cpp`): `x-logos` MUST be an object;
 `lezAccount`, if present, MUST be a non-empty string; `pricePerTask`, if present,
 MUST be a non-negative integer; and **a non-zero `pricePerTask` MUST be
 accompanied by a non-empty `paymentAccount`**.
 
 `agent.card` refuses to produce a card at all if the agent charges a price and
-has no account to be paid into (`agent_skills.cpp:634-637`), and normalises the
+has no account to be paid into (`CardSkill` in `agent_skills.cpp`), and normalises the
 payment account to the `Public/` form `spel` resolves
-(`agent_skills.cpp:717-720`).
+(`CardSkill` in `agent_skills.cpp`).
 
 The price is a flat per-task figure. There is no per-skill pricing, no quoting
 round-trip, and no negotiation. A client that will not pay more than *N* passes
@@ -820,7 +821,7 @@ account, paying into the payee's public one.
 **The fix needs work upstream, not here.** The card would carry the recipient's
 `npk`/`vpk` under `x-logos`, and `spel` would build a `PrivateForeign` recipient
 from them. The wallet already has that account kind
-(`lez/wallet/src/account_manager.rs:30-34`); the CLI does not expose it. Until
+(`lez/wallet/src/account_manager.rs`); the CLI does not expose it. Until
 then, a shielded payee is not reachable and this binding does not claim one.
 
 ### 6.3 How a settlement is built
@@ -837,7 +838,7 @@ into that program, which is why the transfer program's ELF has to be supplied
 (`--bin-auth-transfer`) for the circuit to compose the inner call. That is what
 `x-logos.settlement: "lez-chained-authenticated-transfer"` names.
 
-The invocation, from `scripts/a2a-task.sh:276-281`:
+The invocation, from `scripts/a2a-task.sh`:
 
 ```
 spel --idl idl/agent_verifier.idl.json \
@@ -861,15 +862,15 @@ Two preconditions a third party will otherwise hit:
   still builds, `spel` still returns a transaction hash, and the sequencer simply
   never lands it. Nothing reports an error. That is why the first settlement by a
   fresh agent works and the second does not, which reads like an intermittent
-  fault and is not one (`a2a-task.sh:186-202`).
+  fault and is not one (`a2a-task.sh`).
 - **The period window.** The transaction is only includable inside
   `[window_start, window_start + period_blocks)`. A settlement submitted in the
   last blocks of a period can miss it, and that is a refusal, not a network fault
-  (`a2a-task.sh:222-244`).
+  (`a2a-task.sh`).
 
 ### 6.4 Ordering: request first, payment second
 
-`agent.task` posts the request and *then* pays (`agent_skills.cpp:980-1008`).
+`agent.task` posts the request and *then* pays (`TaskSkill` in `agent_skills.cpp`).
 A price paid for a request that never left the node buys nothing, so a transport
 failure must not reach the wallet.
 
@@ -889,7 +890,7 @@ and it is named in §7 rather than implied away.
 
 A payment is recorded against a task only through
 `TaskStore::recordPayment(id, amount, payAccount, settlementTx)`, and that call
-**refuses an amount with no transaction hash** (`agent_skills.cpp:333-336`):
+**refuses an amount with no transaction hash** (`recordPayment` in `agent_skills.cpp`):
 
 > a payment without a settlement transaction is not a payment
 
@@ -900,9 +901,9 @@ to write its manifest unless **both** of these hold:
 1. `getTransaction(<hash>)` returns a result — a submitted hash is not a
    settlement, and the RPC cannot distinguish a dropped, a pending and a
    never-submitted hash: all three return the same null. The script polls for 12
-   minutes at 60-second blocks (`a2a-task.sh:289-308`).
+   minutes at 60-second blocks (`a2a-task.sh`).
 2. `getAccount(<paymentAccount>).balance` moved by **exactly** the price
-   (`a2a-task.sh:310-322`). An included transaction is still not a payment: an
+   (`a2a-task.sh`). An included transaction is still not a payment: an
    earlier version of this instruction produced a real, confirmed, on-chain proof
    that a policy *permitted* 25 LEZ and moved nothing at all, and it was written
    up as a settlement.
@@ -913,7 +914,7 @@ verifying someone else's claimed settlement should perform both, in that order.
 ### 6.6 Cancellation and refunds
 
 `agent.cancel` reports a refund only when it has a transaction to point at
-(`agent_skills.cpp:1109-1127`):
+(`CancelSkill` in `agent_skills.cpp`):
 
 ```json
 "refund": {"amount": 25, "paid_into": "Public/…", "pending": false, "tx": "…"}
@@ -930,7 +931,7 @@ A free task returns `{"amount": 0, "pending": false}`.
 
 **The refund port as shipped cannot be implemented honestly, and a third party
 should not try.** `TaskPort.refund(paidAccount, amount)`
-(`agent_skills.h:238-240`) is called in the *client's* process and is documented
+(`TaskPort` in `agent_skills.h`) is called in the *client's* process and is documented
 as "reverse a settlement of `amount` that was paid into `paidAccount`". No client
 can do that: the money is in the payee's account and only the payee can move it.
 
@@ -968,7 +969,7 @@ So `max_price` in `agent.task` and any price check in a client are *advisory* �
 they save proving time on a transaction the chain would refuse. The ceiling is
 the chain's. `meta.configure` accepts `per_tx`, `per_period` and `period_blocks`
 and reports them as **not effective** for exactly this reason
-(`agent_skills.cpp:1241, 1266-1270`): writing a larger number changes what the
+(`ConfigureSkill` in `agent_skills.cpp`): writing a larger number changes what the
 agent asks the owner about and changes nothing about what the chain will let it
 spend.
 
@@ -989,25 +990,38 @@ Carried over honestly, including the parts that are uncomfortable.
 There is no code in this repository that **receives** an A2A request. Nothing
 routes an inbound Delivery event into `TaskStore::applyUpdate`; nothing reads a
 `message/send` off a task topic, dispatches the named skill, and publishes status
-updates back. `applyUpdate` is exercised only by
-`module/tests/agent_skills_test.cpp:429-450`.
+updates back. `applyUpdate` is exercised by `agent_skills_test.cpp` and by the
+lifecycle driver described below, never by a peer.
 
 Concretely, the following are all true at once:
 
 - `agent.task`, `agent.subscribe` and `agent.cancel` are complete **client-side**
   implementations with a validated lifecycle, a transport seam and a payment
   path.
-- `TaskPort` is not bound to Logos Delivery by any shipped host
-  (`SkillPorts.task`, `agent_module_plugin.h:69`), so in the loaded module every
-  one of them refuses with "delivery node is not started".
+- `TaskPort` is not bound to Logos Delivery by any shipped host: `start()` calls
+  `installBuiltinSkills(SkillPorts{})` with every callback default-constructed
+  (`AgentModuleImpl::start`, `SkillPorts`), so in the **loaded** module
+  `agent.task` refuses with "delivery node is not started", `agent.discover` with
+  "no discovery transport is configured", and `agent.card` with "the agent has no
+  LEZ account to identify itself with". A host may call `registerBuiltinSkills`
+  with wired ports before `start()`; none in this repository does.
 - `tasks/get` is not implemented in either direction. A2A §11.1.2 lists it among
   the three methods an agent MUST implement.
 - The end-to-end testnet evidence in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) covers
   the **card and the settlement**, which are the parts the chain and the network
-  can be asked about. `scripts/a2a-task.sh:179-184` prints the three lifecycle
-  states in a `for` loop; it does not drive `TaskStore`. The state machine is
-  covered by unit tests, not by the testnet run, and this document will not
-  describe a printed line as a transition.
+  can be asked about. The lifecycle is driven separately, by
+  `module/tests/a2a_drive.cpp`, which both demo scripts now invoke: it opens a
+  task through `TaskStore` and walks `submitted → working → working →
+  input-required → working → completed`, then requires the reopen to be refused.
+  That needs a compiler and nlohmann/json but no node, no chain and no key,
+  because `TaskPort` is a set of `std::function`s a driver can fill itself —
+  which is exactly why it runs while the loaded module cannot.
+
+  Both scripts used to print `submitted`, `working`, `completed` from a `for`
+  loop that drove nothing. They no longer do, and where the driver cannot be
+  built they say the lifecycle was not run rather than printing states: this
+  document will not describe a printed line as a transition, and now neither
+  will the scripts it documents.
 
 ### 7.2 The status-update shape is looser than A2A's
 
@@ -1020,7 +1034,7 @@ JSON-RPC success response.
 `status.state` naming a state A2A defines. Extra members are ignored. A
 spec-shaped event is therefore **accepted** — but its `status.message`, being an
 object rather than a string, fails the `is_string()` test at
-`agent_skills.cpp:321` and the note is silently dropped.
+`applyUpdate` in `agent_skills.cpp` and the note is silently dropped.
 
 A conforming sender SHOULD emit the full `TaskStatusUpdateEvent`. A conforming
 receiver SHOULD read `status.message.parts[]` for the note. Neither is
@@ -1048,42 +1062,54 @@ design rather than bugs in it:
 - only the payer is shielded, and only the debit side of the settlement is
   private.
 
-### 7.5 The two card signers disagree with each other
+### 7.5 The two card signers, and the one difference that is left
 
-There are two implementations of §3.5 in this repository and they do not produce
-the same document. The one that has actually published a card to testnet is the
-Python script; the one in the module has never been wired to a key.
+**This binding specifies `alg: "secp256k1-bip340"`, `kid` = the payment account,
+and base64url for `signature`.** There are two implementations of §3.5 in this
+repository — `scripts/sign-agent-card.py` and `CardSkill::invoke` — and they now
+produce byte-identical JWS headers. Three of the four rows below used to
+disagree, and each disagreement was a real interop break:
 
-| | `scripts/sign-agent-card.py` (published) | `CardSkill::invoke` (module default) |
-|---|---|---|
-| `alg` | `secp256k1-bip340` (`:221`) | `EdDSA` (`agent_skills.cpp:734`) |
-| `kid` | the **payment** account (`:221`) | the agent's **lezAccount** (`agent_skills.cpp:735`) |
-| `signature` encoding | lower-case **hex** (`:233`) | base64url, per the port's contract (`agent_skills.h:207-210`) |
-| non-ASCII in the payload | `\uXXXX`-escaped (`json.dumps` defaults to `ensure_ascii=True`) | raw UTF-8 (`nlohmann::json::dump` defaults to `ensure_ascii=false`) |
+| | `scripts/sign-agent-card.py` | `CardSkill::invoke` (module default) | agree? |
+|---|---|---|---|
+| `alg` | `secp256k1-bip340` | `secp256k1-bip340` | yes |
+| `kid` | the **payment** account | the **payment** account | yes |
+| `signature` encoding | base64url, 86 unpadded characters | base64url, per `CardPort::sign`'s contract | yes |
+| non-ASCII in the payload | `\uXXXX`-escaped (`json.dumps` defaults to `ensure_ascii=True`) | raw UTF-8 (`nlohmann::json::dump` defaults to `ensure_ascii=false`) | **no** |
 
-Every row is a genuine interop break:
+What was wrong, and is no longer:
 
-- **`EdDSA` is simply wrong.** LEZ account keys are BIP-340 Schnorr over
-  secp256k1. A verifier that trusted the module's default header would attempt an
-  Ed25519 verification against a Schnorr signature. `module/tests/agent_skills_test.cpp:156-157`
-  currently locks the wrong value in.
-- **`kid` must name the account whose key signed.** The module's default names
-  the shielded identity, whose key the wallet does not expose the way
-  `account_secret` reads a public account's — so a card signed under the module's
-  default `kid` is verifiable by nothing.
+- **`EdDSA` was simply wrong.** LEZ account keys are BIP-340 Schnorr over
+  secp256k1, so a verifier trusting the module's old default header would have
+  attempted an Ed25519 verification against a Schnorr signature. The symptom was
+  not subtle: `scripts/use-cases/verify-agent-card.py` refused the module's own
+  card with `unexpected algorithm 'EdDSA'`. The suite stayed green throughout
+  because `agent_skills_test.cpp` asserted the wrong value; that assertion now
+  pins the right one, and reverting the source turns it red.
+- **`kid` must name the account whose key signed.** The module's old default
+  named the shielded `lezAccount`, whose key the wallet does not expose the way
+  `account_secret` reads a public account's — so a card signed under it was
+  verifiable by nobody. The default is now the payment account, which is also
+  what the verifier requires, since a card signed by any other key is a licence
+  to redirect the money.
 - **Hex is not base64url.** RFC 7515 §2 and the A2A `AgentCardSignature` schema
-  both say the signature is base64url-encoded. `artifacts/agent-cards/storage.json`
-  carries 128 hex characters. A strict RFC 7515 verifier rejects the published
-  card.
+  both say the signature is base64url-encoded, and `sign-agent-card.py` emitted
+  `signature.hex()` — 128 characters where 86 were required. Nothing caught it
+  for the life of the file, because the A2A JSON Schema types the member as
+  `string` and hex is a string: **validating the card mechanically against the
+  published schema passes with the signature in the wrong alphabet.** That is why
+  the check now lives in `verify-agent-card.py` (`decode_signature`), which
+  rejects a 128-character hex run by name rather than letting a lenient decoder
+  turn a wrong-alphabet signature into a puzzling wrong-length one.
+  `artifacts/agent-cards/storage.json` has been re-signed and carries base64url.
+
+The row that still disagrees:
+
 - **The escaping difference only bites on non-ASCII**, which today's cards do not
   contain, so it is latent rather than active. A card whose `description` gains a
   single accented character would be signed over two different byte strings by
-  the two signers.
-
-**This binding specifies `alg: "secp256k1-bip340"`, `kid` = the payment account,
-and base64url for `signature`.** The published card meets the first two and not
-the third. Fixing it is a one-line change in `sign-agent-card.py` plus a
-re-signature, and it is deliberately not made in this document.
+  the two signers. A2A v1.0's move to RFC 8785 (§7.7) is what settles this
+  properly, and it is not implemented here.
 
 ### 7.6 An off-the-shelf A2A client cannot talk to a Logos agent
 
@@ -1135,7 +1161,7 @@ Honest, item by item. "Agent compliance" in A2A v0.3.0 §11.1.
 | Requirement | Status |
 |---|---|
 | §11.1.1 Support at least one transport | **Extension only.** `logos-messaging` per §3.2.4. No core transport, and §3.1's HTTP(S) requirement is not met (§1.2) |
-| §11.1.1 Expose a valid `AgentCard` | **Yes.** Validated against the v0.3.0 required set plus two binding rules (§3.4); one published on testnet |
+| §11.1.1 Expose a valid `AgentCard` | **Yes.** The published card and the one `CardSkill` emits both validate mechanically against the A2A v0.3.0 JSON Schema published at [a2aproject/A2A](https://github.com/a2aproject/A2A/blob/v0.3.0/specification/json/a2a.json) — every required field present, no type mismatch, the only non-schema members the `x-` extensions of §1.3 — plus the two binding rules of §3.4. Note what that validation does *not* catch: §7.5's hex signature passed it for the life of the file, because the schema types `signature` as `string` |
 | §11.1.1 Declare transport capabilities | **Yes.** `url` + `preferredTransport`, consistent per §5.6.4 |
 | §11.1.2 `message/send` | **Client side yes, server side no** (§7.1) |
 | §11.1.2 `tasks/get` | **No** (§7.1) |
@@ -1196,11 +1222,24 @@ A checklist for someone writing a peer, in the order the work has to happen.
 
 ## Where the code is
 
-Symbols, not line numbers. Line citations into `agent_skills.cpp` drifted by
-between +87 and +324 lines over a single refactor of this file — so a table of
-line numbers was not merely stale, it was stale by a *different amount* in every
-row, which is the kind of wrong that survives a spot-check. `scripts/check-docs.py`
-verifies that every symbol named here is in the file it is attributed to.
+Symbols, not line numbers — and as of this revision, **this document contains no
+line citations at all.** It used to carry about seventy, and they had drifted by
+between +87 and +326 lines: `agent_skills.cpp:640` for a `protocolVersion` that
+had moved to 875, `:734` for an `alg` default at 979, `canTransition` cited at
+`:161-197` and living at 248. A table of line numbers was not merely stale, it
+was stale by a *different amount* in every row, which is the kind of wrong that
+survives a spot-check.
+
+Nothing caught it, and the reason is worth stating because it is the same shape
+as the signature bug in §7.5: `scripts/check-docs.py` validated a line citation
+only by asking whether the number exceeded the end of the file. Every one of
+those citations pointed inside a 1600-line file, so every one passed. A check
+that can only detect a citation past EOF cannot detect a citation at the wrong
+line, and the gate was green for exactly as long as the numbers were wrong.
+
+Symbol citations do not have that failure mode: `check-docs.py` verifies by
+content that every symbol named here is in the file it is attributed to, and
+renaming a symbol out from under this document turns it red.
 
 | Thing | File |
 |---|---|
