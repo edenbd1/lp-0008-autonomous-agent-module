@@ -73,28 +73,39 @@ it honestly.
 
 ## The chain tier
 
-`agent_verifier` is a SPEL program with four instructions. Three of them exist
-to make the fourth trustworthy.
+`agent_verifier` is a SPEL program with six instructions. Five of them exist to
+make `spend` trustworthy.
 
 | Instruction | Signed by | Accounts | What it is for |
 |---|---|---|---|
-| `create_policy` | owner | policy (init, PDA), owner | anchor an envelope by address |
-| `approve_spend` | owner | approval (init, PDA), policy (PDA), owner | authorise one exact payment |
+| `claim_agent` | **agent** | claim (init, PDA of the signer), agent | name the one account that may anchor over this agent |
+| `create_policy` | owner | policy (init, PDA), claim (PDA), owner | anchor an envelope, if that claim names you |
+| `update_policy` | owner | policy (mut, PDA), owner | re-fix the limits; the way back from a wrong anchor |
+| `approve_spend` | owner | approval (init, PDA), policy (PDA), owner | authorise one exact payment, until one exact block |
 | `spend` | agent | policy (mut, PDA), agent, recipient | pay inside the envelope, unattended |
 | `spend_approved` | agent | policy (PDA), approval (mut, PDA), agent, recipient | pay outside it, on that approval |
 
-Two structural decisions are worth pulling out.
+Three structural decisions are worth pulling out.
 
-**The limits are an address; the running total is data.** `compute_policy_hash`
-folds (owner, agent, per-tx, per-period, period) into a digest
-(`crates/agent-policy-core/src/lib.rs:77-86`) and the policy account is the PDA
-seeded by it, so a limit cannot be edited — a different limit is a different
-account. The account's *data* is the one thing that does change: a 24-byte
-ledger, `window_start` then `spent`, written by `spend` and by nothing else,
-because the account is this program's PDA and LEZ rule 6 refuses a data write
-from any other program. Earlier revisions of this file said nothing was written
-there at all, which made the per-period ceiling unenforceable and was wrong.
-What that buys, and what it still does not, is
+**An agent has one policy account, and binding it takes two signatures.** The
+address is `PDA(program, ["agent-policy/v1", agent_id])` — the agent, and
+nothing else — so there is no such thing as a second policy for an agent and
+`init` refuses to overwrite the first. That decides *where*; `claim_agent`
+decides *who*. The agent signs a claim account at `PDA(program,
+["agent-owner/v1", agent])`, whose address is derived from the signing account,
+and `create_policy` refuses any signer that is not the id that claim names
+(6020) or refuses outright if there is no claim (6019). A previous revision of
+this program had only the first half, which meant anchoring a policy over
+somebody else's agent needed the agent's public id and no key at all.
+
+**The limits are data, not an address.** They used to be folded into the policy
+account's address by a `compute_policy_hash`, which stopped a limit being edited
+and did nothing about a second policy being anchored elsewhere. They now live in
+the account's 97 bytes — `version, owner, per_tx, per_period, period_blocks,
+window_start, spent`, little-endian — written by `create_policy`, changed only by
+`update_policy` (owner-signed) and `spend` (the running total), because the
+account is this program's PDA and LEZ rule 6 refuses a data write from any other
+program. What that buys, and what it still does not, is
 [`security-model.md`](security-model.md).
 
 **The program moves no money itself, and cannot.** LEZ rule 5 refuses any
@@ -161,15 +172,21 @@ executing a zkVM binary.
 
 The point is that it is compiled **twice**: into the guest, where the chain
 checks the derivation, and into the host, where the crate's examples are invoked
-by the deploy and settlement scripts — `policy-hash` for the anchor
-(`scripts/deploy-agents.sh:276`, `scripts/e2e-local-sequencer.sh:222`),
-`spend-marker` for an approval (`scripts/a2a-task.sh:217`), and `window-start`
-for the period a spend declares (`scripts/a2a-task.sh:234`,
-`scripts/e2e-local-sequencer.sh:277`). The address a script computes is
-therefore the address the program derives, and the period it names is computed
-by the same `window_start_for` the guest checks — by construction rather than by
-agreement. A divergence would be a compile error, not a transaction that fails
-on chain for reasons nobody can see.
+by the settlement script — `spend-marker` for an approval and `window-start` for
+the period a spend declares (`scripts/a2a-task.sh`). The period a script names is
+computed by the same `window_start_for` the guest checks — by construction rather
+than by agreement — and a divergence would be a compile error rather than a
+transaction that fails on chain for reasons nobody can see.
+
+There used to be a third example, `policy-hash`, which recomputed the address an
+anchor would land at. It is gone because the thing it computed is gone: the
+policy account's address is now a PDA of the agent, so the scripts ask `spel pda`
+to resolve it from the published IDL instead of deriving it a second time. The
+same crate is still what makes the two halves agree — the adversarial harness
+recomputes both PDAs from `POLICY_PDA_PREFIX` and `OWNER_CLAIM_PDA_PREFIX` and
+then runs the committed ELF, so if the constants ever drift, every case in that
+suite fails on the macro's own PDA check rather than passing against an address
+nothing reads.
 
 The workspace split exists for the same reason it does in LP-0002 and LP-0003:
 the guest targets `riscv32im-risc0-zkvm-elf` and carries its own `[workspace]`,

@@ -14,6 +14,25 @@
 # agent_id]) and nothing else — so anchoring is a once-per-agent act and the
 # envelopes below differ because the agents do different work, not because
 # different limits would give different addresses. They no longer would.
+#
+# ANCHORING IS TWO TRANSACTIONS, FROM TWO WALLETS
+#
+# One address per agent says WHERE a policy goes and nothing about who may put
+# one there. The deployment before this one answered that with "anybody": the
+# agent's account was never declared on `create_policy`, so anchoring over
+# somebody else's agent needed only its public id — which is in the manifest
+# this script writes and in the Agent Card it publishes. So each agent is now
+# anchored in two steps, and the two keys never meet:
+#
+#   claim_agent    signed by the AGENT, from the agent's own wallet home. It
+#                  writes the id of the one account allowed to anchor over it.
+#   create_policy  signed by that OWNER, from the owner's wallet home. The
+#                  program reads the claim and refuses any other signer (6020),
+#                  or refuses outright if the agent never claimed (6019).
+#
+# `spel` only signs with keys the single wallet home it is pointed at holds, so
+# one instruction demanding both signatures would demand both keys in one
+# wallet. Two instructions is what keeps the agent's key on the agent's node.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
@@ -40,28 +59,60 @@ MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
 # was already anchored that correct refusal looks identical to a failure and
 # wipes the entry out of the manifest.
 LEDGER="${LEDGER:-artifacts/anchored.tsv}"
-[ -f "$LEDGER" ] || printf 'program\tagent_id\tcreate_tx\n' > "$LEDGER"
-# Keyed by (program, agent), not by agent alone. A policy account is a PDA of the
-# *program*, so redeploying the program moves every policy to a new address that
-# has never been initialised. A ledger keyed on the agent alone would report
-# those as already anchored and skip the anchoring the new program needs.
-anchored_tx() { awk -F'\t' -v p="$1" -v a="$2" 'NR>1 && $1==p && $2==a {print $3; exit}' "$LEDGER"; }
+[ -f "$LEDGER" ] || printf 'program\twhat\tagent_id\ttx\n' > "$LEDGER"
+# Keyed by (program, instruction, agent), not by agent alone. Both accounts an
+# agent has here are PDAs of the *program*, so redeploying moves them to
+# addresses that have never been initialised; a ledger keyed on the agent alone
+# would report those as already done and skip the very anchoring the new program
+# needs. `what` is in the key because there are now two single-use steps per
+# agent and a run can legitimately resume between them.
+anchored_tx() { # program what agent -> tx, if it was already done
+  awk -F'\t' -v p="$1" -v w="$2" -v a="$3" 'NR>1 && $1==p && $2==w && $3==a {print $4; exit}' "$LEDGER"
+}
 # Each agent is funded so it can pay for real; spend moves balance, not just proof.
 FUND_AMOUNT="${FUND_AMOUNT:-40}"
 
 mkdir -p artifacts
-: > "$MANIFEST"
-# `policy_account` replaces the old `policy_hash` column, and that is the change
-# rather than a rename: there is no policy hash any more. The account's address
-# is derived from the agent, so this column is a fact a reader can check with
-# getAccount rather than a digest they have to recompute — and the limits beside
-# it are only a copy of what that account's data says.
+# The manifest is built in a temporary file and moved over the real one only
+# once every agent has actually anchored. It used to be truncated here, before
+# a single agent had been created, which made a failed run destructive: a
+# reviewer who pasted the README's command with a placeholder signer watched
+# three agents fail and was left with a manifest containing nothing but its
+# header — the evidence for a deployment that is still perfectly good on chain.
+# Nothing about a failed deployment justifies deleting the record of the one
+# that succeeded, so the existing file is now touched only on success.
+# Beside the manifest rather than in $TMPDIR, so the final move is a rename
+# within one filesystem and cannot leave a half-written manifest behind.
+MANIFEST_TMP="$(mktemp "$(dirname "$MANIFEST")/.agents.tsv.XXXXXX")"
+trap 'rm -f "$MANIFEST_TMP"' EXIT
+chmod 644 "$MANIFEST_TMP"
+# Count of agents that did not anchor. A non-zero count leaves the manifest
+# alone and exits non-zero, because a run that reports success while having
+# deployed nothing is worse than one that fails loudly.
+failures=0
+# WHAT A READER CAN CHECK, AND HOW
 #
-# `owner` stays, and it is no longer needed to CALL anything: `spend` derives the
-# policy address from the paying account and reads the owner out of it. It is
-# here so a reader can check the on-chain record against the account that
-# actually signed the anchor.
-printf 'category\tagent_id\tpay_account\tpolicy_account\tper_tx\tper_period\tperiod_blocks\tcreate_tx\towner\n' >> "$MANIFEST"
+# The column that made this manifest self-verifying used to be `policy_hash`: it
+# committed to the limits, and a reader who disbelieved the numbers beside it
+# could recompute the digest and compare. Replacing the hash-addressed policy
+# with an account addressed by the agent alone took that away — `policy_account`
+# commits to the agent and to nothing else, so the `per_tx` column became a
+# claim this file makes about itself.
+#
+# `record_prefix` puts it back, and does it with a byte comparison rather than a
+# derivation: it is the first 73 bytes of the policy account's data, hex —
+# version, owner, per_tx, per_period, period_blocks — which is the whole of the
+# immutable part of the record. Everything after byte 73 is the running total,
+# which moves. So:
+#
+#   curl … getAccount <policy_account> | jq -r '.result.data' → first 73 bytes
+#   must equal record_prefix, and there is nothing left to trust.
+#
+# `claim_account` is the other half. Its data is `02 || owner`, written by the
+# AGENT, and it is what makes `owner` below a fact about consent rather than a
+# note about who happened to sign: read it and you know which account this agent
+# allowed to fix its envelope. `docs/security-model.md` §7 has both commands.
+printf 'category\tagent_id\tpay_account\tclaim_account\tpolicy_account\tper_tx\tper_period\tperiod_blocks\trecord_prefix\tclaim_tx\tcreate_tx\towner\n' >> "$MANIFEST_TMP"
 
 confirmed() {
   curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
@@ -105,6 +156,34 @@ b = n.to_bytes((n.bit_length()+7)//8,'big')
 b = b'\x00'*(len(s)-len(s.lstrip('1'))) + b
 assert len(b)==32, 'not a 32-byte account id: %r' % s
 print(b.hex())" "$1"
+}
+
+# The immutable half of the policy record, as the chain will hold it: version,
+# owner, per_tx, per_period, period_blocks, little-endian, exactly the layout
+# `PolicyRecord::encode` writes (`crates/agent-policy-core/src/lib.rs`). Derived
+# here and then compared against `getAccount` after the anchor lands, so the
+# manifest carries a value that was checked rather than one that was asserted.
+record_prefix() { # owner_hex per_tx per_period period_blocks
+  python3 -c "
+import sys
+owner, per_tx, per_period, period = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+out = bytes([1]) + bytes.fromhex(owner)
+out += per_tx.to_bytes(16,'little') + per_period.to_bytes(16,'little') + period.to_bytes(8,'little')
+assert len(out) == 73, len(out)
+print(out.hex())" "$1" "$2" "$3" "$4"
+}
+
+# The same 73 bytes as the chain actually holds them. A default account — which
+# is what getAccount answers for an id nothing has ever written — has no data at
+# all, so this prints nothing and the comparison fails, which is the behaviour we
+# want: unknown must not read as agreeing.
+chain_prefix() { # policy account id
+  curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$1\"]}" \
+  | python3 -c "
+import json,sys
+d=bytes(json.load(sys.stdin)['result']['data'])
+print(d[:73].hex() if len(d)>=73 else '')"
 }
 
 echo "owner  $SIGNER"
@@ -272,20 +351,60 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   if [ -z "$pay" ]; then echo "  FAILED to open a receiving account" >&2; return 1; fi
   echo "  pays into Public/$pay  (advertised in its Agent Card)"
 
-  # The agent's id as the 32 bytes the chain holds. This is the policy account's
-  # PDA seed, so it is the address rather than a label.
+  # The agent's id as the 32 bytes the chain holds. This is the PDA seed of both
+  # of the agent's accounts, so it is an address rather than a label.
   local agent_hex; agent_hex=$(id_hex "$agent")
+  local signer_hex; signer_hex=$(id_hex "$signer")
 
-  # And the address itself, resolved by `spel` from the published IDL rather than
-  # recomputed here. There is exactly one of these per agent, which is why a
-  # second anchor cannot exist: `init` refuses an account that is already there.
-  local policy_account
+  # The two addresses, resolved by `spel` from the published IDL rather than
+  # recomputed here. There is exactly one of each per agent, which is why
+  # neither step can happen twice: both accounts are declared `#[account(init)]`
+  # and `init` refuses an account that is already there.
+  local claim_account policy_account
+  claim_account=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
+      pda claim --agent "$agent" 2>/dev/null | tail -n1)
   policy_account=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
       pda policy --agent-id "$agent_hex" 2>/dev/null | tail -n1)
-  if [ -z "$policy_account" ]; then echo "  FAILED to resolve the policy account" >&2; return 1; fi
+  if [ -z "$claim_account" ] || [ -z "$policy_account" ]; then
+    echo "  FAILED to resolve the agent's accounts" >&2; return 1
+  fi
+  echo "  claim  $claim_account  (the agent's own statement of who may anchor)"
   echo "  policy $policy_account  (per-tx $per_tx, per-period $per_period, window $period blocks)"
   echo "         one account per agent; the limits are its data, not its address"
 
+  # ── step 1: the agent designates its owner ────────────────────────────
+  #
+  # Signed by the AGENT, from the agent's own home, which is the whole point:
+  # a policy over this agent now requires this key, and nobody but the agent
+  # holds it. The instruction takes no `agent_id` — the claim account's address
+  # is derived from the account that signs — so there is nothing here for a
+  # stranger to substitute.
+  local claim_tx; claim_tx=$(anchored_tx "$DEPLOY_TX" claim_agent "$agent")
+  if [ -n "$claim_tx" ] && confirmed "$claim_tx"; then
+    echo "  claim_agent   $claim_tx  already claimed (init refused a second one)"
+  else
+    export LEE_WALLET_HOME_DIR="$AGENT_HOMES/$cat" NSSA_WALLET_HOME_DIR="$AGENT_HOMES/$cat"
+    # A private account's on-chain state moves every time it signs, and the
+    # proof is built against the wallet's local view. Prove against a stale one
+    # and the proof still builds, spel still returns a hash, and the sequencer
+    # simply never lands it — with nothing reported anywhere.
+    "$WALLET" account sync-private </dev/null >/dev/null 2>&1
+    local cout; cout=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
+      -- claim_agent --agent "Private/$agent" --owner-id "$signer_hex" 2>&1)
+    claim_tx=$(echo "$cout" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
+    if [ -z "$claim_tx" ]; then
+      echo "  NO TRANSACTION — claim_agent submitted nothing:" >&2
+      echo "$cout" | tail -8 >&2
+      return 1
+    fi
+    for _ in $(seq 1 24); do sleep 30; confirmed "$claim_tx" && break; done
+    confirmed "$claim_tx" || { echo "  claim_agent $claim_tx  NOT CONFIRMED" >&2; return 1; }
+    echo "  claim_agent   $claim_tx  landed — only $signer may anchor this agent"
+    printf '%s\tclaim_agent\t%s\t%s\n' "$DEPLOY_TX" "$agent" "$claim_tx" >> "$LEDGER"
+  fi
+
+  # ── step 2: the designated owner anchors the envelope ─────────────────
+  #
   # Resync the owner before proving. Funding this agent just changed the
   # owner's account on chain, and create_policy is proved against the wallet's
   # local view: prove against the state from before the transfer and the proof
@@ -300,75 +419,100 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   # returns a hash, and never lands. `account get` refetches from the chain and
   # rewrites the stored state, which is what makes the next anchor provable.
   "$WALLET" account get --account-id "Public/$signer" </dev/null >/dev/null 2>&1
-  local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
-    -- create_policy --owner "Public/$signer" --agent-id "$agent_hex" \
-    --per-tx "$per_tx" --per-period "$per_period" --period-blocks "$period" 2>&1)
-  local rc=$?
-  local tx; tx=$(echo "$out" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
-  # spel already tells us when an anchor failed — it prints
-  # "Transaction NOT confirmed" and exits 1. Grepping only for tx_hash threw
-  # that line away and turned a reported failure into a silent one, which is
-  # most of why this took so long to find.
-  if [ $rc -ne 0 ] || echo "$out" | grep -q "NOT confirmed"; then
-    echo "  spel reported the anchor failed:" >&2
-    echo "$out" | grep -E "NOT confirmed|error|Error" | head -3 | sed 's/^/    /' >&2
-  fi
-  if [ -z "$tx" ]; then
-    # Before calling this a failure, ask whether this agent is already anchored
-    # from an earlier run. If it is, that refusal is init doing its job.
-    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$agent")
-    if [ -n "$prior" ] && confirmed "$prior"; then
-      echo "  create_policy $prior  already anchored (init refused a second one)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$pay" "$policy_account" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
-      echo
-      return 0
-    fi
-    echo "  NO TRANSACTION — spel submitted nothing:" >&2
-    echo "$out" | tail -8 >&2
-    return 1
-  fi
-  # Blocks are exactly 60 seconds apart, so 150s gave a transaction two or
-  # three chances to be included and then called it dead. Wait twelve blocks.
-  for _ in $(seq 1 24); do sleep 30; confirmed "$tx" && break; done
-  if confirmed "$tx"; then
-    echo "  create_policy $tx  landed"
-    printf '%s\t%s\t%s\n' "$DEPLOY_TX" "$agent" "$tx" >> "$LEDGER"
+  # `--claim` is not passed and cannot be: the claim account is a PDA of
+  # `agent_id`, so spel derives its address from the same argument that derives
+  # the policy account's. Naming another agent therefore moves BOTH addresses
+  # together, which is why `agent_id` is bound rather than merely present.
+  local tx; tx=$(anchored_tx "$DEPLOY_TX" create_policy "$agent")
+  if [ -n "$tx" ] && confirmed "$tx"; then
+    echo "  create_policy $tx  already anchored (init refused a second one)"
   else
-    # A policy that is already anchored does not make spel fail: init refuses
-    # inside the program, so the transaction is built, submitted, given a hash,
-    # and then simply never lands — the same shape as every other failure on
-    # this chain. So the ledger has to be consulted here, on the unconfirmed
-    # path, and not only when spel submitted nothing.
-    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$agent")
-    if [ -n "$prior" ] && confirmed "$prior"; then
-      echo "  create_policy $prior  already anchored (init refused a second one)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$pay" "$policy_account" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
-      echo
-      return 0
+    local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
+      -- create_policy --owner "Public/$signer" --agent-id "$agent_hex" \
+      --per-tx "$per_tx" --per-period "$per_period" --period-blocks "$period" 2>&1)
+    local rc=$?
+    tx=$(echo "$out" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
+    # spel already tells us when an anchor failed — it prints
+    # "Transaction NOT confirmed" and exits 1. Grepping only for tx_hash threw
+    # that line away and turned a reported failure into a silent one, which is
+    # most of why this took so long to find.
+    if [ $rc -ne 0 ] || echo "$out" | grep -q "NOT confirmed"; then
+      echo "  spel reported the anchor failed:" >&2
+      echo "$out" | grep -E "NOT confirmed|error|Error" | head -3 | sed 's/^/    /' >&2
     fi
-    echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1
+    if [ -z "$tx" ]; then
+      echo "  NO TRANSACTION — spel submitted nothing:" >&2
+      echo "$out" | tail -8 >&2
+      return 1
+    fi
+    # Blocks are exactly 60 seconds apart, so 150s gave a transaction two or
+    # three chances to be included and then called it dead. Wait twelve blocks.
+    for _ in $(seq 1 24); do sleep 30; confirmed "$tx" && break; done
+    confirmed "$tx" || { echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1; }
+    echo "  create_policy $tx  landed"
+    printf '%s\tcreate_policy\t%s\t%s\n' "$DEPLOY_TX" "$agent" "$tx" >> "$LEDGER"
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$cat" "$agent" "$pay" "$policy_account" "$per_tx" "$per_period" "$period" "$tx" "$signer" >> "$MANIFEST"
+  # ── and the manifest records what the chain says, not what we asked for ──
+  #
+  # The limits go into the manifest only after the bytes the chain holds have
+  # been read back and matched against the record those limits imply. A run that
+  # anchored something else — or anchored nothing, and read a default account —
+  # fails here instead of publishing numbers nobody checked.
+  local want got; want=$(record_prefix "$signer_hex" "$per_tx" "$per_period" "$period")
+  got=$(chain_prefix "$policy_account")
+  if [ "$want" != "$got" ]; then
+    echo "  the policy account does not hold the record this anchor implies:" >&2
+    echo "    expected $want" >&2
+    echo "    on chain ${got:-<no data: the account has never been written>}" >&2
+    return 1
+  fi
+  echo "  record $want"
+  echo "         read back off chain and matched byte for byte"
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$cat" "$agent" "$pay" "$claim_account" "$policy_account" \
+    "$per_tx" "$per_period" "$period" "$want" "$claim_tx" "$tx" "$signer" >> "$MANIFEST_TMP"
   echo
 }
 
 # One per default skill category, with envelopes sized to what each does: a
 # storage agent pays small and often, a blockchain agent moves more per call.
 #
-# Each anchor gets its own signer, and each of those was created by
-# `wallet account new public` and has never signed anything else. That is not
-# tidiness: `spel` builds every transaction against nonce 0 while the sequencer
-# checks the nonce for exact equality, so a signer's *second* program
-# transaction is built with a stale nonce, submitted, given a hash, and then
-# silently dropped. Nothing reports it. Make three more the same way if you are
-# re-anchoring — the ids below are only useful to a wallet that holds their keys.
-deploy_agent storage    50   500  1000  10  149XhNKgoGmXoHfUSvpk93giP7FTK23YByZ3QenSYnoF
-deploy_agent messaging  25   250  1000  10  6Bt7jcHBaqocf4TyGifCUw86U3fEvCAR5emzRJdaUfA3
-deploy_agent blockchain 200 1000  1000  30  Bf4MG9AWypDXikj3uN5Q5hnJFNMGavFcsXGPQ2vbs6Du
+# Each anchor gets a signer of its own, each created by `wallet account new
+# public` and never used for anything else. That is not tidiness: a signer still
+# holding the DEFAULT program owner works exactly once, because on its second
+# program transaction its pre-state is no longer `Account::default()`, the SPEL
+# macro drops it from the output to dodge LEZ rule 7, and the state machine then
+# rejects the transaction for an account being declared and missing. Make three
+# more the same way if you are re-anchoring — the ids below are only useful to a
+# wallet that holds their keys.
+#
+# THE FUNDING FIGURES ARE FLOORS, NOT TRANSFERS. `fund_agent` sends nothing when
+# the agent already holds at least the amount named, and on a re-anchor it never
+# should: a shielded transfer does not credit an existing note, it MINTS A NEW
+# ONE with a new account id, and an agent whose id moves after it has claimed is
+# an agent whose claim and policy accounts are both at addresses nothing will
+# look at again. So fund first, claim second, anchor third, and on a re-anchor
+# do not fund at all. The numbers below are what each agent must already hold
+# for the demo path to work end to end: the messaging agent is the payer in
+# `scripts/a2a-task.sh` and two settlements at its 25-per-transaction ceiling
+# need 50 of them.
+deploy_agent storage     50   500  1000   5  2dA9APZgzcoX65YhNMJmsDC2v838ufLSjPyUdMknWoZd || failures=$((failures + 1))
+deploy_agent messaging   25   250  1000  55  H3VSrUkvPRqU1ruS2bpqrhETE9364hfeapXQReA9yaTZ || failures=$((failures + 1))
+deploy_agent blockchain 200  1000  1000   5  G64pMjF9MR2vZjjwCyCFsC7DvG4uUPJC7quJiih9uvCc || failures=$((failures + 1))
 
+# Nothing is written over the real manifest until every agent has anchored.
+# A partial manifest is not a smaller success, it is a file that claims three
+# agents are deployed and names fewer — so a failed run leaves the previous
+# manifest exactly as it found it and says so.
+if [ "$failures" -ne 0 ]; then
+  echo >&2
+  echo "$failures of 3 agents did not deploy; $MANIFEST left unchanged" >&2
+  exit 1
+fi
+
+mv "$MANIFEST_TMP" "$MANIFEST"
+trap - EXIT
 echo "manifest: $MANIFEST"
 column -t -s$'\t' "$MANIFEST" 2>/dev/null || cat "$MANIFEST"

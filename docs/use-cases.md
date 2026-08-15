@@ -395,14 +395,26 @@ Real output:
   OK     refused with 6002: no transaction was built, so there is nothing to submit
 ```
 
-The three refusals are the whole point, and they are the three moves available to
-an attacker who owns the agent's process:
+The refusals are the whole point, and they are what is left of the moves
+available to an attacker who owns the agent's process:
 
 | move | refused by | why |
 |---|---|---|
 | ask for more than the envelope allows | `6005` | over the per-transaction ceiling; the program names the approved path instead of merely refusing |
-| present the anchored account, claim bigger limits | `6001` | the limits are hashed into the account's address, and these do not hash to it |
-| name the account the bigger limits *do* hash to | `6002` | that address exists and has never been initialised — section 4, reached from inside the program |
+| slide the period forward a block to reset the running total | `6014` | a window must start on a multiple of `period_blocks`, and the transaction is pinned to the one it names |
+
+There used to be a third and a fourth row here — presenting the anchored account
+while claiming bigger limits (`6001`), and naming the account those bigger limits
+hashed to (`6002`). Both are gone because the moves are gone: `spend` carries no
+agent id and no limits at all, so the policy account's address comes from the
+account that PAYS and the ceiling is read out of it. There is nothing left in the
+call to disagree with. `6001` and `6013` are retired rather than reused, so an
+integration branching on them cannot silently match a different refusal.
+
+The move that is *not* in this list, because it is not a move the agent makes,
+is anchoring a second policy — and under the program before this one, anybody at
+all could anchor the first. That is [`docs/security-model.md`](security-model.md)
+§2, and it is the reason this deployment exists.
 
 Each refusal happens while the proof is being built. No transaction is produced,
 so there is nothing to submit and nothing to cost anything.
@@ -415,21 +427,17 @@ so there is nothing to submit and nothing to cost anything.
   now carries the period it last spent in, and naming an older one is refused by
   `6015` before the ceiling is ever looked at. Naming the code is what makes each
   attempt a demonstration of the mechanism it claims to be about.
-- The **cannot-exist transaction hash** returns null, and the **cannot-exist
-  policy hash** derives an address whose `program_owner` is eight zeros.
-- **The derivation is checked before it is used.** The address of an envelope
-  nobody anchored has to be computed by something, and
-  [`scripts/use-cases/policy-hash.py`](../scripts/use-cases/policy-hash.py) is a
-  second implementation of a hash the guest also computes — normally the way two
-  halves of a system drift apart. So `--self-check` recomputes **every** policy
-  in `artifacts/agents.tsv` from that row's own owner, agent and limits, and the
-  run stops if any disagrees. Those three hashes are the addresses of accounts
-  that are on the testnet and owned by the policy program, so agreeing with all
-  three is agreeing with the code that anchored them. When the crate ships its
-  own derivation as a runnable example, the two are compared as well; when it
-  does not, the script says so rather than falling back silently. Falsified on
-  purpose: change one character of the domain-separation prefix and the
-  self-check reports `3 of 3 anchored policies do not match this derivation`.
+- The **cannot-exist transaction hash** returns null, and a **cannot-exist agent
+  id** derives a policy address whose `program_owner` is eight zeros.
+- **The address is resolved, not re-derived.** There used to be a
+  `scripts/use-cases/policy-hash.py` here, a second implementation of the digest
+  the guest computed — normally the way two halves of a system drift apart, and
+  it needed a `--self-check` mode to keep them together. It is gone with the
+  thing it computed: the policy account's address is a PDA of the agent, so the
+  script asks `spel pda policy --agent-id` to resolve it from the published IDL,
+  and the answer is compared against the `policy_account` column of
+  `artifacts/agents.tsv`. One derivation, in the program, with the IDL as the
+  interface to it.
 - The refusals run against a **copy** of the agent's wallet home. A refused
   `spend` panics inside the guest, and a panicking run leaves the wallet store in
   a state the next run cannot load — observed here, and it would take the live
@@ -462,7 +470,6 @@ below the line the agent acts alone, above it the chain will not let it.
 
 The helpers each script leans on, all under `scripts/use-cases/`:
 `lib.sh` (manifest columns by name, RPC shapes, the control hash),
-`policy-hash.py` (the policy-address derivation, self-checking),
 `verify-agent-card.py` (BIP-340 verification of an A2A card),
 `vault_drive.c` and `share_drive.c` (the Storage and Delivery node drivers).
 

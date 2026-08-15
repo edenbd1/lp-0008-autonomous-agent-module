@@ -104,8 +104,9 @@ false results published from this repository came from exactly that. Reading by
 position is the bug; the helper is the fix, and it is used everywhere below.
 
 What is anchored under *exactly* that program — the ledger is keyed by
-`(program, agent_id)`, because a redeploy moves every policy to an address that
-has never been initialised:
+`(program, what, agent_id)`, because a redeploy moves every account to an
+address that has never been initialised, and because anchoring is now two
+single-use steps per agent (`claim_agent`, then `create_policy`):
 
 ```sh
 awk -F'\t' -v p="$PROG" '
@@ -273,12 +274,17 @@ own error text, is in [`docs/limitations.md`](docs/limitations.md).
 
 ### Re-running it
 
-Anchoring is single-use by construction: `create_policy` is declared
-`#[account(init, …)]` and `init` refuses to overwrite. An agent's identity is
-stable once funded, so a second run resolves the *same* policy account and is
-correctly refused — which looks exactly like a failure. `artifacts/anchored.tsv`
-is what tells the two apart; the script reports a refused re-anchor as
-already-anchored and leaves the manifest intact.
+Anchoring is single-use by construction, twice over: `claim_agent` and
+`create_policy` are both declared `#[account(init, …)]` and `init` refuses to
+overwrite. An agent's identity is stable once funded, so a second run resolves
+the *same* two accounts and is correctly refused — which looks exactly like a
+failure. `artifacts/anchored.tsv` is what tells the two apart; the script reports
+a refused repeat as already-done and leaves the manifest intact.
+
+Fund before you claim, and never after. A shielded transfer does not credit an
+existing note, it mints a **new** one with a new account id, so an agent funded
+after it has claimed is an agent whose claim and policy sit at addresses nothing
+will look at again.
 
 Agent keys are written under `$AGENT_HOMES`, never into the repository. An
 agent whose key is committed is not an agent, and one whose key is thrown away
@@ -299,19 +305,32 @@ policy account, at `PDA(program, ["agent-policy/v1", agent_id])` — seeded by t
 agent id and nothing else — and the three numbers are that account's data, which
 only this program may write (LEZ rule 6, `UnauthorizedDataModification`).
 
-`create_policy` declares that account `#[account(init, …)]`, so the owner writes
-it once, when it creates the agent, and there is nowhere to put a second one.
-The owner it records is the account that *signed* — there is no `owner_id`
-argument — so the claim and the fact cannot differ, and `approve_spend` later
-compares its signer against that recorded owner rather than against anything the
-caller supplies.
+Writing that account takes **two signatures, in two transactions, from two
+wallets**. The agent signs `claim_agent`, which writes the id of the one account
+allowed to anchor over it into `PDA(program, ["agent-owner/v1", agent])` — an
+address derived from the signing account, so there is nothing there to
+substitute. That account then signs `create_policy`, which refuses any other
+signer (6020) and refuses outright if the agent never claimed (6019). The owner
+it records is the account that *signed*; there is no `owner_id` argument, so the
+claim and the fact cannot differ, and `approve_spend` later compares its signer
+against that recorded owner rather than against anything the caller supplies.
+
+The previous deployment had only half of this. Its `create_policy` never
+declared the agent's account at all, so anchoring a policy over somebody else's
+agent needed only that agent's **public id** — which this file tells you how to
+read out of the manifest. That is on chain: `eedb3caf…` at block 8869 is a
+stranger anchoring `per_tx = u128::MAX` over an agent it does not control, and
+the identical call to the program shipped here was never included.
 
 Raising a limit is therefore not a different address an attacker anchors afresh
-— that was the previous design and it is why this one exists — it is a write the
-program refuses. And `spend` takes no `agent_id` at all: the policy account's
-address is derived from the *paying* account, so the ceiling a payment is
-measured against is whatever that account says, not what the caller typed.
-Reconfiguring an agent means deploying a new one.
+— that was the design two versions ago — and it is not a write the program
+refuses outright either. `update_policy` re-fixes both limits and the period in
+place, on the signature of the owner the record names, and carries the running
+total through unchanged. It is the way back from an anchor that was wrong and
+the brake on an agent that is suspect: `per_tx = 0` and it spends nothing
+unattended. `spend` takes no `agent_id` and no limits at all — the policy
+account's address is derived from the *paying* account, so the ceiling a payment
+is measured against is whatever that account says, not what the caller typed.
 
 Above `per_tx` the agent must present an approval account seeded by the exact
 payment — agent, recipient, amount, nonce — and owned by this program. What

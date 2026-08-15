@@ -840,10 +840,13 @@ spel --idl idl/agent_verifier.idl.json \
      --bin-auth-transfer artifacts/programs/authenticated_transfer.bin \
   -- spend --agent "Private/<client agent>" \
            --recipient "Public/<payee's paymentAccount>" \
-           --policy-hash <hex> --owner-id <hex> --agent-id <hex> \
-           --per-tx <n> --per-period <n> --period-blocks <n> \
            --amount <price> --window-start <block>
 ```
+
+There is no `--policy-hash`, no `--owner-id`, no `--agent-id` and no limits, and
+their absence is the design: the policy account's address is derived from the
+account that PAYS, and the ceiling is read out of that account. Nothing in the
+call is left for a caller to disagree with.
 
 Two preconditions a third party will otherwise hit:
 
