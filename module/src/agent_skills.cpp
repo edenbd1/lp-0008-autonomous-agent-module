@@ -1,8 +1,15 @@
 #include "agent_skills.h"
 
+// For `isTopicIdentifier`, which is where this repository's content-topic
+// grammar lives. Header-only for exactly this reason: the two files that splice
+// identifiers into topics are built into separate test binaries, and a grammar
+// with two implementations is a grammar with two answers.
+#include "messaging_skills.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <random>
 
 namespace logos::agent {
@@ -18,16 +25,53 @@ std::string fail(const std::string &why)
     return json{{"ok", false}, {"error", why}}.dump();
 }
 
+/// A refusal that still carries what the caller needs to act on it — which
+/// account was going to be paid, how much, and what is now waiting on the owner.
+std::string fail(const std::string &why, json extra)
+{
+    extra["ok"] = false;
+    extra["error"] = why;
+    return extra.dump();
+}
+
 std::string done(json extra = json::object())
 {
     extra["ok"] = true;
     return extra.dump();
 }
 
+/// The message every depth refusal gives, so the limit is stated once.
+std::string tooDeep(const std::string &what)
+{
+    return "the " + what + " nests deeper than " +
+           std::to_string(kMaxJsonDepth) +
+           " levels, which this module refuses to hold: copying such a document "
+           "recurses once per level and overflows the stack";
+}
+
+/// Likewise for the content-topic grammar, so the rule is stated once and in
+/// the words of the thing it protects.
+std::string badTopicIdentifier(const char *what)
+{
+    return std::string("'") + what +
+           "' is spliced into a Logos content topic, so it may only carry "
+           "letters, digits, '-' and '_': anything else names a different topic "
+           "than the one this agent means to speak on";
+}
+
 /// Parse and require a field, rather than letting nlohmann throw out of invoke()
 /// and take the module down with it.
+///
+/// The depth bound comes first, on the raw text, and it is the one check that
+/// cannot be moved later: past this point the document gets copied — into a
+/// summary, into a request, into the store — and a copy of a deep enough
+/// document is a stack overflow, which is a signal no `catch` can answer.
 json parse(const std::string &s, std::string &err)
 {
+    if (!withinJsonDepth(s, kMaxJsonDepth)) {
+        err = tooDeep("parameters");
+        return json::object();
+    }
     auto j = json::parse(s, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         err = "parameters must be a JSON object";
@@ -58,6 +102,12 @@ bool optionalString(const json &j, const char *key, std::string &out, std::strin
     return true;
 }
 
+/// An unsigned field that is allowed to be absent, but not to be negative, not
+/// to be fractional and not to be some other type.
+///
+/// `is_number_unsigned()` is doing all three jobs at once, and each of them has
+/// been a defect here: `value(key, 0ull)` throws on a string, converts `-1` into
+/// 18446744073709551615, and truncates `1.5`.
 bool optionalUnsigned(const json &j, const char *key, std::uint64_t &out, bool &present,
                       std::string &err)
 {
@@ -69,6 +119,43 @@ bool optionalUnsigned(const json &j, const char *key, std::uint64_t &out, bool &
     }
     out = j[key].get<std::uint64_t>();
     present = true;
+    return true;
+}
+
+bool optionalBool(const json &j, const char *key, bool &out, std::string &err)
+{
+    if (!j.contains(key) || j[key].is_null()) return true;
+    if (!j[key].is_boolean()) {
+        err = std::string("'") + key + "' must be true or false";
+        return false;
+    }
+    out = j[key].get<bool>();
+    return true;
+}
+
+/// A decimal string as a u64, saturating at the top.
+///
+/// The chain's amounts are u128 and a task price is a u64, so a limit larger
+/// than a u64 cannot bind any price this skill can be asked to pay: saturating
+/// is exact for every comparison made against it, and it removes the one way a
+/// limit could wrap around into a small number. False means the text was not a
+/// decimal number at all, which is *unknown* and never zero.
+bool decimalToU64(const std::string &s, std::uint64_t &out)
+{
+    if (s.empty() || s.size() > 39) return false;
+    std::uint64_t v = 0;
+    bool saturated = false;
+    for (const char c : s) {
+        if (c < '0' || c > '9') return false;
+        const std::uint64_t d = static_cast<std::uint64_t>(c - '0');
+        if (saturated) continue;
+        if (v > (std::numeric_limits<std::uint64_t>::max() - d) / 10) {
+            saturated = true;
+            continue;
+        }
+        v = v * 10 + d;
+    }
+    out = saturated ? std::numeric_limits<std::uint64_t>::max() : v;
     return true;
 }
 
@@ -196,8 +283,43 @@ bool canTransition(TaskState from, TaskState to)
     return false;
 }
 
+bool withinJsonDepth(const std::string &text, int maxDepth)
+{
+    if (maxDepth < 0) return false;
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (const char c : text) {
+        if (inString) {
+            // A brace inside a string is a character, not a level. Missing this
+            // would make the bound reject `{"note":"[[["}` and, far worse, would
+            // let `{"a":"\""}` desynchronise the scan.
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            inString = true;
+        } else if (c == '{' || c == '[') {
+            if (++depth > maxDepth) return false;
+        } else if (c == '}' || c == ']') {
+            if (depth > 0) --depth;
+        }
+    }
+    return true;
+}
+
 std::string taskTopic(const std::string &agentAddress, const std::string &taskId)
 {
+    // Both halves land in the `<name>` segment of the content topic, and both
+    // can be chosen by a stranger: `agent_address` is read out of a peer's card.
+    // An id carrying a `/` is not a name, it is a different topic.
+    if (!isTopicIdentifier(agentAddress) || !isTopicIdentifier(taskId)) return {};
     return "/lp-0008/1/task-" + agentAddress + "-" + taskId + "/json";
 }
 
@@ -287,6 +409,10 @@ bool TaskStore::advance(const std::string &id, TaskState to, const std::string &
 
 bool TaskStore::applyUpdate(const std::string &eventJson, std::string &err)
 {
+    if (!withinJsonDepth(eventJson, kMaxJsonDepth)) {
+        err = tooDeep("status update");
+        return false;
+    }
     auto j = json::parse(eventJson, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         err = "a status update must be a JSON object";
@@ -406,6 +532,10 @@ std::string TaskStore::snapshot() const
 
 bool TaskStore::restore(const std::string &snapshotJson, std::string &err)
 {
+    if (!withinJsonDepth(snapshotJson, kMaxJsonDepth)) {
+        err = tooDeep("snapshot");
+        return false;
+    }
     auto j = json::parse(snapshotJson, nullptr, false);
     if (j.is_discarded() || !j.is_array()) {
         err = "a snapshot must be a JSON array of tasks";
@@ -441,15 +571,51 @@ bool TaskStore::restore(const std::string &snapshotJson, std::string &err)
             err = "task " + t.id + " appears twice in the snapshot";
             return false;
         }
-        t.contextId = e.value("contextId", t.id);
-        t.pricePaid = e.value("pricePaid", std::uint64_t{0});
-        t.payAccount = e.value("payAccount", std::string{});
-        t.settlementTx = e.value("settlementTx", std::string{});
-        t.subscribed = e.value("subscribed", false);
-        t.note = e.value("note", std::string{});
-        if (e.contains("history") && e["history"].is_array()) {
+        // Every remaining field is type-checked rather than read with `value()`.
+        // `value()` throws — `type_error.302` — the moment a key is present with
+        // the wrong type, and a snapshot is a file on disk that an attacker who
+        // can write it chooses the types in. This function's contract is that it
+        // *refuses* malformed input; throwing out of it is not refusing.
+        bool present = false;
+        if (!optionalString(e, "contextId", t.contextId, ferr) ||
+            !optionalString(e, "payAccount", t.payAccount, ferr) ||
+            !optionalString(e, "settlementTx", t.settlementTx, ferr) ||
+            !optionalString(e, "note", t.note, ferr) ||
+            !optionalBool(e, "subscribed", t.subscribed, ferr) ||
+            !optionalUnsigned(e, "pricePaid", t.pricePaid, present, ferr)) {
+            err = "task " + t.id + " in snapshot: " + ferr;
+            return false;
+        }
+        // `pricePaid` earns the strictest check in this function because it is
+        // the only field that becomes an amount of money without passing through
+        // the chain again: `"pricePaid": -1` used to restore as
+        // 18446744073709551615, after which `agent.cancel` called
+        // `refund(attacker, 2^64-1)` and reported the refund as ok.
+        // `optionalUnsigned` refuses the negative, the fractional and the string
+        // alike; there is no conversion left to be surprised by.
+        if (t.contextId.empty()) t.contextId = t.id;
+
+        if (e.contains("history") && !e["history"].is_null()) {
+            if (!e["history"].is_array()) {
+                err = "task " + t.id + " in snapshot: 'history' must be an array of state names";
+                return false;
+            }
             for (const auto &h : e["history"]) {
-                if (h.is_string()) t.history.push_back(h.get<std::string>());
+                // Skipping a non-string entry silently would restore a task
+                // whose history is shorter than the one that was saved, which is
+                // a quiet rewrite of what happened to it.
+                if (!h.is_string() || h.get<std::string>().empty()) {
+                    err = "task " + t.id +
+                          " in snapshot: every entry in 'history' must be a non-empty state name";
+                    return false;
+                }
+                TaskState ignored = TaskState::Unknown;
+                if (!taskStateFromName(h.get<std::string>(), ignored)) {
+                    err = "task " + t.id + " in snapshot: '" + h.get<std::string>() +
+                          "' in 'history' is not an A2A task state";
+                    return false;
+                }
+                t.history.push_back(h.get<std::string>());
             }
         }
         if (t.history.empty()) t.history.push_back(stateName);
@@ -575,18 +741,84 @@ std::string validateCard(const json &c)
             (!x["lezAccount"].is_string() || x["lezAccount"].get<std::string>().empty())) {
             return "'x-logos.lezAccount' must be a non-empty string";
         }
+        // Typed whenever it is present, not only when a price is present too.
+        //
+        // This check used to live inside the `pricePerTask > 0` branch below, so
+        // a card carrying `"paymentAccount": 42` — or null, or `[]`, or `{}`, or
+        // `true` — and no price was *valid*. `agent.discover` accepted it and
+        // republished it; `agent.task` then read the same field with `value()`
+        // and threw `type_error.302` straight out of `invoke()`, breaking the
+        // contract in `agent_module_interface.h`. One validator saying yes while
+        // the other says "exception" is the defect: the type check belongs to
+        // the field, not to the branch that happens to read it.
+        if (x.contains("paymentAccount") &&
+            (!x["paymentAccount"].is_string() ||
+             x["paymentAccount"].get<std::string>().empty())) {
+            return "'x-logos.paymentAccount' must be a non-empty string";
+        }
         if (x.contains("pricePerTask")) {
             if (!x["pricePerTask"].is_number_unsigned()) {
                 return "'x-logos.pricePerTask' must be a non-negative integer";
             }
-            if (x["pricePerTask"].get<std::uint64_t>() > 0) {
-                if (!x.contains("paymentAccount") || !x["paymentAccount"].is_string() ||
-                    x["paymentAccount"].get<std::string>().empty()) {
-                    return "the card charges a price but names no 'x-logos.paymentAccount' "
-                           "to pay it into";
-                }
+            if (x["pricePerTask"].get<std::uint64_t>() > 0 && !x.contains("paymentAccount")) {
+                return "the card charges a price but names no 'x-logos.paymentAccount' "
+                       "to pay it into";
             }
         }
+    }
+    return {};
+}
+
+/// The two fields `agent.task` reads out of a validated card, read the way a
+/// validated card guarantees them. Belt and braces: `validateCard` now types
+/// both, and this cannot throw even if that check is one day loosened again.
+std::uint64_t cardPrice(const json &x)
+{
+    if (!x.is_object() || !x.contains("pricePerTask") || !x["pricePerTask"].is_number_unsigned()) {
+        return 0;
+    }
+    return x["pricePerTask"].get<std::uint64_t>();
+}
+
+std::string cardString(const json &x, const char *key)
+{
+    if (!x.is_object() || !x.contains(key) || !x[key].is_string()) return {};
+    return x[key].get<std::string>();
+}
+
+/// Why this task payment is outside the owner's envelope, or empty when it is
+/// inside it.
+///
+/// The mirror of `wallet_skills.cpp`'s check, deliberately: two spending paths
+/// out of one agent that answer differently would make the smaller ceiling
+/// decorative. Every unknown is outside — an agent that cannot say what its
+/// limits are, or what it has already moved this period, has not shown that a
+/// payment falls inside them, and "not shown" is the same as "no" when the next
+/// step is to sign a transfer.
+std::string outsideEnvelope(const TaskPort &port, std::uint64_t price)
+{
+    const auto call = [](const std::function<std::string()> &f) {
+        return f ? f() : std::string{};
+    };
+    std::uint64_t perTx = 0, perPeriod = 0, spent = 0;
+    if (!decimalToU64(call(port.perTxLimit), perTx) ||
+        !decimalToU64(call(port.perPeriodLimit), perPeriod)) {
+        return "the anchored envelope is not known to this process, so nothing can be shown to "
+               "fall inside it";
+    }
+    if (!decimalToU64(call(port.spentThisPeriod), spent)) {
+        return "the period total is unknown, so this payment cannot be shown to be inside the "
+               "envelope";
+    }
+    if (price > perTx) {
+        return "over the per-transaction limit of " + std::to_string(perTx) + " LEZ";
+    }
+    // Written as a subtraction against the limit rather than as `spent + price`,
+    // which is the addition that wraps: a period total near 2^64 would otherwise
+    // add its way back down to something that looks affordable.
+    if (spent > perPeriod || price > perPeriod - spent) {
+        return "over the per-period limit of " + std::to_string(perPeriod) + " LEZ, of which " +
+               std::to_string(spent) + " is already spent";
     }
     return {};
 }
@@ -595,6 +827,9 @@ std::string validateCard(const json &c)
 
 std::string validateAgentCard(const std::string &cardJson)
 {
+    // Before the parse, for the reason `kMaxJsonDepth` gives: the caller of this
+    // function is about to keep whatever it just validated.
+    if (!withinJsonDepth(cardJson, kMaxJsonDepth)) return tooDeep("card");
     auto j = json::parse(cardJson, nullptr, false);
     if (j.is_discarded()) return "the card is not valid JSON";
     return validateCard(j);
@@ -667,6 +902,12 @@ std::string CardSkill::invoke(const std::string &paramsJson)
     json skills = json::array();
     const std::string skillsJson = call(port_.skills);
     if (!skillsJson.empty()) {
+        // A registered skill's parameter schema is third-party text and it is
+        // copied into the card below, so it is bounded like everything else that
+        // gets copied.
+        if (!withinJsonDepth(skillsJson, kMaxJsonDepth)) {
+            return fail(tooDeep("skill registry listing"));
+        }
         auto parsed = json::parse(skillsJson, nullptr, false);
         if (parsed.is_discarded() || !parsed.is_array()) {
             return fail("the skill registry did not return a JSON array");
@@ -691,7 +932,11 @@ std::string CardSkill::invoke(const std::string &paramsJson)
                 // the card to declare input/output schemas — so it travels as an
                 // extension rather than being dropped.
                 if (s["parameters"].is_string()) {
-                    auto schema = json::parse(s["parameters"].get<std::string>(), nullptr, false);
+                    const std::string schemaText = s["parameters"].get<std::string>();
+                    if (!withinJsonDepth(schemaText, kMaxJsonDepth)) {
+                        return fail(tooDeep("parameter schema of skill '" + id + "'"));
+                    }
+                    auto schema = json::parse(schemaText, nullptr, false);
                     if (!schema.is_discarded()) entry["x-logos-parameters"] = schema;
                 } else {
                     entry["x-logos-parameters"] = s["parameters"];
@@ -785,6 +1030,14 @@ std::string DiscoverSkill::invoke(const std::string &paramsJson)
     std::size_t index = 0;
     for (const auto &doc : documents) {
         const std::size_t at = index++;
+        // First, and on the text: a card that is accepted is copied into the
+        // summary below, and the copy is what overflows the stack. Note that the
+        // *rejected* path was always safe — it keeps a reason string and drops
+        // the document — so this bound is what makes the accepted path safe too.
+        if (!withinJsonDepth(doc, kMaxJsonDepth)) {
+            rejected.push_back(json{{"index", at}, {"reason", tooDeep("card")}});
+            continue;
+        }
         auto c = json::parse(doc, nullptr, false);
         if (c.is_discarded()) {
             rejected.push_back(json{{"index", at}, {"reason", "the card is not valid JSON"}});
@@ -815,9 +1068,11 @@ std::string DiscoverSkill::invoke(const std::string &paramsJson)
         summary["price"] = 0;
         if (c.contains("x-logos")) {
             const json &x = c["x-logos"];
-            summary["price"] = x.value("pricePerTask", std::uint64_t{0});
-            if (x.contains("lezAccount")) summary["lez_account"] = x["lezAccount"];
-            if (x.contains("paymentAccount")) summary["pay_account"] = x["paymentAccount"];
+            summary["price"] = cardPrice(x);
+            const std::string lez = cardString(x, "lezAccount");
+            const std::string pay = cardString(x, "paymentAccount");
+            if (!lez.empty()) summary["lez_account"] = lez;
+            if (!pay.empty()) summary["pay_account"] = pay;
         }
         summary["card"] = c;
         agents.push_back(std::move(summary));
@@ -851,11 +1106,17 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
 
     std::string agentAddress;
     if (!field(p, "agent_address", agentAddress, err)) return fail(err);
+    // Checked here, not only where the topic is built. `agent_address` is
+    // routinely copied out of a peer's Agent Card, so a stranger who can get a
+    // card in front of this agent otherwise chooses the content topic it
+    // broadcasts on.
+    if (!isTopicIdentifier(agentAddress)) return fail(badTopicIdentifier("agent_address"));
     std::string taskId, contextId, skill, message;
     if (!optionalString(p, "task_id", taskId, err)) return fail(err);
     if (!optionalString(p, "context_id", contextId, err)) return fail(err);
     if (!optionalString(p, "skill", skill, err)) return fail(err);
     if (!optionalString(p, "message", message, err)) return fail(err);
+    if (!taskId.empty() && !isTopicIdentifier(taskId)) return fail(badTopicIdentifier("task_id"));
     if (p.contains("params") && !p["params"].is_null() && !p["params"].is_object()) {
         return fail("'params' must be an object");
     }
@@ -886,6 +1147,8 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
                         " and cannot be continued");
         }
         if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
+        const std::string continuationTopic = taskTopic(agentAddress, taskId);
+        if (continuationTopic.empty()) return fail(badTopicIdentifier("agent_address"));
         json request = json{
             {"jsonrpc", "2.0"},
             {"id", randomId()},
@@ -899,7 +1162,7 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
                                    {"parts", json::array({json{{"kind", "data"},
                                                                {"data", json{{"message", message},
                                                                              {"params", inner}}}}})}}}}}};
-        if (!port_.send || !port_.send(taskTopic(agentAddress, taskId), request.dump())) {
+        if (!port_.send || !port_.send(continuationTopic, request.dump())) {
             return fail("the input for task " + taskId + " could not be delivered");
         }
         if (!tasks_.advance(taskId, TaskState::Working, message, err)) return fail(err);
@@ -930,13 +1193,17 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
         }
         if (card.contains("x-logos")) {
             const json &x = card["x-logos"];
-            if (x.contains("lezAccount") &&
-                x["lezAccount"].get<std::string>() != agentAddress) {
-                return fail("the card belongs to " + x["lezAccount"].get<std::string>() +
-                            ", not to " + agentAddress);
+            const std::string lez = cardString(x, "lezAccount");
+            if (!lez.empty() && lez != agentAddress) {
+                return fail("the card belongs to " + lez + ", not to " + agentAddress);
             }
-            price = x.value("pricePerTask", std::uint64_t{0});
-            payAccount = x.value("paymentAccount", std::string{});
+            // Both read through the typed accessors rather than `value()`. A
+            // card whose `paymentAccount` is a number reached `value()` here and
+            // threw `type_error.302` out of `invoke()`; `validateCard` now
+            // refuses that card, and these two make the refusal impossible to
+            // reintroduce by loosening the validator.
+            price = cardPrice(x);
+            payAccount = cardString(x, "paymentAccount");
         }
     } else {
         if (!optionalUnsigned(p, "price", price, present, err)) return fail(err);
@@ -957,10 +1224,64 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
                     std::to_string(maxPrice) + " LEZ this call allows");
     }
 
+    // THE OWNER'S ENVELOPE, WHICH `max_price` IS NOT.
+    //
+    // `max_price` is a ceiling this *call* chose, and it is optional — so a call
+    // that omits it used to mean "pay whatever the peer's card says", into
+    // whatever account the peer's card names. That is how a card advertising
+    // 18446744073709551615 LEZ payable to `Public/ATTACKER` was paid in full.
+    // The envelope below is the owner's, it is not optional, and it is checked
+    // whether or not the caller thought to name a ceiling.
+    //
+    // Before the task is created and before anything is sent: a request that is
+    // on the wire with its payment held for the owner is a task the peer
+    // believes it is owed for.
+    if (price > 0) {
+        const std::string held = outsideEnvelope(port_, price);
+        if (!held.empty()) {
+            const json base{{"submitted", false},
+                            {"price", price},
+                            {"pay_account", payAccount},
+                            {"skill", skill},
+                            {"agent_address", agentAddress},
+                            {"reason", held}};
+            if (!port_.requestApproval) {
+                json e = base;
+                e["outcome"] = "owner_unreachable";
+                return fail("this task's price is outside the owner's envelope and there is no "
+                            "owner channel to ask for approval, so nothing was sent or paid",
+                            e);
+            }
+            const json ask{{"kind", "task-payment-approval-request"},
+                           {"agent", agentAddress},
+                           {"skill", skill},
+                           {"recipient", payAccount},
+                           {"amount", std::to_string(price)},
+                           {"reason", held}};
+            if (!port_.requestApproval(ask.dump())) {
+                // Terminal, not a fallback. The prize is explicit that an
+                // above-threshold payment which fails to reach the owner is not
+                // executed, and `wallet.send` answers the same way.
+                json e = base;
+                e["outcome"] = "owner_unreachable";
+                return fail("the owner could not be reached, so the task was not opened and "
+                            "nothing was paid",
+                            e);
+            }
+            json out = base;
+            out["outcome"] = "awaiting_owner_approval";
+            return done(out);
+        }
+    }
+
     if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
 
     if (taskId.empty()) taskId = randomId();
     if (contextId.empty()) contextId = randomId();
+    // The topic is built before the task is opened, so an id that cannot be
+    // named on the wire does not leave a task behind that nothing can address.
+    const std::string topic = taskTopic(agentAddress, taskId);
+    if (topic.empty()) return fail(badTopicIdentifier("agent_address"));
     if (!tasks_.create(taskId, contextId, agentAddress, skill, err)) return fail(err);
 
     const json request = json{
@@ -976,7 +1297,6 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
                                {"parts", json::array({json{{"kind", "data"},
                                                            {"data", json{{"skill", skill},
                                                                          {"params", inner}}}}})}}}}}};
-    const std::string topic = taskTopic(agentAddress, taskId);
     if (!port_.send || !port_.send(topic, request.dump())) {
         // Nothing is paid for a request that never left the node. The task is
         // marked failed rather than left dangling in `submitted`, where it
@@ -1050,6 +1370,7 @@ std::string SubscribeSkill::invoke(const std::string &paramsJson)
     if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
 
     const std::string topic = taskTopic(agentAddress, taskId);
+    if (topic.empty()) return fail(badTopicIdentifier("agent_address"));
     if (!port_.subscribe || !port_.subscribe(topic)) {
         return fail("delivery refused the subscription to " + topic);
     }
@@ -1094,11 +1415,14 @@ std::string CancelSkill::invoke(const std::string &paramsJson)
     // than marking the task canceled locally.
     if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
 
+    const std::string topic = taskTopic(agentAddress, taskId);
+    if (topic.empty()) return fail(badTopicIdentifier("agent_address"));
+
     const json request = json{{"jsonrpc", "2.0"},
                               {"id", randomId()},
                               {"method", "tasks/cancel"},
                               {"params", json{{"id", taskId}}}};
-    if (!port_.send || !port_.send(taskTopic(agentAddress, taskId), request.dump())) {
+    if (!port_.send || !port_.send(topic, request.dump())) {
         return fail("the cancellation could not be delivered to " + agentAddress);
     }
     if (!tasks_.advance(taskId, TaskState::Canceled, "canceled by this agent", err)) {
@@ -1178,6 +1502,12 @@ std::string StatusSkill::invoke(const std::string &paramsJson)
     const std::string storage = call(port_.storage);
     if (storage.empty()) {
         out["storage"] = nullptr;
+    } else if (!withinJsonDepth(storage, kMaxJsonDepth)) {
+        // Reported, not thrown away silently, and never copied: `meta.status` is
+        // the diagnostic an operator reaches for when something is already
+        // wrong, so it is the last skill that may take the process down.
+        out["storage"] = nullptr;
+        out["storage_error"] = tooDeep("storage node's answer");
     } else {
         auto parsed = json::parse(storage, nullptr, false);
         out["storage"] = parsed.is_discarded() ? json(nullptr) : parsed;
