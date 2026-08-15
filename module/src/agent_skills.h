@@ -81,11 +81,44 @@ bool canTransition(TaskState from, TaskState to);
 
 /// Content topic a task's traffic runs on, in the grammar Logos documents:
 /// /<application>/<version>/<name>/<encoding>.
+///
+/// **Empty when either identifier is not one** (@ref isTopicIdentifier). Both
+/// halves are spliced into the `<name>` segment, and both can come from a
+/// stranger — `agent_address` is read out of a peer's Agent Card — so an id
+/// carrying a `/` chooses a different topic entirely: `AAA/json", "x":1, "y":"`
+/// produced a topic a victim then broadcast on. Returning empty rather than a
+/// forged topic means a caller that forgets to check publishes nowhere instead
+/// of publishing somewhere an attacker picked.
 std::string taskTopic(const std::string &agentAddress, const std::string &taskId);
 
 /// Base64url, unpadded (RFC 7515 §2). Exposed so a caller — and the tests —
 /// can rebuild a card's JWS signing input and check what was signed.
 std::string base64Url(const std::string &bytes);
+
+/// The deepest nesting this module accepts in any JSON document handed to it —
+/// by a caller, by a peer, or by a snapshot on disk.
+///
+/// Not a style limit: a memory-safety one. nlohmann's parser and its destructor
+/// are iterative, but its **copy constructor is not** — copying a value copies
+/// its children recursively, one stack frame per level. A 1.7 KB document
+/// nested some hundreds deep therefore overflows a worker thread's 512 KiB
+/// stack the moment anything copies it, and the copies are not optional:
+/// `summary["card"] = c` in `agent.discover` and `p["params"]` in `agent.task`
+/// are both on the accepted path. A stack overflow is a signal, not an
+/// exception, so no `try`/`catch` here or in the host turns it back into an
+/// error — the bound has to be applied *before* the document is parsed, and it
+/// is, by scanning the raw text. Everything past that point is known to be
+/// copyable.
+///
+/// 64 is far past anything this protocol describes: the deepest structure in an
+/// A2A Agent Card is a skill's parameter schema, which nests single digits.
+inline constexpr int kMaxJsonDepth = 64;
+
+/// Whether `text` nests no deeper than `maxDepth` object/array levels.
+///
+/// A scan of the raw characters — no recursion, no parse, string contents
+/// skipped — because it has to be safe on exactly the documents that are not.
+bool withinJsonDepth(const std::string &text, int maxDepth = kMaxJsonDepth);
 
 /**
  * @brief Every task this agent is a party to, and the only place their state
@@ -156,6 +189,15 @@ public:
     /// Replace the contents from a @ref snapshot. Refuses malformed JSON, an
     /// unknown state name and duplicate ids, and leaves the store untouched
     /// when it refuses — a half-restored store is worse than an empty one.
+    ///
+    /// *Refuses*, and never throws. Every field is type-checked rather than read
+    /// with `value()`, which throws when the key is present with the wrong type:
+    /// a structured retype of a snapshot produced 40 exceptions escaping this
+    /// function, each of them a promise in this comment being broken by the code
+    /// under it. `pricePaid` gets one check more — a negative or fractional
+    /// price is refused rather than converted, because `"pricePaid": -1`
+    /// restored cleanly as 18446744073709551615 and `agent.cancel` then called
+    /// `refund()` for 2^64-1 and reported ok.
     bool restore(const std::string &snapshotJson, std::string &err);
 
 private:
@@ -238,6 +280,41 @@ struct TaskPort {
     /// Reverse a settlement of `amount` that was paid into `paidAccount`.
     /// Returns the refund transaction hash, or empty when no refund settled.
     std::function<std::string(const std::string &paidAccount, std::uint64_t amount)> refund;
+
+    // -----------------------------------------------------------------------
+    // THE ENVELOPE, ON THE PATH WHERE THE PRICE IS CHOSEN BY SOMEBODY ELSE
+    //
+    // `agent.task` pays a price it read out of the *peer's* Agent Card, into an
+    // account named in that same card. `max_price` is optional, so leaving it
+    // out used to mean "unlimited": a card advertising 2^64-1 LEZ payable to
+    // `Public/ATTACKER` was paid in full, with no per-transaction and no
+    // per-period check anywhere on the path. `wallet.send` has never worked that
+    // way, and `docs/architecture.md` already documented the check that was
+    // missing. These four fields are that check, and they are deliberately the
+    // same shape as `SpendEnvelope` and `OwnerApprovalPort` in `wallet_skills.h`
+    // so the two spending paths give the same answer.
+    //
+    // As there, and for the reason argued in `agent_module_interface.h`, this is
+    // a *courtesy*: the anchored policy account is the enforcer. What it buys is
+    // that a payment the chain would refuse goes to the owner before the agent
+    // pays proving cost for it — and that an unwired agent pays nothing rather
+    // than everything. Every unknown is outside the envelope: an agent that
+    // cannot say what its limits are, or what it has already spent, cannot say a
+    // payment is inside them.
+    // -----------------------------------------------------------------------
+
+    /// Largest single task payment the agent may make unattended, in LEZ as
+    /// decimal digits. Absent or unparseable means *unknown*, which is outside.
+    std::function<std::string()> perTxLimit;
+    /// Largest total the agent may move in one period, same encoding.
+    std::function<std::string()> perPeriodLimit;
+    /// What it has already moved in this period, same encoding. Unknown is not
+    /// zero: assuming zero is precisely how a period limit becomes decorative.
+    std::function<std::string()> spentThisPeriod;
+    /// Deliver an above-envelope task payment to the owner. False means the
+    /// owner was not reached — and such a payment is not made, the task is not
+    /// opened, and nothing is sent.
+    std::function<bool(const std::string &requestJson)> requestApproval;
 };
 
 /// What `meta.status` reports on.
@@ -302,6 +379,11 @@ private:
 /// Order matters and is deliberate: check, post the request, then pay. A price
 /// paid for a request that never left the node buys nothing, so a transport
 /// failure must not reach the wallet.
+///
+/// The first of those checks is the spending envelope (@ref TaskPort). A price
+/// above it is held for the owner *before* anything is sent — not after, because
+/// a request that is out and a payment that is held is a task the peer believes
+/// it is owed for.
 class TaskSkill final : public ISkill {
 public:
     TaskSkill(TaskPort port, TaskStore &tasks) : port_(std::move(port)), tasks_(tasks) {}
