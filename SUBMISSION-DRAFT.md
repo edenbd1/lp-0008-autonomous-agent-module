@@ -128,11 +128,14 @@ the whole account.
 Three agents — one per default skill category — are anchored on the public LEZ
 testnet, each with its own shielded account and its own envelope. Two of them
 have **paid each other for a priced skill, unattended**, with the per-period
-total accumulating on chain. That sentence used to read "have run an A2A task to
-completion and settled it in LEZ", which implied one flow where there are two:
-the lifecycle is driven through the real `TaskStore` and the settlement is a
-separate step in the same script, and the difference is the whole of what the
-agent-coordination criterion still asks for.
+total accumulating on chain, and one of those payments was made **by a module a
+host loaded**, in the same call that discovered the payee's card and opened the
+task: `./scripts/delivery-in-plugin.sh settle`. That sentence used to read "have
+run an A2A task to completion and settled it in LEZ", which implied one flow
+where there were two; the settlement and the discovery are now genuinely one, and
+what is still separate is named in the checklist entry rather than smoothed over
+here — the peer that receives a request does not drive it to a terminal state
+over the wire.
 
 Agent-to-agent coordination is A2A-shaped: cards carry the A2A schema plus an
 `x-logos` extension for the price and payment address that vanilla A2A has no
@@ -147,9 +150,9 @@ one.
 can never approve an above-threshold spend after anchoring a policy; the
 **storage** skills have never been run against a live node, because nothing has
 put a Logos Storage node inside the module's own process; no agent has yet
-*served* another agent's task through to a terminal state, so discovery, the
-lifecycle and the payment are three exercises rather than one; no model has ever
-been run against the inference port; and there is no video.
+*served* another agent's task through to a terminal state, so the far side reads
+a request and never answers it; no model has ever been run against the inference
+port; and there is no video.
 
 The messaging half of that sentence used to be in it and has been taken out,
 because it stopped being true: `messaging.send`, `messaging.join`,
@@ -713,12 +716,27 @@ one of them — `meta.skills` — was documented in three headers before it exis
   and a module that reads "I do not know" as "no limit" pays a task nobody
   configured it for.
 
-  **Two things this does not claim.** `TaskPort::refund` is still unwired — a
-  refund would have to be signed by the payee, whose key the payer does not hold.
-  And an above-envelope *task* price is refused immediately rather than put to
-  the owner: `wallet.send` has that path, `agent.task` does not, because on this
-  chain the owner who anchored a policy can never approve under it (one program
-  transaction per public signer), so the wait could not succeed.
+  **Three things this does not claim, and the first is the one to read.** What
+  crosses the wire in this flow is the A2A `message/send` request and the
+  payment. The task reaches `submitted` in the real `TaskStore` and the peer
+  reads the request off its own task topic — but the peer does not publish a
+  status update back, and the client's task does not advance to `working` or
+  `completed` *from the wire*, because no skill ingests a peer's status update
+  into the store. Those transitions are exercised, through the same `TaskStore`
+  and against the A2A v0.3.0 state enum, by `a2a_drive lifecycle` and by
+  `module/tests/agent_skills_test.cpp` — locally. A reviewer who reads "execute a
+  task following the A2A lifecycle" as requiring the served agent to drive the
+  state machine over the network should read this criterion as still open; a
+  reviewer who reads it as the task following A2A's lifecycle and its wire
+  format should not. The repository is not going to decide that by wording it
+  favourably.
+
+  `TaskPort::refund` is still unwired — a refund would have to be signed by the
+  payee, whose key the payer does not hold. And an above-envelope *task* price is
+  refused immediately rather than put to the owner: `wallet.send` has that path,
+  `agent.task` does not, because on this chain the owner who anchored a policy
+  can never approve under it (one program transaction per public signer), so the
+  wait could not succeed.
 
   The settlement table is **generated**, not transcribed; reproduce it with
   `./scripts/submission-evidence.py`. The last row is this flow's, and the number
@@ -1205,11 +1223,15 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   `RISC0_DEV_MODE=0` was active.**
   Not recorded. Blocker 1, and the only blocker with irreducible work in it.
 
-**Tally: 14 MET, 9 UNMET, of the 23 criteria the prize lists** — Functionality
-5 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-3 of 6. The commit this tally describes is the one recorded at the top of this
-document, and it is recorded there only — a count anchored to a commit id in two
-places is two places to forget.
+**Tally: 15 MET, 8 UNMET, of the 23 criteria the prize lists** — Functionality
+6 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+3 of 6. The one that moved is the discover/serve/pay conjunction, and the
+paragraph under it names the reading of "execute a task following the A2A
+lifecycle" on which it would still be open.
+
+The commit this tally describes is the one recorded at the top of this
+document, and it is recorded there only — a count anchored to a commit id in
+two places is two places to forget.
 
 ## FURPS Self-Assessment
 
@@ -1221,15 +1243,23 @@ twenty-one default skills are implemented and registered — `meta.skills`, the
 last one missing, was documented in three headers while `invoke()` refused it,
 and is now asserted against the loaded binary rather than against the source.
 
-The A2A coordination path has to be described in parts, because it runs in parts.
-**Cards and discovery run on the public network**: two modules a host loaded
-published signed cards to a Logos Messaging topic and each found the other's.
-**Settlement runs on chain**, unattended, inside an anchored envelope. **The task
-lifecycle runs through the real `TaskStore`** and is driven by the client rather
-than by the peer that received the request — so a task request crosses between
-two agents and is read by the far side, and nothing yet serves it back to a
-terminal state and pays on completion. This paragraph previously called the whole
-path "the part that has actually run", which read as one flow and was four.
+The A2A coordination path used to have to be described in parts, because it ran
+in parts: cards and discovery on the public network, settlement on chain from a
+shell script, and a lifecycle driven locally. Three of those are now one call.
+`./scripts/delivery-in-plugin.sh settle` starts two loaded modules that discover
+each other's signed cards on a Logos Messaging topic, and the buyer reads the
+price and the payee off the card that arrived — it is handed neither — checks
+them against the envelope its owner anchored on chain, sends the A2A request, and
+settles on the public testnet with no owner key in the path. The seller runs the
+identical code against a card advertising no price and comes back with no
+settlement hash, which is what makes the buyer's hash mean something.
+
+What is still driven by the client rather than by the peer that received the
+request is the *rest* of the lifecycle: the task reaches `submitted` and the far
+side reads it, and nothing yet serves it back to a terminal state over the wire,
+because no skill ingests a peer's status update into the store. This paragraph
+previously called the whole path "the part that has actually run", which read as
+one flow and was four; it is now two, and the seam is named.
 
 The limits are not incidental. The **owner cannot approve an above-threshold
 spend** after anchoring a policy, which removes half of the spending-threshold
