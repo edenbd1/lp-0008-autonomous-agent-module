@@ -377,17 +377,24 @@ The control: `getTransaction` on `dedededededededededededededededededededededede
 The payer is a **shielded** account. What a task settlement reveals on a
 centralised rail — who paid, for what, how often — is exactly the metadata that
 makes an agent marketplace legible to whoever runs it. Here the settlement is a
-privacy-preserving transaction signed by the agent's own private account: the
-amount and the payee are visible, the payer is not.
+privacy-preserving transaction signed by the agent's own private account, and
+the payee can be shielded too.
 
-That asymmetry is not the design's intent, and it is worth being precise about.
-`spel` resolves a `Private/<id>` recipient only for accounts the *sending* wallet
-holds keys for, so one agent cannot pay another's shielded account at all. Each
-agent therefore also keeps a **public receiving account**, which its Agent Card
-advertises. Half of the privacy the design wants is delivered; the other half
-needs `spel` to expose the `PrivateForeign` account kind the wallet already has
-(`lez/wallet/src/account_manager.rs:30-34`). That is upstream work, and it is
-recorded in the limitations rather than glossed.
+A payee is named one of two ways, and its Agent Card carries both. Named by its
+**public** `paymentAccount`, the payer stays hidden and the credit is checkable
+by anyone with `getAccount` — which is also what makes the amount, the payee and
+the timing public. Named by `x-logos.shieldedPaymentKeys`, an `npk`/`vpk` pair
+that gives nothing away, both ends are hidden and nobody but the payee can read
+the amount. Transaction `5942d6cd…d53a03d61` in block 9360 is the second form:
+one agent paying another at its shielded account under the shipped program.
+
+This paragraph used to say the opposite — that "one agent cannot pay another's
+shielded account at all", and that fixing it was upstream work. The
+`KeyNotFoundError` behind that claim was a lookup in the *payer's own* key chain,
+reached because `spel` built `PrivateOwned` for every `Private/` argument;
+`vendor/spel` is built here and now builds `PrivateForeign` when a recipient is
+given by keys. [`docs/limitations.md`](docs/limitations.md) carries the
+retraction in full.
 
 A2A leaves two things open on purpose — payment and encrypted transport — and
 Logos supplies both natively. LEZ is the payment layer A2A omits; Logos Messaging
@@ -441,19 +448,29 @@ one of them — `meta.skills` — was documented in three headers before it exis
   the host, checked by listing a directory, not an inference from a failed lookup.
   No submission can close this against this host.
 
-- [ ] **UNMET — The agent has its own shielded LEZ account and can send and
+- [x] **MET — The agent has its own shielded LEZ account and can send and
   receive tokens independently of the owner's wallet.**
-  *Send* is demonstrated: `./scripts/verify-deployment.sh` (exit 0) re-decodes 4
-  settlements under the shipped program from the chain's own copy, each a
-  privacy-preserving transaction signed by the agent's own shielded account, not
-  the owner's. *Receive* at that same shielded account is impossible with the
-  current `spel`, which fails with `KeyNotFoundError` before building anything, so
-  each agent keeps a separate **public** account to be paid at — the `pay_account`
-  column of [`artifacts/agents.tsv`](artifacts/agents.tsv) and the
-  `server_pay_account` column of [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv),
-  read by name. The criterion as written is not met, and closing it needs a
-  `spel`/LEZ release rather than anything in this repository.
-  See [`docs/limitations.md`](docs/limitations.md).
+  *Send*: `./scripts/verify-deployment.sh` (exit 0) re-decodes 4 settlements
+  under the shipped program from the chain's own copy, each a privacy-preserving
+  transaction signed by the agent's own shielded account, not the owner's.
+  *Receive*, at that same shielded account: transaction
+  `5942d6cd…d53a03d61`, block 9360 — the messaging agent paying the storage
+  agent **at its shielded keys**, under the shipped `spend` instruction, with no
+  account id in the payee position and no owner key on either side. The storage
+  agent then **spent** what it received (`e82a81f6…e39f9308`, block 9379), which
+  is what makes it received rather than merely committed. Both rows are in
+  [`artifacts/shielded-settlement.tsv`](artifacts/shielded-settlement.tsv) and
+  both are checked against the chain by `verify-deployment.sh`.
+  The amount is decoded from the transaction's own committed post-state by
+  `tools/shielded-receipt`, which decrypts the note the transaction carries and
+  then recomputes its commitment — so the balance it prints is the only one
+  consistent with the 32 bytes the chain stored.
+  This was previously listed here as unmet and "needing a `spel`/LEZ release
+  rather than anything in this repository". That was wrong: `spel` is vendored
+  at `vendor/spel` and built here, `KeyNotFoundError` was a lookup in the
+  *payer's* key chain rather than a limit of the protocol, and the wallet has
+  carried the `PrivateForeign` account kind all along. The retraction, and what
+  the fix actually was, is in [`docs/limitations.md`](docs/limitations.md).
 
 - [ ] **UNMET — The owner can deploy the agent and configure it with a single CLI
   command on any machine using Logos Core headless.**
@@ -1228,11 +1245,17 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   `RISC0_DEV_MODE=0` was active.**
   Not recorded. Blocker 1, and the only blocker with irreducible work in it.
 
-**Tally: 14 MET, 9 UNMET, of the 23 criteria the prize lists** — Functionality
+**Tally: 15 MET, 8 UNMET, of the 23 criteria the prize lists** — Functionality
 6 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-3 of 6. The one that moved is the discover/serve/pay conjunction, and the
-paragraph under it names the reading of "execute a task following the A2A
-lifecycle" on which it would still be open.
+3 of 6. The one that moved is the shielded account: it can now be **paid** at,
+not only spent from, and the settlement that shows it is `5942d6cd…d53a03d61` in
+block 9360.
+
+The breakdown above already read "Functionality 6 of 11" while the header said
+14 and the section held 5 — the previous revision's count was one high in the
+part and right in the whole. It is noted rather than quietly corrected, because
+a tally that disagrees with itself is the same class of defect as a document
+that names a superseded program, and this file has had both.
 
 The commit this tally describes is the one recorded at the top of this
 document, and it is recorded there only — a count anchored to a commit id in
@@ -1243,7 +1266,12 @@ two places is two places to forget.
 ### Functionality
 
 The agent holds a shielded LEZ account, signs its own transactions, and spends
-under a ceiling the chain keeps in state only its own program may write. All
+under a ceiling the chain keeps in state only its own program may write. It can
+also be **paid** at that account — by keys its signed Agent Card publishes,
+rather than by an id — so a settlement can now hide both ends rather than only
+the payer's. That was written up here as an upstream limitation for most of this
+submission's life; it was a flag missing from a tool this repository vendors, and
+`5942d6cd…d53a03d61` in block 9360 is the settlement that closes it. All
 twenty-one default skills are implemented and registered — `meta.skills`, the
 last one missing, was documented in three headers while `invoke()` refused it,
 and is now asserted against the loaded binary rather than against the source.
@@ -1421,10 +1449,12 @@ failed rather than blaming the wrong one.
   `./scripts/e2e-local-sequencer.sh`
 
 Read [`docs/limitations.md`](docs/limitations.md) before the rest. It is written to
-say what does not work before anyone has to discover it, and it contains the two
-defects that most affect a reviewer's reading of this submission: the owner cannot
-approve a spend after anchoring a policy, and a shielded agent can pay but cannot be
-paid at its shielded account.
+say what does not work before anyone has to discover it. The defect that most
+affects a reviewer's reading of this submission is that the owner cannot approve
+a spend after anchoring a policy. It also carries the retraction of a limitation
+this submission claimed for most of its life — that a shielded agent could not be
+paid at its shielded account — which turned out to be a missing flag in a tool
+this repository vendors, not a property of the chain.
 
 ## Terms & Conditions
 

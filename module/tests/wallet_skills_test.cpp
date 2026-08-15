@@ -269,8 +269,22 @@ int main()
               "a recipient that is not a base58 id is refused");
 
         const auto priv = s.invoke(R"({"recipient":"Private/)" + kBob + R"(","amount":10})");
-        check(!okOf(priv), "a shielded recipient is refused");
-        check(mentions(errOf(priv), "public account"), "with the reason a payer can act on");
+        check(!okOf(priv), "a shielded recipient named by ID is refused");
+        check(mentions(errOf(priv), "PrivateKeys/"),
+              "and the refusal names the spelling that does work, not just the public account");
+
+        // Malformed keys are refused rather than paid to. Each of these derives
+        // a valid-looking account id under keys nobody holds, so a payment made
+        // on one is unrecoverable — which is why the shape is checked here and
+        // not left to the payer's wallet.
+        const auto shortVpk =
+            s.invoke(R"({"recipient":"PrivateKeys/)" + std::string(64, 'a') + ":" +
+                     std::string(64, 'b') + R"(","amount":10})");
+        check(!okOf(shortVpk), "a truncated vpk is refused");
+        check(mentions(errOf(shortVpk), "1184"), "and the refusal says what length was expected");
+        const auto noColon =
+            s.invoke(R"({"recipient":"PrivateKeys/)" + std::string(64, 'a') + R"(","amount":10})");
+        check(!okOf(noColon), "keys with no vpk at all are refused");
 
         check(spends == 0, "none of the above reached the policy path");
         check(asked == 0, "and none of them woke the owner either");
@@ -298,6 +312,20 @@ int main()
         // A bare id and a qualified one name the same account.
         const auto q = s.invoke(R"({"recipient":"Public/)" + kBob + R"(","amount":50})");
         check(okOf(q) && seen.recipient == "Public/" + kBob, "'Public/<id>' is accepted as well");
+
+        // A shielded payee, named by the keys its Agent Card publishes. The
+        // envelope check is the same one — being paid privately is not a way
+        // round the policy — and the recipient reaches the policy path
+        // unaltered, because there is no id to normalise it to.
+        const std::string keys = "PrivateKeys/" + std::string(64, 'a') + ":" + std::string(2368, 'b');
+        const auto shielded = s.invoke(R"({"recipient":")" + keys + R"(","amount":50})");
+        check(okOf(shielded) && parsed(shielded)["submitted"] == true,
+              "a spend to a shielded payee is submitted");
+        check(strOf(shielded, "outcome") == "autonomous", "unattended, like any other spend");
+        check(seen.recipient == keys, "and the policy path is handed the keys, not an account id");
+        const auto overShielded = s.invoke(R"({"recipient":")" + keys + R"(","amount":500})");
+        check(!okOf(overShielded) || parsed(overShielded)["submitted"] == false,
+              "and the per-transaction limit still applies to it");
     }
     {
         // 2^64 exactly: an implementation that carries amounts in a uint64

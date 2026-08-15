@@ -1,0 +1,34 @@
+# Deliberately its own workspace rather than a member of the root one.
+#
+# This tool links the LEZ wallet, state machine and sequencer client — the whole
+# chain stack — while the root workspace holds one small no-std policy crate that
+# also compiles into a risc0 guest. Making this a member would drag every one of
+# those dependencies into the root `Cargo.lock` and into every `cargo test` the
+# repository runs, to build a verifier that is used by hand.
+[workspace]
+
+[package]
+name = "shielded-receipt"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Decode what a shielded account received, from the chain's own copy of a transaction"
+
+[[bin]]
+name = "shielded-receipt"
+path = "src/main.rs"
+
+[dependencies]
+# The same LEZ revision the vendored `spel` and the deployed program are pinned
+# to. A verifier built against a different revision would decode a different
+# wire format and disagree with the chain for reasons that have nothing to do
+# with the payment.
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "47eba256479f6f785acbd138834340703cd03401" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "47eba256479f6f785acbd138834340703cd03401" }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "47eba256479f6f785acbd138834340703cd03401" }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "47eba256479f6f785acbd138834340703cd03401" }
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "47eba256479f6f785acbd138834340703cd03401", features = ["client"] }
+
+anyhow = "1"
+hex = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

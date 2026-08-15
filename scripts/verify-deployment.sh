@@ -15,6 +15,9 @@
 #   that transaction      ->  docs/DEPLOYMENT.md (it must be the one documented)
 #   artifacts/agents.tsv  ->  the chain (each policy account, owned and decodable)
 #   artifacts/a2a-task.tsv->  the chain (each settlement included)
+#   artifacts/shielded-settlement.tsv
+#                         ->  the chain (each settlement to a SHIELDED payee, in
+#                             the block the row names, under the program it claims)
 #
 # Exit 0 only if all of it agrees. Anything else is a document that needs
 # regenerating, not a warning to scroll past.
@@ -26,6 +29,7 @@ PROGRAM=artifacts/programs/agent_verifier.bin
 DOC=docs/DEPLOYMENT.md
 AGENTS=artifacts/agents.tsv
 TASKS=artifacts/a2a-task.tsv
+SHIELDED=artifacts/shielded-settlement.tsv
 
 fail=0
 ok()   { printf '  ok    %s\n' "$*"; }
@@ -255,6 +259,77 @@ print('%s %s' % (r[1], 'SHIPPED' if bytes.fromhex('$SHIPPED_IMG') in base64.b64d
   fi
 else
   bad "$TASKS is missing"
+fi
+
+echo
+echo "shielded settlements ($SHIELDED)"
+#
+# The rows where the PAYEE is shielded too. They are kept apart from
+# `a2a-task.tsv` on purpose: every check that file runs on a settlement ends in
+# "and the payee's public balance moved by the price", and there is no public
+# balance here to move. Filing these among them would either weaken that check
+# for all of them or produce rows it cannot evaluate.
+#
+# What a stranger can check, and what this therefore checks:
+#
+#   inclusion  — the transaction is in a block, and in the block the row names.
+#                A row that has drifted from the chain is the failure this whole
+#                script exists for.
+#   program    — a row that claims the shipped program must carry the shipped
+#                ImageID in its payload, read off an on-chain anchor exactly as
+#                above. `builtin:` names a program LEZ itself ships, which has no
+#                deploy transaction here to compare against, so that is recorded
+#                rather than checked.
+#
+# What it CANNOT check, stated here rather than left as an absence: the AMOUNT.
+# The payee is a commitment; `getAccount` answers with a default account for it.
+# Reading the amount needs the payee's own viewing key and
+# `tools/shielded-receipt`, which is the privacy property working, not a gap in
+# the evidence. See docs/limitations.md.
+if [ -f "$SHIELDED" ]; then
+  c_tx=$(col "$SHIELDED" tx)
+  c_blk=$(col "$SHIELDED" block)
+  c_prog=$(col "$SHIELDED" program)
+  c_note=$(col "$SHIELDED" note_account)
+  if [ -z "$c_tx" ] || [ -z "$c_blk" ] || [ -z "$c_prog" ] || [ -z "$c_note" ]; then
+    bad "$SHIELDED is missing one of the tx/block/program/note_account columns"
+  else
+    while IFS=$'\t' read -r -a f; do
+      stx="${f[$((c_tx-1))]}"; want_b="${f[$((c_blk-1))]}"
+      prog="${f[$((c_prog-1))]}"; note="${f[$((c_note-1))]}"
+      out=$(rpc getTransaction "[\"$stx\"]" | python3 -c "
+import json,sys,base64
+r=json.load(sys.stdin).get('result')
+if not isinstance(r,list): print('ABSENT'); raise SystemExit
+img='${SHIPPED_IMG:-}'
+carries = bool(img) and bytes.fromhex(img) in base64.b64decode(r[0])
+print('%s %s' % (r[1], 'SHIPPED' if carries else 'OTHER'))")
+      set -- $out
+      if [ "${1:-}" = "ABSENT" ]; then
+        bad "$stx is not on chain"
+        continue
+      fi
+      b="$1"; chain="$2"
+      if [ "$b" != "$want_b" ]; then
+        bad "$stx  the manifest says block $want_b, the chain says $b"
+        continue
+      fi
+      case "$prog" in
+        builtin:*)
+          ok "$stx  block $b  ${prog#builtin:} — a program LEZ ships, no local binary to attribute against" ;;
+        "$DEPLOY_TX")
+          if [ "$chain" = SHIPPED ]; then
+            ok "$stx  block $b  under the shipped program, paying Private/$note"
+          else
+            bad "$stx  block $b  the manifest files it under the shipped program but the payload does not carry that ImageID"
+          fi ;;
+        *)
+          bad "$stx  names program ${prog:0:8}…, which is neither the shipped one nor a builtin" ;;
+      esac
+    done < <(rows "$SHIELDED")
+  fi
+else
+  bad "$SHIELDED is missing: the claim that an agent can be paid at its shielded account has no manifest"
 fi
 
 echo

@@ -330,33 +330,142 @@ second, unaudited spending path around the anchored policy" — is about a tool 
 module's own settlement is the agent's, through the policy, and is the same path
 rather than a second one.
 
-## A shielded agent can pay, but cannot be paid at its shielded account
+## FIXED: a shielded agent can now be paid at its shielded account
 
-`spel` resolves a `Private/<id>` account only for accounts the **signing**
-wallet holds keys for — it builds them as `AccountIdentity::PrivateOwned`, and
-a private account's state cannot be constructed without its viewing key. So one
-agent naming another's private account as the recipient fails before anything
-is built:
+This section used to say the opposite, and the correction is worth keeping
+rather than replacing, because the false claim was ours and it was load-bearing:
+it is why every agent also keeps a public receiving account, and why the payee
+end of a settlement was visible on chain when the design says it should not be.
+
+What it said was that `spel` resolves a `Private/<id>` account only for accounts
+the **signing** wallet holds keys for, so naming another agent's private account
+as the recipient fails before anything is built:
 
 ```
 ❌ Failed to submit privacy-preserving transaction: KeyNotFoundError
 ```
 
-It is the same wall as funding: `auth-transfer` reaches a shielded account
-through `--to-keys`, never through an account id.
+That reproduces exactly, and it is still what an unpatched `spel` does. What was
+wrong was the diagnosis. The sentence that followed it — "a private account's
+state cannot be constructed without its viewing key" — is a true statement about
+`PrivateOwned` and a false one about paying somebody. Crediting a shielded
+account does not need its *state*: it mints a new note, from
+`Account::default()`, and the only inputs are public.
 
-So each agent also keeps a **public receiving account**, initialised once under
-the transfer program, and its Agent Card advertises that as its payment address.
-The payer stays shielded — the settlement is a privacy-preserving transaction
-signed by the agent's own private account — and the payee is public. That is
-half of what the design wants, and the honest description of the trade is that
-the amount and the recipient of a task payment are visible, while the payer is
-not.
+`KeyNotFoundError` is raised in one place,
+`private_key_tree_acc_preparation` (`lez/wallet/src/account_manager.rs:565`),
+whose first act is `wallet.storage.key_chain().private_account(account_id)`. It
+is **a key lookup in the local wallet**, reached because `spel` built
+`AccountIdentity::PrivateOwned` for every `Private/` argument it was handed. The
+wallet has had the right variant all along:
 
-The right fix needs work upstream, not here: the A2A card would carry the
-recipient's `npk`/`vpk` under `x-logos`, and `spel` would build a
-`PrivateForeign` recipient from them. The wallet already has that account kind
-(`lez/wallet/src/account_manager.rs:30-34`); the CLI does not expose it.
+```rust
+PrivateForeign { npk: NullifierPublicKey, vpk: ViewingPublicKey, identifier: Identifier }
+```
+
+which takes no secret at all, and whose circuit output `PrivateForeignInit` has
+been part of `/LEE/v0.3` since before this repository existed. It is how every
+agent here was funded in the first place: `wallet auth-transfer send --to-keys`
+is that variant, and `9Xpkkvos…` is a note it minted (block 8847).
+
+So the limitation was in **this repository's copy of `spel`**, which it builds
+itself, and closing it did not need an upstream release. `vendor/spel` now
+accepts a shielded recipient named by keys:
+
+```
+--recipient PrivateKeys/<keys-file>          # the two-line file `wallet account show-keys` writes
+--recipient PrivateKeys/<npk-hex>:<vpk-hex>  # or inline, straight out of an Agent Card
+```
+
+with an optional `#<identifier>`, defaulting to random exactly as
+`wallet --to-identifier` does. `vendor/spel/spel-cli/src/foreign.rs` parses it,
+`vendor/spel/spel-cli/src/tx.rs` builds `PrivateForeign` from it, and nothing
+else about an account argument changed.
+
+### The transaction
+
+| | |
+|---|---|
+| settlement | `5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61` |
+| block | 9360 |
+| program | `697746f5…cb5370bf` — the shipped one, `spend` |
+| payer | messaging agent `GpRdooEW…Zpe5FS`, signing from its own wallet home |
+| payee | storage agent, **at its shielded keys** — no account id was named |
+| amount | 1 LEZ |
+| note minted | `Private/Bs8N2TXEzXG1RX4jopjkNM8t3wB4JQcjX1Ud6ijRNbZb` |
+
+No owner key was involved on either side, and no public account appears in the
+payee position. Both ends of the settlement are now shielded.
+
+### Reading it back
+
+The amount is not taken from any local file. `tools/shielded-receipt` fetches
+the transaction from the sequencer, decrypts the note the transaction itself
+carries with the payee's viewing secret key, and then **recomputes the
+commitment** from the decrypted account — it has to reproduce one of the 32-byte
+commitments the transaction published, so the balance printed is the only
+balance consistent with what the chain stored:
+
+```
+$ LEE_WALLET_HOME_DIR=~/.lp0008-agents/storage \
+    tools/shielded-receipt/target/release/shielded-receipt \
+    --payee 9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE \
+    --tx 5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61 \
+    --expect-amount 1
+  included in block 9360
+    account id     Private/Bs8N2TXEzXG1RX4jopjkNM8t3wB4JQcjX1Ud6ijRNbZb
+    balance        1
+    commitment     matches one committed in this transaction
+OK: a note of 1 is committed to these keys, on chain.
+```
+
+The same command against block 8847 decodes the storage agent's original funding
+note — 10 LEZ, account id `9Xpkkvos…`, commitment matching — which is how the
+decoder was checked before it was pointed at anything new.
+
+And the payee's id is reproducible from the published card alone, without a
+wallet or a key, because it is a hash of things the card carries:
+
+```bash
+KEYS=$(python3 -c "import json;k=json.load(open('artifacts/agent-cards/storage.json'))['x-logos']['shieldedPaymentKeys'];print(k['npk']+':'+k['vpk'])")
+spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
+     --bin-auth-transfer artifacts/programs/authenticated_transfer.bin --dry-run \
+  -- spend --agent Private/GpRdooEWJjX4JmRyT2n5KzMnDKtCM2HrvZ8iwMZpe5FS \
+     --recipient "PrivateKeys/$KEYS#223479114267873733415204510793202889598" \
+     --amount 1 --window-start 9000
+#   recipient → 0xa16c3c09d4b69a48b917f327610e0f2807c5eb76a6acd36b270047619923b7f2
+#   = Bs8N2TXEzXG1RX4jopjkNM8t3wB4JQcjX1Ud6ijRNbZb, the note the settlement minted
+```
+
+The identifier is the one that settlement drew, recorded in
+[`shielded-settlement.tsv`](../artifacts/shielded-settlement.tsv) via the account
+it produced. So the chain from *signed card* to *the account the money went to*
+is closed: the card is signed by the key that owns the advertised payment
+account, the keys in it derive that id, and that id is what the transaction's own
+decrypted note carries.
+
+### What is still true
+
+- **The payee's account id changes with every payment.** A shielded transfer
+  mints a new note under the payee's keys with a payer-chosen `identifier`, and
+  the account id is `hash(npk, vpk, identifier)`. So a payee is not paid *into*
+  the note it already holds; it ends up holding one more. The agent's identity
+  in [`agents.tsv`](../artifacts/agents.tsv) — the account its claim and its
+  policy are keyed by — is untouched by being paid.
+- **`getAccount` still cannot see it** (next section). That is why the check
+  above exists at all, and why it needs the payee's own key. A third party can
+  confirm the transaction is in a block and which program it called; only the
+  payee can confirm the amount. That is the privacy property, not a gap in the
+  evidence.
+- **The public receiving account is still there**, still initialised, still in
+  the manifest's `pay_account` column and still what the four earlier
+  settlements paid. It is now a choice rather than the only option.
+- **`npk` and `vpk` are publishable, and are now published.** `npk` is a
+  nullifier *public* key and `vpk` is an ML-KEM-768 encapsulation key: together
+  they let anyone mint a note the agent can open, and neither lets anyone spend
+  one. The Agent Card carries them under
+  `x-logos.shieldedPaymentKeys`, inside the signed payload, so a payer reads
+  them from the same signed document that tells it the price.
 
 ## `getAccount` cannot see a private balance, so only half a payment is public
 

@@ -221,64 +221,55 @@ mod tests {
         assert_ne!(result, [0u8; 32], "identical seeds must not cancel out");
     }
 
+    /// These two tests used to assert that `compute_pda_from_seeds` derived a
+    /// private PDA and that it matched `AccountId::for_private_pda(program_id,
+    /// seed, npk, identifier)`. Neither is true at the pinned LEZ revision:
+    /// `for_private_pda` takes a fifth argument — the recipient's viewing public
+    /// key — and the function under test now *refuses* the private branch for
+    /// exactly that reason.
+    ///
+    /// They did not go red when that changed. They stopped compiling, which
+    /// took the whole `spel` test binary with them, so every other test in this
+    /// crate has been unrunnable rather than passing. Asserting the refusal
+    /// keeps the branch covered and lets the rest of the suite run again.
     #[test]
-    fn test_private_pda_differs_from_public() {
+    fn private_pda_computation_is_refused_and_says_why() {
         let seeds = vec![IdlSeed::Const {
             value: "vault".to_string(),
         }];
         let program_id: ProgramId = [2u32; 8];
         let npk = NullifierPublicKey([0xABu8; 32]);
 
-        let private = compute_pda_from_seeds(
+        let err = compute_pda_from_seeds(
             &seeds,
             &program_id,
             &HashMap::new(),
             &HashMap::new(),
             Some(&npk),
         )
-        .unwrap();
-        let public =
-            compute_pda_from_seeds(&seeds, &program_id, &HashMap::new(), &HashMap::new(), None)
-                .unwrap();
-
-        assert_ne!(private, public, "private PDA must differ from public PDA");
-
-        // Verify it matches a direct for_private_pda call with the same inputs
-        let mut combined = [0u8; 32];
-        combined[.."vault".len()].copy_from_slice(b"vault");
-        let expected = AccountId::for_private_pda(&program_id, &PdaSeed::new(combined), &npk, 0);
-        assert_eq!(private, expected, "private PDA must match for_private_pda");
+        .expect_err("a private PDA cannot be derived without a viewing public key");
+        assert!(
+            err.contains("viewing public key"),
+            "the refusal must name the missing input, got: {err}"
+        );
     }
 
     #[test]
-    fn test_private_pda_differs_across_npks() {
+    fn public_pda_computation_still_succeeds_beside_it() {
         let seeds = vec![IdlSeed::Const {
             value: "vault".to_string(),
         }];
         let program_id: ProgramId = [2u32; 8];
-        let npk1 = NullifierPublicKey([0x01u8; 32]);
-        let npk2 = NullifierPublicKey([0x02u8; 32]);
+        let public =
+            compute_pda_from_seeds(&seeds, &program_id, &HashMap::new(), &HashMap::new(), None)
+                .expect("public PDAs are the path every shipped program uses");
 
-        let addr1 = compute_pda_from_seeds(
-            &seeds,
-            &program_id,
-            &HashMap::new(),
-            &HashMap::new(),
-            Some(&npk1),
-        )
-        .unwrap();
-        let addr2 = compute_pda_from_seeds(
-            &seeds,
-            &program_id,
-            &HashMap::new(),
-            &HashMap::new(),
-            Some(&npk2),
-        )
-        .unwrap();
-
-        assert_ne!(
-            addr1, addr2,
-            "different npks must yield different private PDAs"
+        let mut combined = [0u8; 32];
+        combined[.."vault".len()].copy_from_slice(b"vault");
+        assert_eq!(
+            public,
+            AccountId::for_public_pda(&program_id, &PdaSeed::new(combined)),
+            "the public PDA must match a direct derivation"
         );
     }
 

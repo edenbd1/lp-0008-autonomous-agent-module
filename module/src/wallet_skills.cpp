@@ -160,6 +160,46 @@ bool isBase58Account(const std::string &s)
     return true;
 }
 
+/// A shielded recipient named by its published keys: `<npk>:<vpk>`, lower-case
+/// hex, 32 and 1184 bytes.
+///
+/// This is the form an Agent Card carries in `x-logos.shieldedPaymentKeys`, and
+/// the form `spel --recipient PrivateKeys/…` takes. Both halves are *public*
+/// keys — a nullifier public key and an ML-KEM-768 encapsulation key — so
+/// nothing secret passes through here; they let a payer mint a note only the
+/// payee can open, and neither of them can spend one.
+///
+/// The lengths are checked rather than trusted because a truncated `vpk` does
+/// not fail at the payer: it derives a different account id, which is a real
+/// account under keys nobody holds, and the payment lands somewhere it can
+/// never be spent from.
+bool isShieldedPaymentKeys(const std::string &s, std::string &err)
+{
+    const auto colon = s.find(':');
+    if (colon == std::string::npos) {
+        err = "shielded payment keys are '<npk-hex>:<vpk-hex>', from the payee's Agent Card";
+        return false;
+    }
+    const std::string npk = s.substr(0, colon);
+    const std::string vpk = s.substr(colon + 1);
+    const auto hex = [](const std::string &v) {
+        for (const char c : v) {
+            const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            if (!ok) return false;
+        }
+        return !v.empty();
+    };
+    if (npk.size() != 64 || !hex(npk)) {
+        err = "npk must be 32 bytes of lower-case hex";
+        return false;
+    }
+    if (vpk.size() != 2368 || !hex(vpk)) {
+        err = "vpk must be a 1184-byte ML-KEM-768 encapsulation key in lower-case hex";
+        return false;
+    }
+    return true;
+}
+
 /// 32 bytes of hex, which is what the wallet prints as `tx_hash:` and what
 /// `getTransaction` takes.
 bool isTxHash(const std::string &s)
@@ -356,24 +396,40 @@ std::string WalletSendSkill::invoke(const std::string &paramsJson)
     if (!parseAmount(p["amount"], amount, err)) return fail(err, json{{"submitted", false}});
 
     const AccountRef ref = splitAccount(recipient);
-    if (ref.scope == "Private") {
-        // Not a policy decision — a fact about the wallet. A private account can
-        // only be addressed by a wallet holding its keys, so naming another
-        // agent's shielded account fails with KeyNotFoundError before anything
-        // is built. Agents publish a public receiving account in their Agent
-        // Card for exactly this reason.
-        return fail("a shielded account cannot be paid by id: pay the recipient's public "
-                    "account, which is what its Agent Card advertises",
+    std::string qualified;
+    if (ref.scope == "PrivateKeys") {
+        // A shielded payee, named by the keys its Agent Card publishes. The
+        // note is minted at hash(npk, vpk, identifier) for an identifier the
+        // payer draws, so there is no account id to name and none to check
+        // against — which is why this form exists at all.
+        std::string why;
+        if (!isShieldedPaymentKeys(ref.id, why)) {
+            return fail(why, json{{"submitted", false}});
+        }
+        qualified = recipient;
+    } else if (ref.scope == "Private") {
+        // Refused, and not for the reason this used to give. An id is genuinely
+        // not enough to pay a shielded account — `Private/<id>` makes the
+        // wallet look the id up in its own key chain and fail with
+        // KeyNotFoundError, because that spelling means "an account I can
+        // spend". But that is a fact about the spelling, not about shielded
+        // payees: name the same agent by the keys it publishes and the payment
+        // goes through.
+        return fail("a shielded account cannot be paid by id — 'Private/<id>' means an account "
+                    "this wallet can spend. Use 'PrivateKeys/<npk>:<vpk>' from the payee's "
+                    "Agent Card, or pay its public account",
                     json{{"submitted", false}});
+    } else {
+        if (!ref.scope.empty() && ref.scope != "Public") {
+            return fail("'recipient' is a base58 account id, optionally prefixed 'Public/', "
+                        "or 'PrivateKeys/<npk>:<vpk>' for a shielded payee",
+                        json{{"submitted", false}});
+        }
+        if (!isBase58Account(ref.id)) {
+            return fail("'" + ref.id + "' is not a base58 account id", json{{"submitted", false}});
+        }
+        qualified = "Public/" + ref.id;
     }
-    if (!ref.scope.empty() && ref.scope != "Public") {
-        return fail("'recipient' is a base58 account id, optionally prefixed 'Public/'",
-                    json{{"submitted", false}});
-    }
-    if (!isBase58Account(ref.id)) {
-        return fail("'" + ref.id + "' is not a base58 account id", json{{"submitted", false}});
-    }
-    const std::string qualified = "Public/" + ref.id;
 
     // THE LOCAL CHECK IS A COURTESY.
     //

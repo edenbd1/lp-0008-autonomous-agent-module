@@ -1026,7 +1026,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             vendor/spel/target
-          key: spel-${{ runner.os }}-${{ hashFiles('vendor/spel/Cargo.lock') }}
+            tools/shielded-receipt/target
+          key: spel-${{ runner.os }}-${{ hashFiles('vendor/spel/Cargo.lock', 'tools/shielded-receipt/Cargo.lock') }}
           restore-keys: spel-${{ runner.os }}-
 
       # `spel` derives the PDAs these scripts check against the chain, and the
@@ -1053,6 +1054,57 @@ jobs:
           # ProgramId -- which exits 0 and proves rather more than a usage
           # banner: that this spel can parse the ELF the scripts below hand it.
           "$PWD/vendor/spel/target/release/spel" program-id artifacts/programs/agent_verifier.bin > /dev/null
+
+      # `vendor/spel` is not just a dependency here, it is patched here: the
+      # `PrivateKeys/<npk>:<vpk>` recipient that lets one agent pay another at
+      # its shielded account is code this repository added to its copy
+      # (`vendor/spel/spel-cli/src/foreign.rs`). Building it proves it compiles;
+      # only running its tests proves the parser rejects a truncated `vpk`
+      # rather than deriving an account id nobody holds the keys for.
+      #
+      # `cargo test` exits 0 when it runs NO tests, which this repository has
+      # been caught by before, so the count is asserted rather than the exit
+      # code: emptying `mod tests` would otherwise stay green.
+      - name: The vendored spel's own tests, including the shielded recipient
+        run: |
+          set -euo pipefail
+          cargo test --release --locked -p spel --manifest-path vendor/spel/Cargo.toml \
+            2>&1 | tee spel-tests.out
+          passed=$(grep -oE 'test result: ok\. [0-9]+ passed' spel-tests.out \
+                   | grep -oE '[0-9]+' | paste -sd+ - | bc)
+          echo "spel tests that ran and passed: ${passed:-0}"
+          if [ "${passed:-0}" -lt 90 ]; then
+            echo "the spel suite ran ${passed:-0} tests; it had 95 when this gate was written"
+            exit 1
+          fi
+          # The eight that are the point of the patch. Named, because a suite
+          # that still passes with `foreign.rs` deleted would satisfy the count
+          # above and prove nothing about the feature this repository added.
+          for t in non_prefixed_arguments_are_not_claimed inline_keys_parse \
+                   explicit_identifier_is_honoured identifier_defaults_to_random \
+                   account_id_is_a_function_of_the_keys_and_the_identifier \
+                   keys_file_round_trips_the_wallet_format \
+                   a_short_vpk_is_rejected_rather_than_truncated \
+                   a_missing_keys_file_is_an_error_not_a_fallback; do
+            grep -q "foreign::tests::$t \.\.\. ok" spel-tests.out || {
+              echo "foreign::tests::$t did not run"; exit 1; }
+          done
+
+      # The decoder that reads a shielded payee's amount out of a transaction.
+      #
+      # Checked, not run, and the distinction is stated rather than left to be
+      # discovered: running it needs the PAYEE'S VIEWING SECRET KEY, and there
+      # is no agent wallet on this runner and must never be one. So what this
+      # step can catch is the failure that would actually happen — the pinned
+      # LEZ revision moving under it, which is how `spel-ffi-compile-test` in
+      # the same vendor tree came to stop building — and what it cannot catch is
+      # whether the decode is correct. That is checked by pointing the tool at
+      # block 8847, where it reproduces an agent's original funding note; the
+      # transcript is in docs/limitations.md.
+      - name: The shielded-receipt decoder still compiles against pinned LEZ
+        run: |
+          set -euo pipefail
+          cargo check --release --locked --manifest-path tools/shielded-receipt/Cargo.toml
 
       # Verification only. A settlement costs real testnet balance, the paying
       # agent holds about 5 LEZ — which is the note it needs in order to sign at

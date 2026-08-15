@@ -164,6 +164,35 @@ rule "1. the server agent publishes a signed A2A Agent Card"
 #   payment account included. It is signed below by the key that owns that very
 #   account, so the reader checks the card against the thing the card is asking
 #   them to trust.
+# The server agent's shielded receiving keys, straight out of its own wallet.
+#
+# Both are PUBLIC keys — `npk` is a nullifier public key, `vpk` an ML-KEM-768
+# encapsulation key — and together they are the whole address a payer needs to
+# credit this agent privately. They go inside the signed payload for the same
+# reason `paymentAccount` does: a card is how a payer learns where money goes,
+# and an unsigned answer to that question is worth nothing.
+#
+# Empty is not fatal. An operator running against a wallet that does not hold
+# this agent's key gets a card with a public payment address and no shielded
+# one, which is the pre-existing behaviour, rather than a run that stops.
+AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
+SHIELDED_KEYS=""
+if [ -x "${WALLET_BIN:-}" ]; then
+  SHIELDED_KEYS=$(LEE_WALLET_HOME_DIR="$AGENT_HOMES/$SERVER_CAT" \
+                  NSSA_WALLET_HOME_DIR="$AGENT_HOMES/$SERVER_CAT" \
+                  "$WALLET_BIN" account show-keys --account-id "Private/$SERVER_ID" \
+                  </dev/null 2>/dev/null | grep -E '^[0-9a-f]{64,}$' | head -2)
+fi
+SHIELDED_MEMBER=""
+if [ "$(printf '%s\n' "$SHIELDED_KEYS" | grep -c .)" = "2" ]; then
+  SHIELDED_MEMBER=$(printf '    "shieldedPaymentKeys": { "npk": "%s", "vpk": "%s" },' \
+                    "$(printf '%s\n' "$SHIELDED_KEYS" | head -1)" \
+                    "$(printf '%s\n' "$SHIELDED_KEYS" | tail -1)")
+else
+  echo "  no shielded receiving keys for $SERVER_CAT (set WALLET_BIN); the card will" >&2
+  echo "  advertise only the public payment account" >&2
+fi
+
 cat > "$CARDS/$SERVER_CAT.json" <<JSON
 {
   "protocolVersion": "0.3.0",
@@ -196,6 +225,7 @@ cat > "$CARDS/$SERVER_CAT.json" <<JSON
   "x-logos": {
     "lezAccount": "$SERVER_ID",
     "paymentAccount": "Public/$SERVER_PAY",
+$SHIELDED_MEMBER
     "pricePerTask": $PRICE,
     "settlement": "lez-chained-authenticated-transfer"
   }
@@ -360,12 +390,19 @@ echo "  signing from $LEE_WALLET_HOME_DIR"
 # has to prove the inner call. Without it the build stops at
 # `UndeclaredProgramDependency` rather than producing a payment that isn't one.
 #
-# The payer is shielded and the payee is public, and that asymmetry is forced:
-# `spel` resolves `Private/<id>` only for accounts the *signing* wallet holds
-# keys for, so one agent cannot name another's private account without holding
-# its spending key. The payee's public account is what its Agent Card
-# advertises, and it is also the only reason this payment is checkable from
-# outside with `getAccount`.
+# The payer is shielded and the payee is public HERE, and that is now a choice
+# rather than a constraint. `spel` resolves `Private/<id>` only for accounts the
+# *signing* wallet holds keys for — that spelling means "an account I can spend"
+# — but `--recipient PrivateKeys/<npk>:<vpk>`, from the payee's own Agent Card,
+# builds a foreign shielded recipient and pays it directly. See
+# `artifacts/shielded-settlement.tsv` for a settlement that does.
+#
+# This script keeps paying the public account for one reason: it is the only
+# form whose credit `getAccount` can show a third party, and step 6 below
+# refuses to write the manifest unless that balance moves by exactly the price.
+# Against a shielded payee there is no such check to run — only the payee can
+# read the amount — so choosing it here would trade a verifiable demonstration
+# for a private one.
 OUT_TXT=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
   --bin-auth-transfer "$AUTH_TRANSFER" \
   -- spend --agent "Private/$CLIENT_ID" --recipient "Public/$SERVER_PAY" \

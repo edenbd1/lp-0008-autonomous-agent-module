@@ -356,13 +356,16 @@ fund_agent() { # category seed_account amount
   return 1
 }
 
-# The account another agent pays into.
+# The PUBLIC account another agent can pay into.
 #
-# `spel` can only address a private account whose keys the *sending* wallet
-# holds, so one shielded agent cannot name another one's private account as a
-# recipient: it fails with `KeyNotFoundError` before anything is built. Each
-# agent therefore also keeps a public receiving account, which is what its Agent
-# Card advertises as its payment address.
+# Not the only way to pay this agent, and no longer the only one that works. A
+# payer that has the agent's published `npk`/`vpk` credits its shielded account
+# directly (`spel --recipient PrivateKeys/<npk>:<vpk>`, and
+# `x-logos.shieldedPaymentKeys` on the card) — see
+# `docs/limitations.md`, "a shielded agent can now be paid at its shielded
+# account". This account is what makes a credit *checkable by a third party*
+# with `getAccount`, which a shielded one deliberately is not, and that is the
+# reason to keep opening it.
 #
 # It has to be initialised under the transfer program before anyone pays it.
 # Crediting an account that still has the default owner makes the transfer

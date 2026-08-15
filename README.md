@@ -569,9 +569,33 @@ Two refusals are worth knowing before you run it:
 Results land in [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv), with the
 before/after balances the script read off the chain. Only the credit side is
 publicly readable — the payer is a shielded account and `getAccount` answers
-with the default account for those — which is why each agent keeps a public
-receiving account and why its Agent Card advertises that as its payment
-address. The trade is written up in [`docs/limitations.md`](docs/limitations.md).
+with the default account for those — which is why each agent also keeps a public
+receiving account and why its Agent Card advertises one.
+
+**A payee can be shielded too.** Its card carries
+`x-logos.shieldedPaymentKeys` — an `npk`/`vpk` pair, both public keys — and a
+payer names it with `--recipient PrivateKeys/<npk>:<vpk>` instead of an account
+id. Then neither end of the settlement is visible, and the price is readable
+only by the payee:
+
+```sh
+# what happened in transaction 5942d6cd…, block 9360
+spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
+     --bin-auth-transfer artifacts/programs/authenticated_transfer.bin \
+  -- spend --agent Private/<payer> --recipient PrivateKeys/<npk>:<vpk> \
+     --amount 1 --window-start <period>
+
+# and how the payee reads it back, from the chain rather than from its wallet file
+LEE_WALLET_HOME_DIR=~/.lp0008-agents/storage \
+  tools/shielded-receipt/target/release/shielded-receipt \
+  --payee <payee> --tx 5942d6cd… --expect-amount 1
+```
+
+Those rows are in
+[`artifacts/shielded-settlement.tsv`](artifacts/shielded-settlement.tsv), and
+`verify-deployment.sh` checks each against the block it claims. The trade
+between the two forms is written up in
+[`docs/limitations.md`](docs/limitations.md).
 
 ## 7. Drive a real Delivery and Storage node
 
@@ -995,10 +1019,9 @@ Compute-unit costs for every on-chain operation are measured in
 ## 11. What does not work
 
 [`docs/limitations.md`](docs/limitations.md) is the honest state and is meant
-to be read before the rest. It carries, among others: that a shielded agent can
-pay but cannot be paid at its shielded account, so the payee end of every
-settlement is public; that `getAccount` cannot see a private balance, so only
-the credit side of a payment is checkable by a third party; that no model has
+to be read before the rest. It carries, among others: that `getAccount` cannot
+see a private balance, so a payment into a shielded account is checkable by its
+payee and by nobody else; that no model has
 ever been run against the inference port — the local backend is a stub with an
 honest name and the HTTP backend has never made a real request; and that the
 node runs in §7 are a local command rather than CI.

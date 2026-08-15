@@ -1,6 +1,7 @@
 //! Transaction building and submission.
 
 use crate::cli::{snake_to_kebab, to_pascal_case};
+use crate::foreign::ForeignPrivate;
 use crate::hex::{decode_bytes_32, hex_encode, parse_account_id};
 use crate::parse::{parse_string_vec, parse_value, ParsedValue};
 use crate::pda::compute_pda_from_seeds;
@@ -53,6 +54,27 @@ const UNRESOLVED: &str = "(unresolved)";
 /// and consume the whole vec.
 fn last_value<'a>(map: &'a HashMap<String, Vec<String>>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.last().map(|s| s.as_str()))
+}
+
+/// Resolve one account argument into `(32-byte id, is_private)`, registering it
+/// in `foreign` when it is a `PrivateKeys/...` shielded recipient.
+///
+/// A foreign shielded account has an id like any other — it is
+/// `hash(npk, vpk, identifier)` — so from here on it flows through the same
+/// `account_map`, PDA-seed resolution and display path as everything else. The
+/// only place the difference matters is which `AccountIdentity` gets built for
+/// it at submission time, which is what `foreign` is consulted for.
+fn resolve_account_arg(
+    raw: &str,
+    foreign: &mut HashMap<[u8; 32], ForeignPrivate>,
+) -> Result<([u8; 32], bool), String> {
+    if let Some(parsed) = crate::foreign::parse(raw) {
+        let f = parsed?;
+        let id = *f.account_id().value();
+        foreign.insert(id, f);
+        return Ok((id, true));
+    }
+    parse_account_id(raw)
 }
 
 /// True if this IDL type is `Vec<String>` — the one shape that opts in to
@@ -145,6 +167,10 @@ pub async fn execute_instruction(
     let mut parsed_accounts: Vec<(&str, Vec<u8>, bool)> = Vec::new();
     // rest accounts are variadic: each expands to 0 or more AccountIds
     let mut rest_accounts: Vec<(&str, Vec<(Vec<u8>, bool)>)> = Vec::new();
+    // Shielded recipients named by keys rather than by id, indexed by the id
+    // those keys derive to. Keyed by id rather than by account name so that a
+    // variadic `rest` account can hold several of them.
+    let mut foreign_accounts: HashMap<[u8; 32], ForeignPrivate> = HashMap::new();
     for acc in &ix.accounts {
         if acc.pda.is_some() {
             continue;
@@ -158,7 +184,8 @@ pub async fn execute_instruction(
                 raw.split(',')
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
-                    .filter_map(|s| match parse_account_id(s) {
+                    .map(|s| resolve_account_arg(s, &mut foreign_accounts))
+                    .filter_map(|r| match r {
                         Ok((bytes, is_priv)) => Some((bytes.to_vec(), is_priv)),
                         Err(e) => {
                             eprintln!("❌ --{}: {}", key, e);
@@ -173,7 +200,7 @@ pub async fn execute_instruction(
             rest_accounts.push((&acc.name, entries));
         } else {
             let raw = last_value(&args, &key).unwrap();
-            match parse_account_id(raw) {
+            match resolve_account_arg(raw, &mut foreign_accounts) {
                 Ok((bytes, is_priv)) => parsed_accounts.push((&acc.name, bytes.to_vec(), is_priv)),
                 Err(e) => {
                     eprintln!("❌ --{}: {}", key, e);
@@ -378,6 +405,43 @@ pub async fn execute_instruction(
             say!("  📦 {} → 0x{}", acc.name, hex_encode(&account_bytes.1));
         }
     }
+
+    // A shielded recipient is addressed by keys, so the id it will hold the new
+    // note under does not appear anywhere the payer typed it. Print it, and the
+    // identifier that produced it, or the payment lands somewhere only the
+    // payee can name afterwards.
+    if !foreign_accounts.is_empty() {
+        say!("");
+        say!("Shielded recipients (paid by keys, not by id):");
+        for acc in &ix.accounts {
+            let ids: Vec<[u8; 32]> = if acc.rest {
+                rest_accounts
+                    .iter()
+                    .find(|(n, _)| *n == acc.name)
+                    .map(|(_, entries)| {
+                        entries
+                            .iter()
+                            .filter_map(|(b, _)| <[u8; 32]>::try_from(b.as_slice()).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                parsed_accounts
+                    .iter()
+                    .find(|(n, _, _)| *n == acc.name)
+                    .and_then(|(_, b, _)| <[u8; 32]>::try_from(b.as_slice()).ok())
+                    .into_iter()
+                    .collect()
+            };
+            for id in ids {
+                if let Some(f) = foreign_accounts.get(&id) {
+                    say!("  🔒 {} → Private/{}", acc.name, AccountId::new(id));
+                    say!("     npk        {}", hex_encode(&f.npk.0));
+                    say!("     identifier {}", f.identifier);
+                }
+            }
+        }
+    }
     say!("");
     say!("Arguments (parsed):");
     for (name, _, val) in &parsed_args {
@@ -445,7 +509,27 @@ pub async fn execute_instruction(
         }
         let program_with_deps = ProgramWithDependencies::new(program, dependencies);
 
-        // Build privacy-preserving account list
+        // Build privacy-preserving account list.
+        //
+        // The one distinction that matters here: a `Private/` account resolves
+        // to `PrivateOwned`, which the wallet can only prepare by finding the
+        // account's nullifier secret key in its own key chain
+        // (`account_manager.rs`, `private_key_tree_acc_preparation`) — so
+        // naming somebody else's shielded account that way fails with
+        // `KeyNotFoundError` before a single constraint is proved. A
+        // `PrivateKeys/` account resolves to `PrivateForeign`, which needs only
+        // the recipient's *public* `npk`/`vpk` and mints them a new note.
+        let private_identity = |id: AccountId| -> AccountIdentity {
+            match foreign_accounts.get(id.value()) {
+                Some(f) => AccountIdentity::PrivateForeign {
+                    npk: f.npk,
+                    vpk: f.vpk.clone(),
+                    identifier: f.identifier,
+                },
+                None => AccountIdentity::PrivateOwned(id),
+            }
+        };
+
         let mut pp_accounts: Vec<AccountIdentity> = Vec::new();
         for acc in &ix.accounts {
             if acc.rest {
@@ -455,7 +539,7 @@ pub async fn execute_instruction(
                         arr.copy_from_slice(bytes);
                         let account_id = AccountId::new(arr);
                         if *is_priv {
-                            pp_accounts.push(AccountIdentity::PrivateOwned(account_id));
+                            pp_accounts.push(private_identity(account_id));
                         } else {
                             pp_accounts.push(AccountIdentity::Public(account_id));
                         }
@@ -469,7 +553,7 @@ pub async fn execute_instruction(
                     process::exit(1);
                 });
                 if *is_priv {
-                    pp_accounts.push(AccountIdentity::PrivateOwned(id));
+                    pp_accounts.push(private_identity(id));
                 } else {
                     pp_accounts.push(AccountIdentity::Public(id));
                 }

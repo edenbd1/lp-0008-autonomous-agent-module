@@ -179,12 +179,13 @@ anything when it is handed a signer whose key that wallet does not hold — whic
 is what the literals silently did to every reader who was not the author. See
 [`limitations.md`](limitations.md).
 
-Each agent has **two** accounts, and the split is forced rather than chosen. The
-shielded account is the agent: it holds the balance and signs its own payments.
-The public account is where other agents pay it, because `spel` can resolve a
-`Private/<id>` recipient only for accounts the *sending* wallet holds keys for,
-and because `getAccount` reads the public state only — a payment into a shielded
-account cannot be checked by anyone but its owner. See
+Each agent has **two** accounts, and the split is a choice with a reason rather
+than a constraint. The shielded account is the agent: it holds the balance,
+signs its own payments, and — since `5942d6cd…d53a03d61` in block 9360 — can be
+paid at directly, by keys rather than by id. The public account exists because
+`getAccount` reads the public state only, so a credit into it is checkable by a
+stranger and a credit into the shielded one is not. Which of the two a payer
+uses is a privacy decision, set out in
 [`docs/limitations.md`](limitations.md).
 
 ### The two accounts an agent has, and where their addresses come from
@@ -453,11 +454,56 @@ cannot afford the task would produce a policy check that passes and a transfer
 that fails, which demonstrates nothing. All three agents are deployed and
 anchored either way.
 
-Manifest: [`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv). It has exactly
-two rows, and they are the two settlements above, both made under the live
-program. The four settlements made under the two earlier programs are **not** in
-it — they are in the [ledger](#every-transaction-on-the-published-accounts)
-below, which is the only place in this repository that accounts for them.
+Manifest: [`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv). The two above
+are its first two rows under the live program; it has since accumulated more,
+and `./scripts/verify-deployment.sh` prints every row with the block and the
+program the chain attributes it to rather than the one the file claims. Rows
+under superseded programs are marked as such there, and the settlements made
+before this manifest existed are in the
+[ledger](#every-transaction-on-the-published-accounts) below, which is the only
+place in this repository that accounts for them.
+
+### A settlement whose payee is shielded too
+
+The table above pays a **public** account. This one does not, and it is recorded
+apart from those because nothing in `a2a-task.tsv`'s vocabulary can describe it:
+its checks end in "and the payee's public balance moved by the price", and here
+there is no public balance to move.
+
+| | |
+|---|---|
+| client (pays, shielded) | `GpRdooEW…Zpe5FS` |
+| server (paid, **shielded**) | storage agent, by its `npk` `c10c15ac…` — no account id was named |
+| price | 1 LEZ |
+| settlement | [`5942d6cd…d53a03d61`](https://explorer.testnet.lez.logos.co/transaction/5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61) |
+| block | 9360 |
+| period declared | 9000, valid in blocks 9000–9999 |
+| note minted | `Private/Bs8N2TXE…jRNbZb`, holding 1 |
+| the payee then spent it | [`e82a81f6…e39f9308`](https://explorer.testnet.lez.logos.co/transaction/e82a81f6076d3fd2e846e77223435658a31c9c9eabcbbf6b2fefa3f1e39f9308), block 9379 |
+
+The last row is the one that makes this a receipt rather than a commitment. A
+note nobody can spend is not money; the storage agent spent that exact note, on
+its own, and the 1 LEZ went back to the messaging agent's shielded keys — so the
+pair is net-zero across the two agents and demonstrates both directions.
+
+The amount cannot be read with `getAccount`, and this is not a gap to be
+apologised for — it is what paying a shielded payee buys. What a stranger checks
+is inclusion and attribution (`verify-deployment.sh`, against
+[`artifacts/shielded-settlement.tsv`](../artifacts/shielded-settlement.tsv));
+what the payee checks, and only the payee, is the amount:
+
+```bash
+LEE_WALLET_HOME_DIR=~/.lp0008-agents/storage \
+  tools/shielded-receipt/target/release/shielded-receipt \
+  --payee 9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE \
+  --tx 5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61 \
+  --expect-amount 1
+```
+
+That decrypts the note the transaction carries and recomputes its commitment
+against the ones the transaction published, so the balance it prints is the only
+balance consistent with what the chain stored — not a number read back out of a
+wallet file.
 
 The server's balance starts at 45 rather than 0, and that step is not an
 accounting convention: the account held 100 from four earlier settlements and

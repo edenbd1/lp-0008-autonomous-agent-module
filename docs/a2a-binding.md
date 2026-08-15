@@ -780,6 +780,7 @@ The `x-logos` block on the Agent Card:
 |---|---|---|
 | `lezAccount` | string | the agent's **shielded** LEZ account — its identity, and the authority of the card's `url` |
 | `paymentAccount` | string | the **public** account a price is paid into, as `Public/<base58>` |
+| `shieldedPaymentKeys` | object | `{ "npk": <64 hex>, "vpk": <2368 hex> }` — the agent's shielded receiving keys, so a payer can pay it privately instead. Optional; see §6.2 |
 | `pricePerTask` | unsigned integer | LEZ per task. `0` advertises a free agent |
 | `settlement` | string | `lez-chained-authenticated-transfer` — how the payment is built |
 
@@ -797,61 +798,64 @@ The price is a flat per-task figure. There is no per-skill pricing, no quoting
 round-trip, and no negotiation. A client that will not pay more than *N* passes
 `max_price: N` and gets a refusal before anything is signed.
 
-### 6.2 How an account to be paid is named — and the constraint that forces it
+### 6.2 How an account to be paid is named
 
-**A payer cannot name a foreign shielded account.** `spel` resolves a
-`Private/<id>` account only for accounts the *signing* wallet holds keys for — it
-builds them as `AccountIdentity::PrivateOwned`, and a private account's state
-cannot be constructed without its viewing key. One agent naming another's private
-account as recipient fails before anything is built:
+A payee can be named two ways, and the card carries both.
 
-```
-❌ Failed to submit privacy-preserving transaction: KeyNotFoundError
-```
+**Publicly, by account id.** `x-logos.paymentAccount` is an ordinary public
+account, initialised once under the transfer program. Four of this repository's
+five settlements pay one. It is the only form whose credit a stranger can check
+with `getAccount`, which is exactly why it is also the form that leaks.
 
-It is the same wall as funding: `auth-transfer` reaches a shielded account
-through `--to-keys`, never through an account id.
+**Privately, by keys.** `x-logos.shieldedPaymentKeys` carries the agent's `npk`
+and `vpk`. A payer that has them names the payee as
+`--recipient PrivateKeys/<npk>:<vpk>`, and `spel` builds
+`AccountIdentity::PrivateForeign` — which needs no secret and no account id,
+because crediting a shielded account **mints a new note** rather than updating an
+existing one. Both ends of the settlement are then shielded.
 
-So the asymmetry is forced, and this binding states it plainly rather than
-burying it:
+Publishing those two keys gives nothing away. `npk` is a nullifier *public* key;
+`vpk` is an ML-KEM-768 encapsulation key. Together they let anybody encrypt a
+note the agent can open; spending one needs the nullifier *secret* key, which
+never leaves the agent's wallet. They belong in the signed payload for the same
+reason `paymentAccount` does: the card is how a payer learns where money goes,
+and an unsigned answer to that question is worth nothing.
 
-> **The payee advertises a public receiving account. The payer stays shielded.**
+> This section previously said the opposite — "a payer cannot name a foreign
+> shielded account" — and treated the asymmetry as forced. It was not. The
+> `KeyNotFoundError` it quoted is a **lookup in the payer's own wallet**
+> (`account_manager.rs:565`), reached because `spel` built `PrivateOwned` for
+> every `Private/` argument; the wallet has always had `PrivateForeign` beside
+> it. `vendor/spel` now exposes it. The transaction that closes it is
+> `5942d6cd…d53a03d61` in block 9360: the messaging agent paying the storage
+> agent 1 LEZ at its shielded keys, under the shipped `spend` instruction, with
+> no owner and no public account in the payee position.
 
-Each agent keeps two accounts: its shielded identity (`x-logos.lezAccount`, the
-card's `url` authority, the account that signs) and a public receiving account
-initialised once under the transfer program (`x-logos.paymentAccount`). The
-settlement is a privacy-preserving transaction signed by the payer's own private
-account, paying into the payee's public one.
+**What each choice costs in privacy:**
 
-**What it costs in privacy**, precisely:
+| | public `paymentAccount` | `shieldedPaymentKeys` |
+|---|---|---|
+| who paid | hidden | hidden |
+| who was paid | **public** | hidden |
+| how much | **public** | hidden |
+| linkable across tasks | **yes** — one address in every copy of the card | no — a new note id per payment |
+| a stranger can verify the credit | yes, `getAccount` | no, and neither can they see it |
 
-- The **recipient and the amount of every task payment are public.** Anyone
-  holding the card holds the payment account, and `getAccount` on it is
-  unauthenticated. An observer can count a paid agent's tasks, size each one, and
-  time them.
-- Because the same `paymentAccount` appears in every copy of the card, payments
-  are **linkable to each other and to the advertised identity** across tasks.
-  There is no per-task address.
-- The **payer stays shielded**: which account paid is not visible on chain.
-- But only *half* of the payment is hidden even so. `getAccount` reads public
-  state only; a private account is a commitment in the private state and the RPC
-  answers with a default account for it. So the **credit** side of a settlement
-  is checkable by anyone and the **debit** side is not. The debit is still
-  constrained — `validate_execution` rule 8 requires total balance to be
-  preserved across every program in the transaction, so an accepted transaction
-  that credits 25 has debited 25 from an account in the same call — but "the
-  payer's balance went down" is a statement only the payer's wallet can show
-  directly.
-- Combined with §2.2, an observer who sees a task topic
-  (`/lp-0008/1/task-<payee>-<taskId>/json`) and a credit to that payee's
-  advertised account for the advertised price has learned that a task happened,
-  which agent performed it, what it cost, and when — without breaking anything.
+The last row is the trade, stated plainly: paying a shielded payee removes the
+one check a third party could run. What remains checkable by anyone is that the
+transaction is in a block and which program it called; the amount can be
+confirmed only by the payee, with its own viewing key
+(`tools/shielded-receipt`). An observer who sees a task topic
+(`/lp-0008/1/task-<payee>-<taskId>/json`) and a credit to that payee's advertised
+public account for the advertised price has learned that a task happened, which
+agent performed it, what it cost and when — and that is precisely what the
+shielded form denies them.
 
-**The fix needs work upstream, not here.** The card would carry the recipient's
-`npk`/`vpk` under `x-logos`, and `spel` would build a `PrivateForeign` recipient
-from them. The wallet already has that account kind
-(`lez/wallet/src/account_manager.rs`); the CLI does not expose it. Until
-then, a shielded payee is not reachable and this binding does not claim one.
+One consequence to hold on to: **being paid changes the payee's account id.** The
+note is minted at `hash(npk, vpk, identifier)` for a payer-chosen `identifier`,
+so a payee ends up holding an additional note rather than a larger one. Its
+identity — the account its claim and policy are keyed by, and the one in
+`x-logos.lezAccount` — is not touched by being paid.
 
 ### 6.3 How a settlement is built
 
@@ -1086,10 +1090,11 @@ Restating §2.2 and §6.2 in one place, because these are the privacy costs of t
 design rather than bugs in it:
 
 - task content topics carry the peer's account id and the task id in cleartext;
-- the payee's receiving account, the price and the timing of every settlement are
-  public and linkable across tasks;
-- only the payer is shielded, and only the debit side of the settlement is
-  private.
+- when the payee is named by its **public** `paymentAccount`, its receiving
+  account, the price and the timing of every settlement are public and linkable
+  across tasks, and only the debit side is private;
+- when it is named by `shieldedPaymentKeys` both sides are private, and the
+  cost moves to the other party: nobody but the payee can check the amount.
 
 ### 7.5 The two card signers, and the one difference that is left
 
@@ -1169,9 +1174,9 @@ If a third party implements against the current A2A rather than v0.3.0:
 
 From [`docs/limitations.md`](limitations.md), the ones a payment path inherits:
 
-- A shielded agent can pay but cannot be paid at its shielded account (§6.2).
-- `getAccount` cannot see a private balance, so only half a payment is publicly
-  checkable (§6.2).
+- `getAccount` cannot see a private balance (§6.2). With a public payee that
+  makes half a payment publicly checkable; with a shielded payee it makes none of
+  it checkable by anyone but the payee.
 - The owner can never approve a spend after anchoring a policy, so an
   above-threshold task price has no working approval path (§6.7).
 - Deployment is content-addressed and superseded programs remain on testnet;
@@ -1223,8 +1228,11 @@ A checklist for someone writing a peer, in the order the work has to happen.
    `message.payload` as an array of bytes, not out of `wakuMessage.payload` as
    base64. That is the channel encoding, and it is the one the upstream file
    describes; §4.3 has the frame this repository measured off a live node.
-2. **Get two LEZ accounts**: a shielded identity, and a public receiving account
-   initialised under the transfer program.
+2. **Get a LEZ account**: a shielded identity, which is also all you need to be
+   paid — publish its `npk`/`vpk` (`wallet account show-keys`) as
+   `x-logos.shieldedPaymentKeys` and a payer can credit it directly. Add a
+   *public* receiving account under the transfer program only if you also want
+   your credits to be checkable by third parties, which is the trade in §6.2.
 3. **Build a card** per §3.1 and validate it against §3.4 before publishing.
 4. **Sign it** per §3.5: `alg` `secp256k1-bip340`, `kid` the payment account,
    payload the compact key-sorted card without `signatures`, message

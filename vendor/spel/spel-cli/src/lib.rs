@@ -12,6 +12,7 @@
 pub mod account_inspect;
 pub mod cli;
 pub mod config;
+pub mod foreign;
 pub mod generate_idl;
 pub mod hex;
 pub mod init;

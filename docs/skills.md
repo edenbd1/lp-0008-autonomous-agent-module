@@ -350,7 +350,7 @@ the same members produce two different groups.
 | Skill | Parameters | Answers |
 |---|---|---|
 | `wallet.balance` | `account` string — qualified `Public/<b58>` or `Private/<b58>`; defaults to the agent's own | balance, and whether the read was shielded |
-| `wallet.send` | **`recipient`** string, **`amount`** integer or decimal string (amounts are `u128`; no JSON number holds one) | a receipt whose `submitted` is false unless a transaction really went out |
+| `wallet.send` | **`recipient`** string — a base58 id, optionally `Public/`-prefixed, or `PrivateKeys/<npk>:<vpk>` to pay a shielded payee at the keys its Agent Card publishes; **`amount`** integer or decimal string (amounts are `u128`; no JSON number holds one) | a receipt whose `submitted` is false unless a transaction really went out |
 | `wallet.history` | `limit` integer 1–1000 | the agent's own journal — the chain has no history endpoint |
 | `program.query` | **`program_id`** string, **`method`** one of `getTransaction`, `getBlock`, `getAccount`, `getLastBlockId`, `params` array | the sequencer's answer, plus `found`/`included` |
 | `program.call` | **`program_id`** string, **`instruction`** string, `params` object | subject to the spending threshold |
