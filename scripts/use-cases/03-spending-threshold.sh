@@ -11,11 +11,20 @@
 # the spending, and an `if (amount > limit)` in the agent is worth exactly
 # nothing against them.
 #
-# So the ceiling is not a number stored anywhere. It is an ADDRESS. The policy
-# account is a program-derived address of sha256(owner, agent, per-tx limit,
-# per-period limit, period) — raising a limit does not edit an account, it names
-# a different account, one that `create_policy` never initialised. This script
-# shows that, from both sides, with the chain answering.
+# So the ceiling is not a number in the agent, and it is not a number in the
+# call either. Every agent has exactly ONE policy account — its address is
+# PDA(program, ["agent-policy/v1", agent_id]) and nothing else — and the whole
+# policy, the owner and both limits and the period and the running total, is
+# that account's data, written by the program that owns it. `spend` carries an
+# amount and a period and nothing more; the ceiling it is measured against comes
+# off the account. This script shows that, from both sides, with the chain
+# answering.
+#
+# The previous design put the limits in the ADDRESS, a hash of (owner, agent,
+# limits). It looked stronger and was weaker: every triple had an account of its
+# own, all uninitialised, so an attacker holding the agent's key could anchor a
+# fresh unlimited policy and spend under it — executed, accepted, and recorded in
+# artifacts/adversarial.tsv. Section 4 is what replaced it.
 #
 # WHAT IT COSTS: nothing. It submits no transaction. The three refusals below
 # fail while the proof is being built, so no transaction is ever produced to
@@ -45,7 +54,7 @@ command -v "$SPEL" >/dev/null 2>&1 || [ -x "$SPEL" ] \
 # and the same recipient — which is the only way the contrast means anything.
 CAT=blockchain
 AGENT=$(field "$AGENTS" "$CAT" agent_id)     || die "manifest unreadable"
-POLICY=$(field "$AGENTS" "$CAT" policy_hash) || die "manifest unreadable"
+POLICY=$(field "$AGENTS" "$CAT" policy_account) || die "manifest unreadable"
 PER_TX=$(field "$AGENTS" "$CAT" per_tx)
 PER_PERIOD=$(field "$AGENTS" "$CAT" per_period)
 PERIOD=$(field "$AGENTS" "$CAT" period_blocks)
@@ -60,42 +69,35 @@ echo "owner      $OWNER"
 echo "envelope   $PER_TX per transaction, $PER_PERIOD per $PERIOD blocks"
 echo "recipient  $RECIPIENT"
 
-rule "1. the envelope is a hash, and this script recomputes every one of them"
-# Not read from the manifest and believed. The derivation lives in
-# scripts/use-cases/policy-hash.py and is checked against EVERY policy this
-# repository has anchored before it is used for anything — three independent
-# (owner, agent, limits) tuples, whose accounts section 3 then finds on chain
-# owned by the policy program. Agreeing with all three is agreeing with the code
-# that anchored them.
-if python3 scripts/use-cases/policy-hash.py --self-check "$AGENTS"; then
-  ok "the derivation reproduces every anchored policy in $AGENTS"
-else
-  bad "the derivation disagrees with an anchored policy — nothing below is trustworthy"
-fi
-# And when the crate still ships its own derivation as a runnable example, the
-# two are compared. Two implementations of one hash is how a system drifts; this
-# is the check that turns drift into a failed run instead of a wrong address.
+rule "1. the envelope is account data, and this script decodes it"
+# Not read from the manifest and believed. The 97 bytes are fetched from the
+# chain and taken apart here — version, owner, both limits, the period, and the
+# running total — and every one of them is compared against what
+# artifacts/agents.tsv claims. A manifest is a file in a repository; this is what
+# the program will enforce.
 OWNER_HEX=$(id_hex "$OWNER")
 AGENT_HEX=$(id_hex "$AGENT")
-COMPUTED=$(policy_hash "$OWNER_HEX" "$AGENT_HEX" "$PER_TX" "$PER_PERIOD" "$PERIOD") \
-  || die "cannot derive a policy hash, so this script cannot check anything"
-if cargo run --quiet --release -p agent-policy-core --example policy-hash -- \
-     "$OWNER_HEX" "$AGENT_HEX" "$PER_TX" "$PER_PERIOD" "$PERIOD" > "$WORK.crate" 2>/dev/null; then
-  CRATE=$(tr -d '[:space:]' < "$WORK.crate")
-  if [ "$CRATE" = "$COMPUTED" ]; then ok "and the crate's own example agrees with it"
-  else bad "the crate computes $CRATE, this script computes $COMPUTED"; fi
-else
-  note "the crate ships no policy-hash example to cross-check against"
-fi
-rm -f "$WORK.crate"
 echo "  owner  $OWNER"
 echo "         = $OWNER_HEX"
 echo "  agent  $AGENT"
 echo "         = $AGENT_HEX"
-echo "  sha256(prefix, owner, agent, $PER_TX, $PER_PERIOD, $PERIOD)"
-echo "         = $COMPUTED"
-if [ "$COMPUTED" = "$POLICY" ]; then ok "matches the policy hash in $AGENTS"
-else bad "computed $COMPUTED, but the manifest records $POLICY"; fi
+echo "  policy $POLICY"
+REC_OK=1
+for pair in "owner:$OWNER_HEX" "per_tx:$PER_TX" "per_period:$PER_PERIOD" "period_blocks:$PERIOD"; do
+  f=${pair%%:*}; want=${pair#*:}
+  got=$(policy_record "$POLICY" "$f") || { bad "could not read $f off the policy account"; REC_OK=0; continue; }
+  printf '  %-14s %s\n' "$f" "$got"
+  if [ "$got" = "$want" ]; then ok "  matches $AGENTS"
+  else bad "  the chain says $got, the manifest says $want"; REC_OK=0; fi
+done
+SPENT=$(policy_record "$POLICY" spent)
+WINDOW_REC=$(policy_record "$POLICY" window_start)
+echo "  spent          $SPENT in period $WINDOW_REC"
+[ "$REC_OK" -eq 1 ] && ok "the anchored envelope is what this repository says it is"
+# The owner is the one field nobody can have supplied: create_policy takes no
+# owner argument at all, so those 32 bytes are the account that actually signed
+# the anchor. There is no derivation here to get wrong, which is the point —
+# the previous design's owner was an argument, and that is how it was bypassed.
 
 rule "2. the program that owns the ceiling is the program in this repository"
 # The chain reports an account's owner as eight u32 words — the ImageID of the
@@ -121,11 +123,16 @@ else
   bad "the control hash did not return null — the check above is not meaningful"
 fi
 
-rule "3. the anchored envelope exists on chain, at its own address"
-PDA=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda policy --policy-hash "$POLICY" 2>/dev/null | tr -d '[:space:]')
+rule "3. the anchored envelope exists on chain, at the agent's own address"
+PDA=$(policy_account_of "$IDL" "$PROGRAM" "$AGENT")
 [ -n "$PDA" ] || bad "could not derive the policy PDA"
-echo "  policy account for $PER_TX/$PER_PERIOD per $PERIOD blocks:"
+echo "  PDA(program, [\"agent-policy/v1\", $AGENT])"
 echo "         $PDA"
+if [ "$PDA" = "$POLICY" ]; then
+  ok "the same account the manifest records — derived, not copied"
+else
+  bad "the agent's id derives $PDA, the manifest records $POLICY"
+fi
 GOT=$(owner_of "$PDA")
 echo "  getAccount(...).program_owner = $GOT"
 if [ "$GOT" = "$PID" ]; then
@@ -134,33 +141,75 @@ else
   bad "expected $PID, got $GOT"
 fi
 
-rule "4. a bigger ceiling is a different address, and nobody created it"
-# This is the whole mechanism. An attacker who owns the agent process can pass
-# any numbers it likes; what it cannot do is make an account exist.
-check_absent() {
-  local what="$1" tx="$2" period_total="$3" blocks="$4"
-  local h p o
-  h=$(policy_hash "$OWNER_HEX" "$AGENT_HEX" "$tx" "$period_total" "$blocks") || {
-    bad "  could not derive the hash for $what"; return; }
-  p=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda policy --policy-hash "$h" 2>/dev/null | tr -d '[:space:]')
-  o=$(owner_of "$p")
-  printf '  %-28s %s\n' "$what" "$p"
-  if [ "$o" = "0,0,0,0,0,0,0,0" ]; then
-    ok "  program_owner is all zeros: never initialised"
-  else
-    bad "  $p is owned by $o — an envelope nobody anchored has an owner"
-  fi
-}
-check_absent "per-tx $((PER_TX * 10))"        "$((PER_TX * 10))"   "$PER_PERIOD"          "$PERIOD"
-check_absent "per-period $((PER_PERIOD * 10))" "$PER_TX"           "$((PER_PERIOD * 10))" "$PERIOD"
-check_absent "period $((PERIOD / 10)) blocks"  "$PER_TX"           "$PER_PERIOD"          "$((PERIOD / 10))"
-# And the control, one more time, at the address level rather than the hash
-# level: the PDA of a policy hash that cannot have been committed.
-GHOST=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda policy --policy-hash "$IMPOSSIBLE" 2>/dev/null | tr -d '[:space:]')
+rule "4. there is only one such address, so a bigger ceiling has nowhere to go"
+# This is the whole mechanism, and it is the opposite of what it used to be.
+#
+# The address does not depend on the limits, so "raise a limit" cannot name a
+# different account — it names THIS one, and this one's data says what the owner
+# anchored. `spend` does not even carry limits any more, so there is nothing to
+# present. And `create_policy` declares this account #[account(init)], which
+# refuses an account that already exists: a second policy for this agent is not
+# rejected on inspection, it has nowhere to be written.
+# There is nothing to vary. `spel pda policy` takes one argument, --agent-id;
+# the IDL declares the seeds as [literal("agent-policy/v1"), arg("agent_id")]
+# and there is no limit among them. That is the demonstration: not that ten
+# derivations agree, but that only one derivation exists.
+echo "  the IDL's seeds for the policy account:"
+python3 -c "
+import json, sys
+idl = json.load(open('$IDL'))
+ix  = next(i for i in idl['instructions'] if i['name'] == 'create_policy')
+acc = next(a for a in ix['accounts'] if a['name'] == 'policy')
+for s in acc['pda']['seeds']:
+    print('         %-8s %s' % (s['kind'], s.get('value') or s.get('path')))
+names = [s.get('value') or s.get('path') for s in acc['pda']['seeds']]
+sys.exit(0 if names == ['agent-policy/v1', 'agent_id'] else 1)" \
+  && ok "  one agent, one policy account — no limit is a seed of the address" \
+  || bad "  the policy account's seeds are not (prefix, agent_id)"
+
+# An agent nobody has ever anchored. Its address exists as arithmetic and the
+# account behind it does not, which is what an uninitialised PDA looks like and
+# is exactly the state `init` requires before it will write.
+GHOST=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda policy --agent-id "$IMPOSSIBLE" 2>/dev/null | tr -d '[:space:]')
 GHOST_OWNER=$(owner_of "$GHOST")
-printf '  %-28s %s\n' "control policy hash" "$GHOST"
-if [ "$GHOST_OWNER" = "0,0,0,0,0,0,0,0" ]; then ok "  program_owner is all zeros"
-else bad "  the control policy account is owned by $GHOST_OWNER"; fi
+printf '  %-28s %s\n' "an agent nobody anchored" "$GHOST"
+if [ "$GHOST_OWNER" = "0,0,0,0,0,0,0,0" ]; then
+  ok "  program_owner is all zeros: never initialised, so init would accept it"
+else
+  bad "  the control policy account is owned by $GHOST_OWNER"
+fi
+
+# And the refusal itself, as it was submitted to this program. A refused
+# transaction is not an event on this chain — it answers null exactly as the
+# control above does — so these hashes are recorded as facts, not offered as
+# proof. The proof is crates/agent-verifier-adversarial, which runs the
+# committed binary against both steps of the attack.
+if [ -s artifacts/adversarial.tsv ]; then
+  LIVE_PROG=$DEPLOY_TX
+  while IFS=$'\t' read -r step what prog signer agent limits tx outcome; do
+    [ "$step" = step ] && continue
+    [ -n "$tx" ] || continue
+    case "$outcome" in
+      accepted*) if [ "$prog" = "$LIVE_PROG" ]; then
+                   bad "  $tx is recorded as accepted by the LIVE program"
+                 elif tx_live "$tx"; then
+                   note "the superseded program accepted $what"
+                   printf '         %s\n' "$tx"
+                 else
+                   bad "  a recorded accepted attack, $tx, is not on chain"
+                 fi ;;
+      submitted*) if [ "$prog" != "$LIVE_PROG" ]; then continue; fi
+                  printf '  %s\n' "$what"
+                  if tx_live "$tx"; then
+                    bad "  $tx IS on chain — the second anchor was not refused"
+                  else
+                    ok "  $tx: submitted, never included"
+                  fi ;;
+    esac
+  done < artifacts/adversarial.tsv
+else
+  note "no artifacts/adversarial.tsv to check the recorded attacks against"
+fi
 
 rule "5. below the ceiling: accepted, unattended, and already on chain"
 # Not re-paid. A settlement costs real testnet balance and the funder holds a
@@ -224,18 +273,24 @@ WINDOW=$(cargo run --quiet --release -p agent-policy-core --example window-start
 WINDOW_START=${WINDOW%% *}
 echo "  block $HEIGHT, so the current period starts at $WINDOW_START"
 
-# `attempt <what> <policy-hash> <claimed-per-tx> <expected-error>` — and the
-# expected error code is the point. "Some program error happened" is satisfied by
-# a typo in the arguments; naming the code is what makes each of these three a
-# demonstration of the mechanism it claims to be about.
+# `attempt <what> <amount> <window-start> <expected-error>` — and the expected
+# error code is the point. "Some program error happened" is satisfied by a typo
+# in the arguments; naming the code is what makes each of these a demonstration
+# of the mechanism it claims to be about.
+#
+# There used to be three attempts here and now there are two, because the third
+# can no longer be expressed. It presented the anchored account while claiming
+# bigger limits (6001), and then named the account those bigger limits hashed to
+# (6002). `spend` carries neither an agent id nor any limits now — the policy
+# address is derived from the paying account and the ceiling is read out of it —
+# so there is no argument left to disagree with the chain. 6001 and 6013 are
+# retired rather than reused for exactly that reason.
 attempt() {
-  local what="$1" hash="$2" tx="$3" want="$4" out got
+  local what="$1" amount="$2" window="$3" want="$4" out got
   out=$(LEE_WALLET_HOME_DIR="$WORK/home" NSSA_WALLET_HOME_DIR="$WORK/home" \
     "$SPEL" --idl "$IDL" --program "$PROGRAM" --bin-auth-transfer "$AUTH_TRANSFER" \
     -- spend --agent "Private/$AGENT" --recipient "Public/$RECIPIENT" \
-    --policy-hash "$hash" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
-    --per-tx "$tx" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" \
-    --amount "$OVER" --window-start "$WINDOW_START" 2>&1)
+    --amount "$amount" --window-start "$window" 2>&1)
   printf '\n  %s\n' "$what"
   got=$(echo "$out" | grep -oE 'Program error [0-9]+: .*' | head -1)
   [ -n "$got" ] && echo "         $got"
@@ -258,18 +313,14 @@ if [ -d "$WORK/home" ]; then
   # 6005 — over the per-transaction ceiling, and the program says what to do
   # about it rather than merely refusing: use the approved path.
   attempt "the agent simply asks for more than its envelope allows" \
-          "$POLICY" "$PER_TX" 6005
-  # 6001 — the numbers do not hash to the account being presented. This is the
-  # attack an agent's own process can mount: pass bigger limits.
-  attempt "the agent presents the anchored account but claims a bigger ceiling" \
-          "$POLICY" "$((PER_TX * 10))" 6001
-  # 6002 — so name the account those bigger limits DO hash to. It exists as an
-  # address and has never been initialised, which is section 4 above, reached
-  # from inside the program instead of from getAccount.
-  RAISED=$(policy_hash "$OWNER_HEX" "$AGENT_HEX" "$((PER_TX * 10))" "$PER_PERIOD" "$PERIOD") \
-    || die "cannot derive the raised envelope's hash"
-  attempt "the agent names the bigger envelope's own account instead" \
-          "$RAISED" "$((PER_TX * 10))" 6002
+          "$OVER" "$WINDOW_START" 6005
+  # 6014 — the other half of the envelope. The period is the one thing `spend`
+  # still names, because no program on this chain can read the block height, so
+  # the guest refuses any window that is not a multiple of period_blocks and
+  # pins the transaction to the one it names. Sliding the window forward a block
+  # at a time would otherwise reset the running total every block.
+  attempt "the agent slides its period forward a block to reset the total" \
+          1 "$((WINDOW_START + 1))" 6014
 fi
 rm -rf "$WORK"
 
@@ -289,5 +340,5 @@ cat <<'TXT'
    works: below the line the agent acts alone, above it the chain will not let it.
 TXT
 
-finish "Use case 3 holds: the ceiling is an address, the chain keeps it, and every
-claim above was computed or fetched here. Nothing was spent."
+finish "Use case 3 holds: the ceiling is one account per agent, the chain keeps it,
+and every claim above was decoded or fetched here. Nothing was spent."

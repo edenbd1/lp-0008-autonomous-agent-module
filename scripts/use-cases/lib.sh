@@ -94,8 +94,8 @@ chain_height() {
 }
 
 # An account id, base58 as the wallet prints it, as the 32 raw bytes the chain
-# holds. The policy hash commits to the owner and the agent by account id, so
-# these have to be the accounts themselves and not a hash of how they print.
+# holds. The agent's 32 bytes are the seed of its policy account's address, so
+# this has to be the account itself and not a hash of how it prints.
 id_hex() {
   python3 -c "
 import sys
@@ -110,24 +110,44 @@ assert len(b) == 32, 'not a 32-byte account id: %r' % s
 print(b.hex())" "$1"
 }
 
-# `policy_hash <owner-hex> <agent-hex> <per_tx> <per_period> <period_blocks>`
+# `policy_record <policy-account> <field>` — one field of the 97 bytes an
+# anchored policy account holds, decoded here rather than taken from a manifest.
 #
-# Refuses to return anything that is not 64 hex characters. An earlier version
-# of this called `cargo run --example policy-hash` with stderr redirected to
-# /dev/null, and when that target stopped existing the substitution produced an
-# empty string: the run then compared "" against the anchored hash, reported a
-# mismatch, and derived the PDA of nothing. A missing tool has to look like a
-# missing tool.
-policy_hash() {
-  local out
-  out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/policy-hash.py" "$@") || {
-    echo "the policy-hash derivation failed for: $*" >&2; return 1; }
-  case "$out" in
-    [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) [ "${#out}" -eq 64 ] || {
-      echo "the policy-hash derivation returned ${#out} characters, not 64" >&2; return 1; } ;;
-    *) echo "the policy-hash derivation returned something that is not a hash: $out" >&2; return 1 ;;
-  esac
-  printf '%s\n' "$out"
+# This replaced a `policy_hash` helper that recomputed sha256(owner, agent,
+# limits) and compared it to the address. There is no policy hash any more: the
+# address is PDA(program, ["agent-policy/v1", agent_id]) and every term of the
+# policy — the owner, both limits, the period and the running total — is the
+# account's data, written by the program that owns it. A derivation that agreed
+# with the manifest proved the manifest was self-consistent; reading the account
+# proves what the chain will actually enforce.
+#
+# Fields: owner, per_tx, per_period, period_blocks, window_start, spent.
+# Anything that is not a 97-byte record with version byte 1 is an error, because
+# an unreadable ceiling must never read as a permissive one.
+policy_record() {
+  rpc getAccount "[\"$1\"]" | python3 -c "
+import json, sys
+r = json.load(sys.stdin).get('result')
+if not r:
+    sys.exit('no such account: ' + sys.argv[1])
+d = bytes(r['data'])
+if len(d) != 97 or d[0] != 1:
+    sys.exit('%s holds %d bytes, not a record this program wrote' % (sys.argv[1], len(d)))
+le = lambda a, b: int.from_bytes(d[a:b], 'little')
+print({'owner': d[1:33].hex(), 'per_tx': le(33,49), 'per_period': le(49,65),
+       'period_blocks': le(65,73), 'window_start': le(73,81),
+       'spent': le(81,97)}[sys.argv[2]])" "$1" "$2"
+}
+
+# `policy_account_of <idl> <program> <agent-base58>` — the one address that
+# agent's policy can live at, resolved by spel from the published IDL rather
+# than recomputed here. There is exactly one per agent and it does not depend on
+# the limits, which is the whole of the fix this deployment carries.
+policy_account_of() {
+  local hex
+  hex=$(id_hex "$3") || return 1
+  "${SPEL:-spel}" --idl "$1" --program "$2" pda policy --agent-id "$hex" 2>/dev/null \
+    | tr -d '[:space:]'
 }
 
 finish() {

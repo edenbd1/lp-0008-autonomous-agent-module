@@ -47,7 +47,7 @@ CARD="$CARDS/$SERVER_CAT.json"
 SERVER=$(field "$AGENTS" "$SERVER_CAT" agent_id)
 SERVER_PAY=$(field "$AGENTS" "$SERVER_CAT" pay_account)
 CLIENT=$(field "$AGENTS" "$CLIENT_CAT" agent_id)
-CLIENT_POLICY=$(field "$AGENTS" "$CLIENT_CAT" policy_hash)
+CLIENT_POLICY=$(field "$AGENTS" "$CLIENT_CAT" policy_account)
 CLIENT_PER_TX=$(field "$AGENTS" "$CLIENT_CAT" per_tx)
 for v in "$SERVER" "$SERVER_PAY" "$CLIENT" "$CLIENT_POLICY" "$CLIENT_PER_TX"; do
   [ -n "$v" ] || die "the manifest is missing a field this script needs"
@@ -133,9 +133,17 @@ if [ "$CARD_PAY" = "$SERVER_PAY" ]; then
 else
   bad "the card asks for $CARD_PAY but the manifest records $SERVER_PAY"
 fi
-# The client does not take its own envelope on trust either: the limit it is
-# about to compare the price against is one the chain is holding.
-PDA=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda policy --policy-hash "$CLIENT_POLICY" 2>/dev/null | tr -d '[:space:]')
+# The client does not take its own envelope on trust either. The limit it is
+# about to compare the price against is not in the manifest and not in the call
+# it will make: it is 97 bytes of account data the chain is holding, at an
+# address derived from the client agent's own id.
+PDA=$(policy_account_of "$IDL" "$PROGRAM" "$CLIENT")
+[ -n "$PDA" ] || bad "could not resolve the client's policy account"
+if [ "$PDA" = "$CLIENT_POLICY" ]; then
+  ok "the manifest's policy_account is the PDA of the client agent's own id"
+else
+  bad "the manifest records $CLIENT_POLICY, the agent's id derives $PDA"
+fi
 PID=$("$SPEL" program-id "$PROGRAM" 2>/dev/null | awk -F': *' '/ProgramId \(decimal\)/ {print $2}')
 OWNER_WORDS=$(owner_of "$PDA")
 echo "  the client's anchored envelope lives at $PDA"
@@ -143,6 +151,13 @@ if [ -n "$PID" ] && [ "$OWNER_WORDS" = "$PID" ]; then
   ok "and the chain says it is owned by this repository's policy program"
 else
   bad "the policy account is owned by $OWNER_WORDS, not $PID"
+fi
+# And the ceiling itself, decoded rather than recited.
+CHAIN_PER_TX=$(policy_record "$PDA" per_tx) || bad "could not read the anchored record"
+if [ "$CHAIN_PER_TX" = "$CLIENT_PER_TX" ]; then
+  ok "its per-transaction limit reads back as $CHAIN_PER_TX, the manifest's figure"
+else
+  bad "the chain says per_tx $CHAIN_PER_TX, the manifest says $CLIENT_PER_TX"
 fi
 if [ "$PRICE" -le "$CLIENT_PER_TX" ]; then
   ok "$PRICE <= the anchored per-transaction limit of $CLIENT_PER_TX: no owner in the loop"
