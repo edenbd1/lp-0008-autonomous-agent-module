@@ -234,27 +234,28 @@ echo "  policy $POLICY  (per-tx $PER_TX, per-period $PER_PERIOD)"
 # The claim is signed from the AGENT's wallet home and the policy from the
 # owner's, because that separation is the property: one instruction demanding
 # both signatures would demand both keys in one wallet.
-CLAIM=$(spel --idl "$IDL" --program "$PROGRAM" pda claim --agent-id "$AGENT_HEX" 2>/dev/null | tail -n1)
-[ -n "$CLAIM" ] || die "could not resolve the claim account"
+# The claim account is NOT resolved with `spel pda claim` here. That subcommand
+# takes the first instruction in the IDL carrying an account of that name, which
+# is `claim_agent`, and there the seed is the SIGNING ACCOUNT (kind "account")
+# rather than an argument — so no --agent-id can satisfy it and the lookup
+# returns nothing. `create_policy` reads the same account from an arg-seeded
+# definition; the address is identical, but only one of the two is derivable
+# from a value on this command line, and it is not the one `pda` picks.
+#
+# Nothing is lost by not having the address: what matters is that the claim
+# LANDED, and spel says so itself. If it had not, the create_policy below reads
+# an uninitialised account and refuses with 6019, loudly.
 LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   wallet_run account sync-private </dev/null >/dev/null 2>&1
 COUT=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   spel --idl "$IDL" --program "$PROGRAM" -- claim_agent \
     --agent "Private/$AGENT" --owner-id "$OWNER_HEX" 2>&1)
-echo "$COUT" | grep -q 'tx_hash: [0-9a-f]\{64\}' \
+CLAIM_TX=$(echo "$COUT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
+[ -n "$CLAIM_TX" ] \
   || { echo "$COUT" | tail -8; die "claim_agent submitted no transaction"; }
-# A hash is not a landed account. create_policy reads this one, so wait until
-# the chain actually has it rather than letting a race read as a 6019.
-for _ in $(seq 1 30); do
-  curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["'"$CLAIM"'"]}' \
-  | grep -q '"result":null' || break
-  sleep 2
-done
-curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["'"$CLAIM"'"]}' \
-| grep -q '"result":null' && die "the claim never landed at $CLAIM"
-echo "  agent claimed $TEST_SIGNER as the only account that may anchor it"
+echo "$COUT" | grep -q 'Transaction confirmed' \
+  || { echo "$COUT" | tail -8; die "claim_agent built $CLAIM_TX but it never confirmed"; }
+echo "  agent claimed $TEST_SIGNER as the only account that may anchor it -> $CLAIM_TX"
 
 spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
   --agent-id "$AGENT_HEX" \
