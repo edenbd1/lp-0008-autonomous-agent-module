@@ -96,7 +96,25 @@ for state in submitted working completed; do
   printf '  state -> %s\n' "$state"
 done
 
-rule "4. settlement on chain, by the client agent, unattended"
+rule "4. resync the client agent before proving"
+# Not optional, and the reason is worth writing down. A private account's state
+# changes on chain every time it signs. The proof is built against the wallet's
+# local view, so an agent that spent once and never resynced proves against a
+# stale pre-state: the proof still builds, spel still returns a transaction
+# hash, and the sequencer simply never lands it. Nothing reports an error —
+# there is just a hash that stays unknown to the chain forever.
+#
+# That is why the first settlement by a fresh agent works and the second does
+# not, which reads like an intermittent fault and is not one.
+AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
+if [ -x "${WALLET_BIN:-}" ]; then
+  LEE_WALLET_HOME_DIR="$AGENT_HOMES/$CLIENT_CAT" NSSA_WALLET_HOME_DIR="$AGENT_HOMES/$CLIENT_CAT" \
+    "$WALLET_BIN" account sync-private </dev/null 2>&1 | grep -i "synced to block" | sed 's/^/  /'
+else
+  echo "  WALLET_BIN not set — skipping the resync, the settlement may not land" >&2
+fi
+
+rule "5. settlement on chain, by the client agent, unattended"
 # The nonce makes this payment distinct from any other with the same recipient
 # and amount; the marker seed is derived from it even though an autonomous spend
 # does not consume an approval, so the same call shape works either side of the
@@ -112,6 +130,9 @@ MARKER=$(cargo run --quiet --release -p agent-policy-core --example spend-marker
   "$CLIENT_POLICY" "$RECIP_HEX" "$PRICE" "$NONCE")
 echo "  nonce  $NONCE"
 echo "  marker $MARKER"
+# KNOWN ISSUE — a repeat settlement does not currently land. See
+# docs/limitations.md; do not present a resubmitted hash as a payment without
+# checking it on chain first, which is what the confirmation gate below is for.
 
 # The settlement is signed by the CLIENT AGENT, not by the owner — that is what
 # "without owner intervention" means here — so point the wallet at the agent's

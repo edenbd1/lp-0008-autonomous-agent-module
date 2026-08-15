@@ -63,6 +63,26 @@ echo "owner  $SIGNER"
 echo "       committed into every policy hash as $OWNER_HEX"
 echo
 
+# The program has to be on chain before anything can call it, and spel does not
+# put it there. Calling an undeployed program does not error usefully — every
+# create_policy just fails to land, which reads like a network problem and is
+# not one. Deploy is content-addressed and idempotent: re-deploying an identical
+# binary is a no-op that costs one round trip.
+DEPLOY_TX=$(python3 -c "
+import hashlib,struct
+b=open('$PROGRAM','rb').read()
+print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
+if confirmed "$DEPLOY_TX"; then
+  echo "program  $DEPLOY_TX  already on chain"
+else
+  echo "program  $DEPLOY_TX  deploying"
+  "$WALLET" deploy-program "$PROGRAM" </dev/null >/dev/null 2>&1
+  for _ in $(seq 1 25); do sleep 6; confirmed "$DEPLOY_TX" && break; done
+  confirmed "$DEPLOY_TX" || { echo "  the program did not deploy" >&2; exit 1; }
+  echo "         landed"
+fi
+echo
+
 deploy_agent() { # category per_tx per_period period_blocks
   local cat="$1" per_tx="$2" per_period="$3" period="$4"
   echo "[$cat] new shielded account"
