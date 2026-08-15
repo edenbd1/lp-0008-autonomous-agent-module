@@ -418,7 +418,7 @@ policy    <its policy account, from the manifest>
   ok    the module is in the runtime's loaded set
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
-  ok    the loaded module lists all 22 documented skills
+  ok    the loaded module lists all 23 documented skills
   ok    the running module reports itself configured
   ok    and bound to the owner it was configured with
   ok    and to the policy account it was configured with
@@ -459,7 +459,7 @@ revision CI uses) and `nlohmann/json.hpp`. No node, no keys, no Logos install.
 Three commands, and the first is how you find the other two's arguments:
 
 ```sh
-$OUT/agent-console skills | python3 -m json.tool   # 22 skills, each with a JSON Schema
+$OUT/agent-console skills | python3 -m json.tool   # 23 skills, each with a JSON Schema
 $OUT/agent-console status
 $OUT/agent-console invoke <name> '<json>'
 ```
@@ -527,7 +527,7 @@ to an already-installed `agent.lgx`.** `registerSkill` takes a
 Objects in a separate process, and there is no wire format for a C++ object — so
 skills are added by a host that *links* the module, which is what
 `agent-console` is. The full interface specification, the loader convention, the
-parameters of all 22 built-in skills, and what would have to change for the
+parameters of all 23 built-in skills, and what would have to change for the
 plugin path are in [`docs/skills.md`](docs/skills.md).
 
 ## 6. Run an A2A task and settle it in LEZ
@@ -714,7 +714,7 @@ That document also carries the two load harnesses and their recorded output:
 `logos_core_load_test` `dlopen`s the real `liblogos_core` out of the installed
 `LogosBasecamp.app`, loads the module through the same C API in the same order
 as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
-own transport: 22 skills listed, each with a parameter schema, `invoke()`
+own transport: 23 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
 The loaded module also **opens its own Logos Delivery node**. That sentence used
@@ -1011,7 +1011,7 @@ docs/                             see the reading order below
 |---|---|
 | [`architecture.md`](docs/architecture.md) | the shape of the module, and where each decision is made |
 | [`security-model.md`](docs/security-model.md) | what the agent may do alone, and what it may not — the "They can" / "They cannot" lists |
-| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 22 built-ins. Also which are wired to a running node and which are only compiled |
+| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 23 built-ins. Also which are wired to a running node and which are only compiled |
 | [`a2a-binding.md`](docs/a2a-binding.md) | the A2A transport binding over Logos Messaging — the Agent Card schema, the task lifecycle, and a conformance table against A2A §11.1, including where this implementation does not conform |
 | [`use-cases.md`](docs/use-cases.md) | the prize's illustrative use cases, and which of them this repository demonstrates |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | what is live, how it got there, and how to reproduce it |

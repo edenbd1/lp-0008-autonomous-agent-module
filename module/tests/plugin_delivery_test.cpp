@@ -339,8 +339,159 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
               "this list at all");
     }
 
+    step("4. and then one serves the other: an A2A request, sent and READ");
+    // The half the module did not have. `agent.task` addresses a peer on
+    // `/lp-0008/1/task-<agent>-<task>/json`; until `messaging.receive` existed
+    // the peer had no skill that could read that topic, so two agents could
+    // find each other and neither could serve the other. Both sides do both
+    // roles here, so one binary proves both directions.
+    const QString myTask = QStringLiteral("t") + runId + me.left(6);
+    const QString theirTask = QStringLiteral("t") + runId + other.left(6);
+    const QString myInbox =
+        QStringLiteral("/lp-0008/1/task-") + me + "-" + theirTask + "/json";
+
+    // Subscribe before anyone sends: Waku relay carries no history, so a topic
+    // joined after the fact is a topic nothing will ever arrive on. The first
+    // read is what subscribes, and it is expected to be empty.
+    QJsonObject inbox =
+        call(p, "messaging.receive", QStringLiteral(R"({"topic":"%1"})").arg(myInbox));
+    check(inbox.value("ok").toBool(), "messaging.receive answers, and subscribes on first use");
+    check(inbox.value("total").toInt() == 0,
+          "and its first answer is empty, because nothing has been sent yet");
+
+    r = call(p, "agent.task",
+             QStringLiteral(R"({"agent_address":"%1","skill":"storage.upload",)"
+                            R"("task_id":"%2","params":{"path":"/tmp/x"}})")
+                 .arg(other, myTask));
+    check(r.value("ok").toBool() && r.value("state").toString() == QLatin1String("submitted"),
+          "this agent opened an A2A task addressed to the other one");
+
+    bool served = false;
+    QString servedText;
+    for (int i = 0; i < rounds && !served; ++i) {
+        inbox = call(p, "messaging.receive", QStringLiteral(R"({"topic":"%1"})").arg(myInbox));
+        for (const QJsonValue &entry : inbox.value("messages").toArray()) {
+            const QString text = entry.toObject().value("message").toString();
+            const QJsonObject rpc = asObject(QVariant(text));
+            // Not "a message arrived": the document has to be the A2A JSON-RPC
+            // request, addressed to the task the OTHER agent minted. A frame
+            // this node published itself would name `myTask`.
+            if (rpc.value("method").toString() != QLatin1String("message/send")) continue;
+            const QJsonObject message =
+                rpc.value("params").toObject().value("message").toObject();
+            if (message.value("taskId").toString() == theirTask) {
+                served = true;
+                servedText = text;
+            }
+        }
+        if (!served) std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+    check(served,
+          "and READ the other agent's A2A request off its own task topic — the half of the "
+          "lifecycle that had no skill until messaging.receive");
+    if (served) note("served: " + servedText.left(220) + QStringLiteral("..."));
+
     std::fprintf(stderr, "\n%s (%d failure(s))\n",
                  failures ? "FAILED" : "two loaded modules discovered each other", failures);
+    return failures ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// approval: an above-threshold spend, held for an owner on another node
+// ---------------------------------------------------------------------------
+
+int runApproval(const QString &path, const QString &me, const QString &owner,
+                const QString &recipient, const QString &amount)
+{
+    LogosProviderObject *p = bringUpModule(path);
+    if (!p) return 1;
+
+    step("1. configure the agent's identity, its owner's channel, and its node");
+    const std::pair<const char *, QString> settings[] = {
+        {"agent_account", me},
+        {"owner_channel_account", owner},
+        // Long enough that a node still finding peers is not read as an owner
+        // who said nothing, short enough that a broken run ends.
+        {"approval_timeout_ms", QStringLiteral("180000")},
+        {"approval_resend_ms", QStringLiteral("8000")},
+    };
+    for (const auto &kv : settings) {
+        const QJsonObject r = call(
+            p, "meta.configure",
+            QStringLiteral(R"({"key":"%1","value":"%2"})")
+                .arg(QString::fromUtf8(kv.first), kv.second));
+        check(r.value("ok").toBool(), QStringLiteral("meta.configure %1")
+                                          .arg(QString::fromUtf8(kv.first)));
+    }
+    check(call(p, "meta.configure", QStringLiteral(R"({"key":"delivery","value":"on"})"))
+              .value("ok").toBool(),
+          "meta.configure('delivery','on')");
+    const bool up = waitReady(p, 240);
+    check(up, "the agent's own Delivery node came up");
+    if (!up) return 1;
+
+    step("2. ask to spend, above an envelope that is zero because nothing anchored one");
+    // Every port is unwired, so the envelope is zero and *every* spend is
+    // outside it. That is the state a loaded module is in, and it is the one
+    // that sends this to the owner rather than making it unattended.
+    note("this call blocks until the owner answers or the wait runs out");
+    const auto started = std::chrono::steady_clock::now();
+    const QJsonObject sent =
+        call(p, "wallet.send", QStringLiteral(R"({"recipient":"%1","amount":"%2"})")
+                                   .arg(recipient, amount));
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - started)
+                             .count();
+    note(QStringLiteral("%1 ms").arg(elapsed));
+    note("wallet.send: " +
+         QString::fromUtf8(QJsonDocument(sent).toJson(QJsonDocument::Compact)));
+
+    step("3. what the node actually handed over");
+    // Three numbers that separate the two failures that look alike: nothing
+    // arrived, versus something arrived and could not be read.
+    note("meta.status delivery: " +
+         QString::fromUtf8(QJsonDocument(deliveryStatus(p)).toJson(QJsonDocument::Compact)));
+
+    step("4. what came back");
+    // The outcome, not merely "ok". `awaiting_owner_approval` with
+    // `owner_verdict: approved` is the owner having answered these exact terms;
+    // `owner_unreachable` is the failure this whole exercise exists to tell
+    // apart from it, and it is what every run of this produced before the
+    // marker seed was derived rather than left empty.
+    // `outcome` and `approved`, which are the fields `wallet.send` actually
+    // emits. The first version of this read `owner_verdict`, which nothing
+    // produces, so it was an assertion on an absent field — `QJsonValue()` to
+    // `QString()` is `""`, and `"" == "approved"` is false, so it failed on a
+    // run that had succeeded. That is the third time today an assertion has
+    // been about a field that was not there.
+    const QString outcome = sent.value("outcome").toString();
+    const bool approved = sent.value("approved").toBool();
+    note("outcome: " + outcome + ", approved: " + (approved ? "true" : "false") +
+         ", attempts: " + QString::number(sent.value("attempts").toInt()) +
+         ", waited: " + QString::number(sent.value("waited_ms").toInt()) + " ms");
+    check(outcome != QLatin1String("owner_unreachable"),
+          "the owner was reached — the assertion that was impossible while the module sent "
+          "an empty marker seed");
+    const bool expectDeny = qEnvironmentVariableIsSet("LP0008_EXPECT_DENY");
+    if (expectDeny) {
+        // The control. An owner who says no must produce a denial, not an
+        // approval and not a timeout: a channel that reported "approved"
+        // whatever came back would pass every other check on this page.
+        check(outcome == QLatin1String("denied") && !approved,
+              "the owner's DENIAL came back as a denial: " + outcome);
+    } else {
+        check(outcome == QLatin1String("approved") && approved,
+              "and approved these exact terms: " + outcome);
+    }
+    check(sent.value("attempts").toInt() >= 1, "the request was really put on the wire");
+    check(!sent.value("submitted").toBool(),
+          "nothing was submitted: an approval unlocks the spend_approved path, it does not "
+          "move money, and this module wires no wallet");
+
+    std::fprintf(stderr, "\n%s (%d failure(s))\n",
+                 failures ? "FAILED"
+                          : "an owner on another node answered a loaded module's own terms",
+                 failures);
     return failures ? 1 : 0;
 }
 
@@ -352,13 +503,22 @@ int main(int argc, char **argv)
     if (argc < 3) {
         std::fprintf(stderr,
                      "usage: %s <plugin> probe\n"
-                     "       %s <plugin> peer <run-id> <me> <signer-cmd> <other>\n",
-                     argv[0], argv[0]);
+                     "       %s <plugin> peer <run-id> <me> <signer-cmd> <other>\n"
+                     "       %s <plugin> approval <me> <owner> <recipient> <amount>\n",
+                     argv[0], argv[0], argv[0]);
         return 2;
     }
     const QString path = QString::fromUtf8(argv[1]);
     const QString mode = QString::fromUtf8(argv[2]);
     if (mode == QLatin1String("probe")) return runProbe(path);
+    if (mode == QLatin1String("approval")) {
+        if (argc < 7) {
+            std::fprintf(stderr, "approval needs <me> <owner> <recipient> <amount>\n");
+            return 2;
+        }
+        return runApproval(path, QString::fromUtf8(argv[3]), QString::fromUtf8(argv[4]),
+                           QString::fromUtf8(argv[5]), QString::fromUtf8(argv[6]));
+    }
     if (mode == QLatin1String("peer")) {
         if (argc < 7) {
             std::fprintf(stderr, "peer needs <run-id> <me> <signer-cmd> <other>\n");

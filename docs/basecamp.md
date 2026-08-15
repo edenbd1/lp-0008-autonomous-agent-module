@@ -33,13 +33,13 @@ method table and asserts on the module's real behaviour:
   ok    a second configure is refused — the binding is the agent's identity
   ok    before start, skills() is an error rather than an empty card
   ok    status reflects the running agent
-  <-    skills(): 22 entries: storage.share, wallet.send, program.deploy, …
+  <-    skills(): 23 entries: storage.share, wallet.send, program.deploy, …
   ok    every skill the module ships with is listed: missing none
-  ok    the card has exactly 22 entries, and 22 distinct names
+  ok    the card has exactly 23 entries, and 22 distinct names
   ok    each carries a parameter schema: all present
   ok    invoke() dispatches to every one of them: undispatched none
   <-    invoke(meta.skills): {"count":22,"ok":true,"skills":[{"name":"agent.cancel", …
-  ok    meta.skills lists all 22 skills over the boundary, and counts them
+  ok    meta.skills lists all 23 skills over the boundary, and counts them
   ok    and every one of them carries the parameter schema skills() published for it
   ok    including itself: it is a registered skill, not a special case in invoke()
   ok    an unwired skill refuses as itself, not as a name nobody registered
@@ -92,12 +92,12 @@ module, which the runtime runs in its own `logos_host` process:
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
   ok    skills() answers with a JSON array, not an error object: [{"name":"agent.cancel", …
-  <-    skills(): 22 entries
-  ok    the loaded module lists all 22 documented skills
+  <-    skills(): 23 entries
+  ok    the loaded module lists all 23 documented skills
   ok    it lists exactly 22 — no more, no fewer (got 22)
   ok    every listed skill carries a parameter schema (22 checked)
   ok    and it answered as a running agent, not as a stopped one
-  ok    invoke() dispatches to every one of the 22
+  ok    invoke() dispatches to every one of the 23
   <-    meta.status durability: {"path":".../agent-persistence/agent/a45bddb77136/tasks.json","recovered_active":0,"recovered_tasks":0,"recovery":"absent","recovery_ran":true,"settled_payments":0,"uncertain_payments":0}
   ok    the loaded module reports a durability record, not null: it was given a persistence directory and opened a task snapshot in it
   ok    and the snapshot lives under the persistence base the host set
@@ -550,7 +550,7 @@ stayed committed across five commits to the sources; and `d995d85` made the
 module sign Agent Cards `secp256k1-bip340` instead of the `EdDSA` that
 `scripts/use-cases/verify-agent-card.py` rejects, without repackaging, so the
 published `.lgx` signed cards this repository's own verifier refuses. Both
-binaries load, cast, and answer `skills()` with all 22 entries, and the stale
+binaries load, cast, and answer `skills()` with all 23 entries, and the stale
 one is the same 3699040 bytes as the fresh one, so nothing in `module/tests/`
 could tell them apart.
 
@@ -642,7 +642,7 @@ $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 That prints root hash
-`22b4e00b2324154662514ee143e47dcd80499a58727b1a6debeccf8bace107f0`. Rebuilding
+`4393ad024b9fa63d21efcea2601d46c6f96cf91ab1a887316e84df539afd81a4`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -690,7 +690,7 @@ redistribution — see below.
 
 **Leaving it out is survivable, and that is the point.** The plugin does not
 link the library; it opens it with `dlopen` when a node is first asked for. A
-module directory missing it still loads, still registers all 22 skills, and
+module directory missing it still loads, still registers all 23 skills, and
 answers `meta.status` with the file it wanted and every path it tried:
 
 ```json
@@ -932,7 +932,7 @@ Before `app/` existed the same command returned that list without its first
 entry. That is the criterion's "accessible from the Logos app", read out of the
 app itself.
 
-What the window then does — bind the agent, start it, list its 22 skills,
+What the window then does — bind the agent, start it, list its 23 skills,
 invoke any of them, and answer the spends it asks the owner to approve — is in
 `app/README.md`, with the transcript of a completed approval round trip. The
 two module-side facts that round trip depends on are in
@@ -945,7 +945,7 @@ Honest list, in the order that matters:
 
 1. The skills need their ports wired from inside the loaded module. This item
    has been rewritten twice and is now mostly done. It first read "the plugin
-   has to construct and register the skill objects"; it does, and all 22
+   has to construct and register the skill objects"; it does, and all 23
    dispatch. It then read "`registerBuiltinSkills` takes `std::function` ports
    that cannot cross a plugin boundary", which was the wrong conclusion from a
    right premise — a host cannot pass a closure, and a module can build one. The
@@ -981,24 +981,43 @@ Honest list, in the order that matters:
    The last sentence of this item used to read: "It does not close the Usability
    half, which names Logos Messaging and a second app instance specifically, and
    `OwnerChannel` (which does speak Delivery) still needs a `DeliveryPort` the
-   plugin cannot be handed." The reason in it is now wrong: the plugin builds
-   its own `OwnerChannelPort` from its own node and constructs `OwnerChannel` on
-   it (`AgentModuleImpl::publishApprovalOverDelivery`), preferring it over the
-   runtime event when `owner_channel_account` and `agent_account` are configured
-   and the node is up.
+   plugin cannot be handed." **The transport half is now closed and watched.**
+   The plugin builds its own `OwnerChannelPort` from its own node and constructs
+   `OwnerChannel` on it (`AgentModuleImpl::publishApprovalOverDelivery`),
+   preferring it over the runtime event when `owner_channel_account` and
+   `agent_account` are configured and the node is up.
+   `./scripts/delivery-in-plugin.sh approval` runs it twice, against
+   `module/tests/owner_responder.cpp` on a second node:
 
-   **The conclusion is still open, and for a smaller reason: nobody has watched
-   an approval cross that composition.** Each part is exercised — the class by
-   `owner_channel_test` and `owner-channel-live.sh`, the node by the three
-   harnesses above, the fallback by `module_recovery_test` — and the assembly of
-   them is not. Measuring it needs an owner-side responder that answers the
-   module's own terms (correlation id `spend-<nonce>`, the configured policy
-   hash, an empty marker seed) rather than terms both sides derive from a shared
-   run id, which is all `owner_channel_live.cpp`'s owner mode can do. Until that
-   exists this item stays open, because "the code is there and every piece of it
-   is tested" is the exact shape of the three claims this repository has already
-   had to retract. The second app instance is open too: the owner end is a
-   program written for the purpose, not Basecamp with a person in front of it.
+   ```
+   the owner will approve
+     ok  and it is the seed the agent named — two independent derivations
+     ok  the owner's approval went out on the channel
+     <-  outcome: approved, approved: true, attempts: 1, waited: 472 ms
+   the owner will deny
+     <-  outcome: denied, approved: false, attempts: 1, waited: 463 ms
+     ok  the owner's DENIAL came back as a denial
+   ```
+
+   The deny run is the control: a channel that reported "approved" for whatever
+   came back would pass the first run and only the first.
+
+   **Two things this cost, both worth recording.** The path could never have
+   worked as first written: `OwnerChannel::requestApproval` refuses a request
+   with no marker seed *before it sends anything*, and the module was sending an
+   empty one, with a comment explaining that the derivation lived in a crate it
+   does not link. Every piece was separately tested and the assembly was not.
+   `module/src/spend_marker.cpp` derives it now, and
+   `module/tests/spend_marker_test.cpp` pins that derivation to
+   `crates/agent-policy-core` by *running the crate* rather than by comparing
+   against a table. And the first live run still failed, looking exactly like an
+   owner who never answered — 23 attempts, no verdict — until the frame counters
+   in `meta.status` showed `channel_seen: 1, channel_decoded: 1`: the answer had
+   arrived and been read, and it was the *responder* that was wrong, sending
+   `{"approve": true}` where `checkReply` reads `decision`.
+
+   Still open: the **second app instance**. The owner end is a program written
+   for the purpose, not Basecamp with a person in front of it.
 
    What *has* since been settled is the other side of that sentence: the class
    the plugin cannot be handed a port for now runs over the public network,

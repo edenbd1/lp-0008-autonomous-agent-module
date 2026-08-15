@@ -15,27 +15,29 @@
     "name, type or author."
   ],
   "built_from": {
-    "module/CMakeLists.txt": "6ce7ed2c28316fbf90a34263868cebf9e7f087df3a4bd337e8bbc5112129b317",
+    "module/CMakeLists.txt": "76111e5d41d7104b72762f8e4e7b5b7b24d23e04dad7e42f511a235cd03a06e2",
     "module/agent_module_plugin_export.h": "149a9597119d18ff7630b1bac939e1051d6c975129e17c4f33513a1dada85aa9",
     "module/generated_code/agent_dispatch.cpp": "26140ef3be69032b4006d43939843ad37ffd0660707d6f83d57cb1b27d88c2a1",
     "module/generated_code/agent_events.cpp": "544722ac079d102aa47c3613b458c7b559644b263727712cc9286f65ce9f93c2",
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "42177990fff935f39f793897b2b8cb2b42bdc4386cd895269d7fbbe776fdf44b",
+    "module/src/agent_module_plugin.cpp": "8a3a3e720669185ab9cb33db3e3d88b617d8d5cd02be2ceb230d3630224bc5d9",
     "module/src/agent_module_plugin.h": "22ddcbab70e3e3aae5575f36acd1c9ef6ed2161a8f1fa7df6292649ddf38d895",
     "module/src/agent_skills.cpp": "cb3f811297d410130d21b7619bc1c45c5a429fcb682beeaa334139d2e60fbcd9",
     "module/src/agent_skills.h": "06cf76ee24578aa3068494f70611987b772b02285f39a72be566d5aac004a665",
-    "module/src/delivery_runtime.cpp": "512c63c1148922bf1ff372418f0cdea3d4f307ae7bd92c7879b8a99e088350da",
-    "module/src/delivery_runtime.h": "af46557b965fa956d2daf79629485cb0fc5f361e8be4f844ee4416579e75c860",
+    "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",
+    "module/src/delivery_runtime.h": "5cd0c108bdf342f2a260cd6043b22dc1f5ae3d9bc981537878aa7e5a53227892",
     "module/src/inference.cpp": "ecb0d3048ee7c26688f31af1621db7da2bf52437547e16920ea323c82a34c3fa",
     "module/src/inference.h": "5c27af5158edd83fe9bcaaa355a86d90748f68cfc787f922d8190a5969ac2732",
-    "module/src/messaging_skills.cpp": "fedc60715687885c0447fef051373a1089be881f1580d86f121ae7144b8d52ca",
-    "module/src/messaging_skills.h": "ead8ebfc5c7c5cebf12ec6aff299de73b49e9eb4b776e7b984b962bcb9fa6338",
+    "module/src/messaging_skills.cpp": "b71da530a0631b679d4490a485385f1d523117df881ff2881b6d51a0a59b38a6",
+    "module/src/messaging_skills.h": "6b23d21679cb1c27be21d5765d25e2856be6d84de7b846718685db417c5cc113",
     "module/src/owner_channel.cpp": "1fd284251653869cc8721e5051e298b56d8b4f4444611526e28e7288bc9f002e",
     "module/src/owner_channel.h": "d84c978a8d5e6189e39ac2accdc4d0de430577f5bf195d0f016ac2e21cb7f8d5",
     "module/src/program_skills.cpp": "67ec2d34c4c36b20486975f729c63518bdf556e2af00ce6a3c79d52855f9bd46",
     "module/src/program_skills.h": "820dc8abe2870a6bb10cb519f979d8add33a152536cc34d1b35a7cccb769ca97",
+    "module/src/spend_marker.cpp": "f16403e06be5a6125b880199fcd840581d5ccbc67dd2c39ccf454d02311c3f43",
+    "module/src/spend_marker.h": "bb8814c2060ff609b965691bc6a36dc5b26f24ef85fb4ca6624e0708a96ef5ab",
     "module/src/storage_skills.cpp": "e4d3df2ff25c277f177c20a4a807d09fba082934abbbc42771fab4661fcfa247",
     "module/src/storage_skills.h": "40356f6b968451036a8c7761235a071304faea2b99cfaf75efb7f4932fbdd324",
     "module/src/task_persistence.cpp": "666fac67ff5b49f5ada0123e4e2fde991c59bbcf345365479d4e40793086b7bb",
@@ -44,7 +46,7 @@
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
   "package": "module/agent.lgx",
-  "package_root_hash": "22b4e00b2324154662514ee143e47dcd80499a58727b1a6debeccf8bace107f0",
+  "package_root_hash": "4393ad024b9fa63d21efcea2601d46c6f96cf91ab1a887316e84df539afd81a4",
   "toolchain": {
     "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
     "host": "darwin-arm64",
@@ -53,9 +55,9 @@
   },
   "variants": {
     "darwin-arm64": {
-      "bytes": 4096528,
+      "bytes": 4136352,
       "main": "agent_plugin.dylib",
-      "sha256": "0b66ac38c2afcc1ccdf9fc42d67d9fdfd3093aa1a58ecc6b6112c703a0227ee0"
+      "sha256": "68d219743f5e57cf602526eda445d36e03d1195bf192cf4225c08b528c9a5f75"
     }
   }
 }

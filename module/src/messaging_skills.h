@@ -31,6 +31,19 @@ struct DeliveryPort {
     std::function<bool(const std::string &topic, const std::vector<std::uint8_t> &payload)> send;
     std::function<bool(const std::string &topic)> subscribe;
     std::function<bool(const std::string &channelId)> channelCreate;
+    /// Everything received on `topic` since the node came up, oldest first.
+    ///
+    /// The half of the transport this module did not have. `send` and
+    /// `subscribe` let an agent *ask*; without a read there was no way for the
+    /// agent being asked to see the request, so `agent.task` put a real A2A
+    /// `message/send` on the wire and the peer had no skill that could read it.
+    /// Two agents could discover each other and neither could serve the other.
+    ///
+    /// Not draining, and it takes an index instead: a read that consumed what it
+    /// returned would mean two readers of one topic each seeing half the
+    /// traffic, and a retry after a failure seeing none of it. The caller says
+    /// where it got to.
+    std::function<std::vector<std::string>(const std::string &topic)> receive;
 };
 
 /// Whether `id` may be spliced into the `<name>` segment of a content topic.
@@ -87,6 +100,23 @@ class SendSkill final : public ISkill {
 public:
     explicit SendSkill(DeliveryPort port) : port_(std::move(port)) {}
     std::string name() const override { return "messaging.send"; }
+    std::string parameterSchema() const override;
+    std::string invoke(const std::string &paramsJson) override;
+
+private:
+    DeliveryPort port_;
+};
+
+/// `messaging.receive(topic, since)` — what has arrived on a topic.
+///
+/// The counterpart of `messaging.send`, and the skill that makes an agent
+/// answerable rather than only demanding. `agent.task` addresses a peer on
+/// `/lp-0008/1/task-<agent>-<task>/json`; the peer subscribes to that topic and
+/// reads the JSON-RPC request with this.
+class ReceiveSkill final : public ISkill {
+public:
+    explicit ReceiveSkill(DeliveryPort port) : port_(std::move(port)) {}
+    std::string name() const override { return "messaging.receive"; }
     std::string parameterSchema() const override;
     std::string invoke(const std::string &paramsJson) override;
 

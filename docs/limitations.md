@@ -580,14 +580,16 @@ between two loaded modules on the public network —
 [`scripts/delivery-in-plugin.sh`](../scripts/delivery-in-plugin.sh),
 [`docs/basecamp.md`](basecamp.md).
 
-What is still true is narrower, and is two things. The *owner-side* process in
-`owner-channel-live.sh` is still not a second Basecamp, and no owner-facing UI
-plugin exists in this repository. And the agent end being a loaded module is
-wired but not yet watched: `AgentModuleImpl::publishApprovalOverDelivery`
-constructs `OwnerChannel` on the module's own node, every piece of that is
-exercised separately, and no approval has been observed leaving a loaded module
-and coming back. That needs an owner-side responder answering the module's own
-terms rather than terms derived from a shared run id.
+What is still true is narrower, and is now one thing rather than two. The agent
+end being a loaded module **has been watched**: `./scripts/delivery-in-plugin.sh
+approval` puts an above-threshold `wallet.send` through a plugin's own
+`OwnerChannel`, over the public network, to `module/tests/owner_responder.cpp`
+on a second node — which re-derives the approval marker from the request's own
+terms and refuses to answer one it cannot verify — and the module acts on the
+answer in about 470 ms, approving on one run and denying on the control.
+
+What remains is the *app instance*: the owner end is a program written for the
+purpose, not Basecamp with a person in front of it.
 
 Two smaller things the run does not claim. Both processes were on one machine,
 so the frames went out to public relays (DigitalOcean, Google Cloud, and others

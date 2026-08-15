@@ -56,6 +56,25 @@ jobs:
       - name: Test
         run: cargo test --workspace --release --locked
 
+      # The module's copy of the approval-marker derivation, against the crate
+      # the chain runs. Not a table of expected values: the check RUNS
+      # `agent-policy-core` and compares, so a change to either side that the
+      # other does not follow goes red here rather than at an owner's approval
+      # of a payment the chain will never look for.
+      - name: The marker seed the module derives is the one the chain derives
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -Wall -Wextra \
+            module/tests/spend_marker_test.cpp module/src/spend_marker.cpp \
+            -o spend_marker_test
+          ./spend_marker_test \
+            --rust 'cargo run -q -p agent-policy-core --example spend-marker --' \
+            | tee spend_marker.out
+          # Without --rust the harness exits 1 rather than passing on the checks
+          # it can still do, so a green here is a comparison that happened.
+          grep -q "the module derives the marker the chain will look for" spend_marker.out
+          rm -f spend_marker.out
+
   binaries:
     name: The committed program matches its recorded ImageID
     runs-on: ubuntu-latest
@@ -320,6 +339,7 @@ jobs:
             module/tests/skills_test.cpp \
             module/src/agent_module_plugin.cpp \
             module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
@@ -355,6 +375,7 @@ jobs:
             module/tests/module_recovery_test.cpp \
             module/src/agent_module_plugin.cpp \
             module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
@@ -383,6 +404,7 @@ jobs:
             module/tests/module_recovery_test.cpp \
             broken_plugin.cpp \
             module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \

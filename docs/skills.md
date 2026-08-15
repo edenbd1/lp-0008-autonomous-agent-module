@@ -94,7 +94,7 @@ Three rules, all enforced rather than documented:
   one skill per name, so the card cannot advertise anything `invoke()` will not
   dispatch. Whichever skill holds the name answers for it.
 
-The module's own twenty-two arrive the same way, through
+The module's own twenty-three arrive the same way, through
 `registerBuiltinSkills(SkillPorts)`, which is a convenience over `registerSkill`
 and not a privileged path.
 
@@ -281,7 +281,7 @@ question:
 Two further boundaries, for completeness:
 
 - **The storage, wallet, sequencer and toolchain skills have no ports wired
-  inside a loaded plugin.** This used to say twenty of the twenty-two, "for the
+  inside a loaded plugin.** This used to say twenty of the twenty-two, "for the  (count-as-it-was)
   same `std::function` reason", and the reason was the wrong one: a host cannot
   *pass* a closure over Qt Remote Objects, and it does not follow that a module
   cannot *build* one. The module now links `liblogosdelivery` and constructs its
@@ -413,7 +413,7 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Blockchain | `program.call` | **on chain** — same path, same threshold |
 | Blockchain | `wallet.balance`, `wallet.history`, `program.query` | reads over JSON-RPC, and reachable from `agent-console` — §5 has the recorded answers |
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet |
-| Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
+| Messaging | `messaging.send`, `messaging.receive`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
 | Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
 | Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
@@ -679,6 +679,15 @@ A green run creates a node, registers listeners, starts it and waits for the
 node to confirm rather than for `start_node` to return, asks the running node
 for its own peer id, subscribes, publishes, waits for the network to propagate
 the message back, then stops and destroys the context.
+
+`messaging.receive(topic, since)` is the read half, and it is newer than the
+rest of this document because for a long time there was no read half at all:
+`agent.task` put a real A2A `message/send` on
+`/lp-0008/1/task-<agent>-<task>/json` and the agent being asked had no skill
+that could look at that topic, so two agents could discover each other and
+neither could serve the other. It is not draining — it takes a `since` index —
+because a read that consumed what it returned would mean two readers of one
+topic each seeing half the traffic, and a retry after a failure seeing none.
 
 One trap is worth recording, because it fails silently and looks exactly like a
 message that never left: **the name you register with is not the name that comes

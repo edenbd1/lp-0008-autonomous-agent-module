@@ -143,6 +143,20 @@ public:
 
     /// `"absent"` (not linked), `"off"`, `"starting"`, `"ready"` or `"failed"`.
     std::string state() const;
+
+    /// What the node's event thread has actually handed over, as JSON:
+    /// `{"relay_seen":3,"channel_seen":1,"channel_decoded":1}`.
+    ///
+    /// **Three numbers, because "no message arrived" and "a message arrived and
+    /// this code could not read it" are the two situations that look identical
+    /// from every other vantage point in this module** — and this repository has
+    /// now spent a two-process run distinguishing them by hand twice: once on
+    /// the relay decoder, which read the wrong field and returned false for
+    /// every frame, and once on the owner channel. `channel_seen` counts raw
+    /// events off the library; `channel_decoded` counts the ones
+    /// `parseInboundEvent` accepted for the channel being drained. Equal and
+    /// zero means the network. Unequal means us.
+    std::string countersJson() const;
     std::string lastError() const;
     bool ready() const;
 

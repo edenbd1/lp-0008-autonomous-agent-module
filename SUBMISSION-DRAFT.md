@@ -514,10 +514,13 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   All twenty-one are implemented **and registered**, which are different claims:
   thirteen skills were implemented here before anything registered them, and the
   module answered `skills()` with an empty card while looking perfectly healthy.
-  `installBuiltinSkills` registers 22 skills — the prize's twenty-one plus
+  `installBuiltinSkills` registers 23 skills — the prize's twenty-one, plus
   `agent.evaluate_task`, which the prize does not ask for and which is kept
   because it is the only skill on the pluggable-inference seam a *different*
-  criterion requires — and `start()` calls it itself when no host wired the
+  criterion requires, plus `messaging.receive`, which it does not ask for either
+  and without which the A2A lifecycle only runs in one direction: `agent.task`
+  puts a real request on the wire and, until it existed, the agent being asked
+  had no skill that could read it — and `start()` calls it itself when no host wired the
   ports, so a module loaded as a plugin offers a full card.
 
   `meta.skills` was the last one missing, and it was missing in the way that is
@@ -535,7 +538,7 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   loads the packaged `module/agent.lgx` through `QPluginLoader` and
   `module/tests/logos_core_load_test.cpp` loads it through the installed
   Basecamp's own `liblogos_core`. Both report 22 entries, each with a parameter
-  schema, `invoke()` dispatching to every one, and `meta.skills` listing all 22
+  schema, `invoke()` dispatching to every one, and `meta.skills` listing all 23
   — including itself — over the boundary. Recorded output in `docs/basecamp.md`.
 
 - [ ] **UNMET — A2A-compatible: cards follow the A2A schema, tasks follow the A2A
@@ -710,7 +713,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   with the four commands [`docs/basecamp.md`](docs/basecamp.md) gives, into a
   modules directory that had never seen it, both harnesses were rebuilt from the
   document's own `clang++` lines and both came back green — `QPluginLoader`
-  against the packaged artefact (22 skills, every one dispatching, exit 0) and
+  against the packaged artefact (23 skills, every one dispatching, exit 0) and
   the installed Basecamp's real `liblogos_core` driving it over the module
   transport (exit 0). Two defects in the document were found this way and fixed:
   its `lgx verify` line assumed `lgx` on `PATH` when the packaging section says

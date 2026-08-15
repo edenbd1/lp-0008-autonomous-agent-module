@@ -154,7 +154,8 @@ std::size_t entriesNamed(const json &card, const std::string &name)
 /// red without saying what went missing, and no assertion at all is how thirteen
 /// implemented skills came to be unreachable.
 const char *kBuiltinSkills[] = {
-    "messaging.send",      "messaging.join",   "messaging.create_group",
+    "messaging.send",      "messaging.receive", "messaging.join",
+    "messaging.create_group",
     "storage.upload",      "storage.download", "storage.list",
     "storage.share",       "wallet.balance",   "wallet.send",
     "wallet.history",      "program.query",    "program.call",
