@@ -643,7 +643,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   own**: A2A v0.3.0 publishes no transition table, `docs/a2a-binding.md` §5.2 says
   so, and only 13 of the 81 cells are asserted anywhere.
 
-- [x] **MET — Two or more agents discover each other via Agent Cards, execute a
+- [ ] **UNMET — Two or more agents discover each other via Agent Cards, execute a
   task following the A2A lifecycle, and transfer LEZ payment autonomously, without
   owner intervention.**
   This is a conjunction, and until today its parts held separately: discovery on
@@ -1228,7 +1228,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   `RISC0_DEV_MODE=0` was active.**
   Not recorded. Blocker 1, and the only blocker with irreducible work in it.
 
-**Tally: 15 MET, 8 UNMET, of the 23 criteria the prize lists** — Functionality
+**Tally: 14 MET, 9 UNMET, of the 23 criteria the prize lists** — Functionality
 6 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
 3 of 6. The one that moved is the discover/serve/pay conjunction, and the
 paragraph under it names the reading of "execute a task following the A2A
