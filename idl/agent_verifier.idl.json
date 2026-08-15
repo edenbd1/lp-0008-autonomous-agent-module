@@ -166,6 +166,12 @@
           "writable": false,
           "signer": true,
           "init": false
+        },
+        {
+          "name": "recipient",
+          "writable": true,
+          "signer": false,
+          "init": false
         }
       ],
       "args": [
