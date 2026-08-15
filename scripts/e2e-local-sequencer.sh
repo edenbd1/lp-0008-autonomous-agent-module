@@ -219,9 +219,43 @@ assert len(b)==32, 'not a 32-byte account id: %r' % s
 print(b.hex())" "$1"
 }
 AGENT_HEX=$(id_hex "$AGENT")
+OWNER_HEX=$(id_hex "$TEST_SIGNER")
 POLICY=$(spel --idl "$IDL" --program "$PROGRAM" pda policy --agent-id "$AGENT_HEX" 2>/dev/null | tail -n1)
 [ -n "$POLICY" ] || die "could not resolve the policy account"
 echo "  policy $POLICY  (per-tx $PER_TX, per-period $PER_PERIOD)"
+
+# Anchoring is TWO signatures from two wallets that never meet. The agent signs
+# first and names the one account allowed to anchor over it; `create_policy`
+# then reads that claim and refuses any other signer (6020), or refuses outright
+# if the agent never claimed (6019). Before 07fcee4 the agent's public id was
+# enough, which meant anchoring over somebody else's agent needed only a value
+# published in the manifest and in its Agent Card.
+#
+# The claim is signed from the AGENT's wallet home and the policy from the
+# owner's, because that separation is the property: one instruction demanding
+# both signatures would demand both keys in one wallet.
+# The claim account is NOT resolved with `spel pda claim` here. That subcommand
+# takes the first instruction in the IDL carrying an account of that name, which
+# is `claim_agent`, and there the seed is the SIGNING ACCOUNT (kind "account")
+# rather than an argument — so no --agent-id can satisfy it and the lookup
+# returns nothing. `create_policy` reads the same account from an arg-seeded
+# definition; the address is identical, but only one of the two is derivable
+# from a value on this command line, and it is not the one `pda` picks.
+#
+# Nothing is lost by not having the address: what matters is that the claim
+# LANDED, and spel says so itself. If it had not, the create_policy below reads
+# an uninitialised account and refuses with 6019, loudly.
+LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+  wallet_run account sync-private </dev/null >/dev/null 2>&1
+COUT=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+  spel --idl "$IDL" --program "$PROGRAM" -- claim_agent \
+    --agent "Private/$AGENT" --owner-id "$OWNER_HEX" 2>&1)
+CLAIM_TX=$(echo "$COUT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
+[ -n "$CLAIM_TX" ] \
+  || { echo "$COUT" | tail -8; die "claim_agent submitted no transaction"; }
+echo "$COUT" | grep -q 'Transaction confirmed' \
+  || { echo "$COUT" | tail -8; die "claim_agent built $CLAIM_TX but it never confirmed"; }
+echo "  agent claimed $TEST_SIGNER as the only account that may anchor it -> $CLAIM_TX"
 
 spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
   --agent-id "$AGENT_HEX" \
@@ -316,6 +350,20 @@ window_start() {
 }
 
 spend_at() { # amount
+  # Resync the agent first, every time. A private account's on-chain state moves
+  # whenever it signs — and this one has just signed `claim_agent` — while the
+  # proof is built against the wallet's LOCAL view. Prove against a stale one
+  # and the proof still builds, spel still prints a `tx_hash`, and the sequencer
+  # simply never lands the transaction, with nothing reported anywhere.
+  #
+  # This is not hypothetical: it is how this script failed once the two-signature
+  # anchoring was added. Preflight 31900267734 printed
+  #   50 (inside the envelope) -> 713dd5cb2ccfa1d6b00a00acbb80e0771e68822d286…
+  # and the recipient went 0 -> 0. The hash was real and meant nothing. The
+  # balance assertion below is the only reason that was caught rather than
+  # shipped as a green run, which is also why that assertion exists.
+  LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+    wallet_run account sync-private </dev/null >/dev/null 2>&1
   LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   spel --idl "$IDL" --program "$PROGRAM" --bin-auth-transfer "$AUTH_TRANSFER" \
     -- spend --agent "Private/$AGENT" --recipient "Public/$RECIP" \
@@ -340,14 +388,36 @@ done
   || die "the recipient went $BEFORE -> $AFTER: the spend did not transfer 50"
 echo "  recipient balance $BEFORE -> $AFTER  (+50, read back from the chain)"
 
-# The negative half. A spend over the per-transaction limit must fail without an
-# owner approval — a run where both halves pass is not evidence of a threshold.
-OUT=$(spend_at 5000)
+# The negative half, and BOTH the amount and the check are load-bearing.
+#
+# This asked for 5000 and accepted any refusal at all. The agent holds 1000 and
+# has just paid 50, so 5000 is more than it has: a build with the ceiling
+# deleted outright refuses that too, by E_INSUFFICIENT_BALANCE (6008) or by the
+# transfer program's own checked_sub. The assertion could not fail while the
+# property it exists to prove was absent, which is not a threshold test.
+#
+# So the amount is chosen to leave exactly one rule able to refuse it:
+#
+#   OVER=300  >  per_tx 100          the ceiling — the rule under test
+#   OVER=300  <  950, what the agent still holds     so it cannot be 6008
+#   OVER=300  <  450 left in this period             so it cannot be 6006
+#
+# and the refusal is checked BY CODE. "No tx_hash" is also what a spel that fell
+# over for its own reasons produces, so the absence of a hash is necessary and
+# nowhere near sufficient. Same discipline as use case 3's `attempt`.
+OVER=300
+OUT=$(spend_at "$OVER")
 if echo "$OUT" | grep -q 'tx_hash: [0-9a-f]\{64\}'; then
   echo "$OUT" | tail -6
-  die "5000 was ACCEPTED without an owner approval — the threshold is not enforced"
+  die "$OVER was ACCEPTED without an owner approval — the threshold is not enforced"
 fi
-echo "  5000 (outside it) -> refused, as it must be"
+GOT=$(echo "$OUT" | grep -oE 'Program error [0-9]+: .*' | head -1)
+echo "$GOT" | grep -q 'Program error 6005:' || {
+  echo "$OUT" | tail -8
+  die "$OVER was refused, but by '${GOT:-no program error at all}' — expected 6005, the per-transaction ceiling. This run proves something other than the threshold."
+}
+echo "  $OVER (over the per-tx ceiling of $PER_TX, and inside the balance) -> refused"
+echo "         $GOT"
 END=$(balance_of "$RECIP")
 [ "$END" -eq "$AFTER" ] || die "the refused spend still moved balance: $AFTER -> $END"
 echo "  recipient balance unchanged at $END after the refusal"
