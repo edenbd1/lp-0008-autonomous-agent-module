@@ -22,27 +22,23 @@ Public/G8Aky5Rd…  {"balance":0,"program_owner":"1111…1111","nonce":1}
 `account get` between anchors, which does rewrite the stored state, does not
 make the second one land.
 
-It is not the nonce. The wallet's own record for this account, in
-`~/.lez-wallet/storage.json`, carries an **empty chain index**:
+It is not the nonce, and it is not the chain index either — both were tested.
 
-```
-{"Public": {"account_id": "G8Aky5Rd…", "chain_index": [], "data": {…}}}
-```
+A freshly created public account carries `"chain_index": [1]` where this signer
+carried `[]`, which looked like the answer. It is not: a brand-new, correctly
+formed signer behaves identically. Its first anchor lands, and no later one
+does, across three separate runs of the script.
 
-That is the thing to fix first. A public account with no chain index can be
-used once — the wallet has enough to sign from a default state — and then has
-no way to build a transaction against what the chain now holds. It matches the
-symptom exactly: first anchor lands, every later one is submitted and dropped.
+So the constraint is **per account, not per run**: one signer anchors exactly
+one policy, permanently. Re-running does not accumulate.
 
-`account sync-private` populates private accounts and does nothing here;
-`account get` refetches and prints the right state without filling this in.
-Whatever populates a public account's chain index is the missing step, and
-`wallet account import public` taking a `--chain-index` argument suggests the
-wallet expects it to be supplied rather than discovered.
-
-A signer per policy would sidestep the whole thing — three owners rather than
-one — but that changes `owner_id` and so every policy hash, and it answers
-nothing.
+The remaining route is a signer per policy — three owner accounts rather than
+one. That works within the design (nothing requires a single owner; `owner_id`
+is simply committed into each policy hash) but it changes every policy hash and
+means three funded accounts, so it should be a deliberate choice rather than a
+workaround slipped in. It also deserves one more look at *why* the second
+anchor is dropped, because a program that can only ever be called once per
+signer would be a strange thing to ship.
 
 ## Funding from the owner account breaks anchoring from the same account
 
