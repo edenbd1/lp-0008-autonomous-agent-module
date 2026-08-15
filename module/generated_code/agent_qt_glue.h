@@ -95,6 +95,11 @@ public:
         return QString::fromStdString(_result);
     }
 
+    LogosResult approveSpend(const QString& requestId, const QString& verdict) {
+        auto _result = m_impl.approveSpend(requestId.toStdString(), verdict.toStdString());
+        return stdResultToQt(_result);
+    }
+
 protected:
     void onInit(LogosAPI* api) override {
         if (!api) return;
@@ -118,6 +123,10 @@ protected:
 
     void emitModulestopped(bool success, const QString& message, int timestamp) {
         emitEvent("moduleStopped", QVariantList{QVariant::fromValue(success), QVariant::fromValue(message), QVariant::fromValue(timestamp)});
+    }
+
+    void emitOwnerapprovalrequested(const QString& requestJson, int attempt, int timestamp) {
+        emitEvent("ownerApprovalRequested", QVariantList{QVariant::fromValue(requestJson), QVariant::fromValue(attempt), QVariant::fromValue(timestamp)});
     }
 
 private:

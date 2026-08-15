@@ -1535,6 +1535,24 @@ std::string StatusSkill::invoke(const std::string &paramsJson)
                         {"terminal", total - active.size()},
                         {"by_state", byState},
                         {"open", ids}};
+
+    // Whether any of the above survives a restart. Same treatment as `storage`:
+    // unreported is null, and something that does not parse is reported as an
+    // error rather than dropped, because this is the diagnostic an operator
+    // reaches for after the restart that lost something.
+    const std::string durability = call(port_.durability);
+    if (durability.empty()) {
+        out["durability"] = nullptr;
+    } else if (!withinJsonDepth(durability, kMaxJsonDepth)) {
+        out["durability"] = nullptr;
+        out["durability_error"] = tooDeep("durability report");
+    } else {
+        auto parsedDurability = json::parse(durability, nullptr, false);
+        out["durability"] = parsedDurability.is_discarded() ? json(nullptr) : parsedDurability;
+        if (parsedDurability.is_discarded()) {
+            out["durability_error"] = "the durability report is not JSON";
+        }
+    }
     return done(out);
 }
 
@@ -1547,7 +1565,8 @@ std::string ConfigureSkill::parameterSchema() const
     return R"({"type":"object","required":["key","value"],)"
            R"("properties":{"key":{"type":"string","enum":["owner_address","policy_hash",)"
            R"("per_tx","per_period","period_blocks","price_per_task","discovery_topic",)"
-           R"("approval_timeout_blocks"]},"value":{"type":"string"}}})";
+           R"("approval_timeout_blocks","approval_timeout_ms","approval_resend_ms"]},)"
+           R"("value":{"type":"string"}}})";
 }
 
 std::string ConfigureSkill::invoke(const std::string &paramsJson)
@@ -1576,7 +1595,8 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
         if (!isLowerHex64(value)) {
             return fail("'policy_hash' must be 32 bytes as 64 lower-case hex characters");
         }
-    } else if (anchored || key == "price_per_task" || key == "approval_timeout_blocks") {
+    } else if (anchored || key == "price_per_task" || key == "approval_timeout_blocks" ||
+               key == "approval_timeout_ms" || key == "approval_resend_ms") {
         if (!isDecimal(value)) {
             return fail("'" + key + "' must be a non-negative decimal integer");
         }
@@ -1586,13 +1606,18 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
         return fail("'" + key +
                     "' is not a configurable key. Known keys: owner_address, policy_hash, "
                     "per_tx, per_period, period_blocks, price_per_task, discovery_topic, "
-                    "approval_timeout_blocks");
+                    "approval_timeout_blocks, approval_timeout_ms, approval_resend_ms");
     }
 
     if (!port_.set || !port_.set(key, value)) {
         return fail("the module refused to set '" + key + "'");
     }
 
+    // The two approval timings are `effective`, and they are the only keys here
+    // for which that word is earned: `wallet.send`'s owner wait reads them back
+    // through `OwnerApprovalPort::timeoutMs`/`resendIntervalMs` on every
+    // above-threshold spend, so a value set here changes the next one. The
+    // envelope keys are the opposite case, and say so below.
     json out{{"key", key}, {"value", value}, {"effective", !anchored}};
     if (anchored) {
         out["note"] = "the spending envelope is anchored on chain: this updates the local "

@@ -332,6 +332,18 @@ struct StatusPort {
     /// Storage usage as JSON, e.g. `{"files":3,"bytes":8192}`. Empty when the
     /// storage node could not be asked.
     std::function<std::string()> storage;
+
+    /// Whether pending task state is being written down, and what the last
+    /// recovery found, as JSON — e.g.
+    /// `{"path":"…/tasks.json","recovery":"loaded","tasks":2,"active":2}`.
+    ///
+    /// It is here rather than inferred from `tasks` because the two answers a
+    /// reviewer has to be able to tell apart look identical from outside: an
+    /// agent that came up with no tasks because it had none, and an agent that
+    /// came up with no tasks because nothing was ever written down. Empty means
+    /// the module was not asked to report on it at all, and is reported as
+    /// `null` — never as "durable".
+    std::function<std::string()> durability;
 };
 
 /// Where a runtime setting goes once it has been validated.

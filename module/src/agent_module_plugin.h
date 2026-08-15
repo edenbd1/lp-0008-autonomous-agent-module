@@ -14,6 +14,7 @@
 #include "messaging_skills.h"
 #include "program_skills.h"
 #include "storage_skills.h"
+#include "task_persistence.h"
 #include "wallet_skills.h"
 
 namespace logos::agent {
@@ -133,6 +134,25 @@ struct SkillPorts {
  * Third-party skills are called with no lock held, so a skill may call back into
  * the module, and every call into one is wrapped: a skill that throws costs its
  * own entry, not the module.
+ *
+ * WHAT SURVIVES A RESTART, AND WHAT THE MODULE DOES ABOUT IT
+ *
+ * The host hands every module a private data directory
+ * (`instancePersistencePath()`), and a module that does not write to it loses
+ * every pending task the first time the node restarts. That was measured on this
+ * module rather than assumed: a task opened through `agent.task` showed up in
+ * `meta.status` as `{"total":1,"active":1}`, the persistence directory was
+ * *empty*, and the same module rebuilt against the same directory came back
+ * reporting `{"total":0}` — with no error anywhere, because losing everything
+ * and having nothing look exactly alike.
+ *
+ * So @ref onContextReady constructs a `TaskPersistence` over the module's own
+ * `TaskStore`, @ref start recovers from it, and @ref invoke checkpoints after any
+ * call that moved the store. The recovery decision is the part worth stating: a
+ * snapshot that *cannot be read* does not start the agent. Truncated, corrupt,
+ * oversized, from a future schema — those are "we do not know what was pending",
+ * and coming up with an empty task list on top of them is precisely how a paid
+ * task gets paid twice.
  */
 class AgentModuleImpl : public LogosModuleContext
 {
@@ -216,10 +236,79 @@ public:
     /// outside instead of only at the next spend.
     std::string status() const;
 
+    /// Install the one notification path a *loaded* module has to its owner.
+    ///
+    /// A plugin cannot be handed a `std::function` port across the boundary, so
+    /// without this the built-in `wallet.send` has no owner channel at all and
+    /// every above-threshold spend is refused with "no owner channel to ask for
+    /// approval" — safe, and useless. What crosses the boundary in the other
+    /// direction is a module *event*, so the module's Logos Core export hands
+    /// the impl a notifier here that emits `ownerApprovalRequested`, and the
+    /// owner answers with @ref approveSpend, which is a module *method*. Both
+    /// halves are on the runtime's own transport; neither needs an intermediary
+    /// server.
+    ///
+    /// `notify` returns whether the request went anywhere. False is a real
+    /// answer and not an error: an export whose host has not wired the event
+    /// sink yet would otherwise report every unheard notification as delivered.
+    ///
+    /// Set before @ref start, and it is what decides whether the built-in owner
+    /// channel is wired at all: a module constructed directly in a unit test has
+    /// no notifier, so it keeps the old, honest refusal instead of waiting out a
+    /// timeout against an owner that has no way to answer it.
+    void setOwnerNotifier(std::function<bool(const std::string &requestJson, int attempt)> notify);
+
+    /// The owner's answer to a request the agent published.
+    ///
+    /// `verdict` is `"approved"` or `"denied"`, and nothing else — an answer the
+    /// agent cannot read is refused here rather than counted as either.
+    ///
+    /// Refuses a `requestId` no spend is waiting on. That is not pedantry: an
+    /// approval stored ahead of the request it names would be waiting for the
+    /// *next* spend that happened to be minted with the same id, and an approval
+    /// that authorises a payment nobody has described yet is the one shape this
+    /// path must never have.
+    ///
+    /// An answer here does not move money. It releases the `wallet.send` that is
+    /// waiting, which then reports the approval and submits nothing — the
+    /// policy program's `spend_approved` path is what submits an approved spend,
+    /// and this module does not wire it. See docs/limitations.md.
+    StdLogosResult approveSpend(const std::string &requestId, const std::string &verdict);
+
+protected:
+    /// The host has handed over `instancePersistencePath()`; open the task
+    /// snapshot under it. Fires once, before any method dispatch.
+    ///
+    /// Nothing is *read* here — @ref start does the recovery, because a failed
+    /// recovery has to be able to refuse the start, and this hook cannot.
+    void onContextReady() override;
+
 private:
     /// Build the built-in skills and register them. Called with no lock held —
     /// it goes through @ref registerSkill, which takes one.
     StdLogosResult installBuiltinSkills(logos::agent::SkillPorts ports);
+
+    /// Write the task store down if it has moved since the last write.
+    ///
+    /// Called after every @ref invoke rather than from inside the three task
+    /// skills, deliberately: the store is reachable from any skill a host
+    /// registers, and a checkpoint that only the built-ins trigger would miss
+    /// exactly the third-party skill this module's usability criterion invites
+    /// people to write. The comparison against the last written snapshot is what
+    /// keeps that from being an fsync per call.
+    void checkpointTasks();
+
+    /// `{"path":…,"recovery":…,…}` for `meta.status`, or empty when this module
+    /// was never given a directory to write to.
+    std::string durabilityJson() const;
+
+    /// One notification attempt on the built-in owner channel.
+    bool publishApprovalRequest(const std::string &requestJson);
+    /// `"approved"`, `"denied"`, or empty for "nothing has come back yet".
+    std::string approvalAnswerFor(const std::string &requestId) const;
+    /// A stored setting as milliseconds, or `fallback` when it is unset or is
+    /// not a number this build can use.
+    std::int64_t settingMs(const char *key, std::int64_t fallback) const;
 
     mutable std::mutex mutex_;
     /// Declared before `skills_` so it is destroyed after them: the three task
@@ -238,4 +327,50 @@ private:
     /// them. Without it, a second `start()` on another thread would slip past
     /// the `started_` check while the first is still filling the registry.
     bool starting_ = false;
+
+    /// Runtime settings from `meta.configure`, and the only ones this module
+    /// actually reads back. The `ConfigPort` used to be left unwired on purpose
+    /// — "storing a setting nothing reads would let `meta.configure` report
+    /// `effective:true` for a value that changes nothing" — and that argument
+    /// still holds for every key here except the two approval timings, which the
+    /// owner wait reads on each above-threshold spend. So the map exists, and
+    /// `meta.configure` keeps reporting the anchored keys as *not* effective.
+    std::map<std::string, std::string> settings_;
+
+    // ---- the built-in owner channel ---------------------------------------
+    //
+    // Guarded by `mutex_`. `wallet.send` polls `approvalAnswerFor` from inside
+    // its wait while `approveSpend` writes from the transport thread, so these
+    // two really are touched concurrently — unlike most of the state above.
+
+    /// Set by the module's Logos Core export. Empty means this module is not
+    /// hosted, and therefore has no owner channel of its own.
+    std::function<bool(const std::string &requestJson, int attempt)> ownerNotify_;
+    /// Requests a `wallet.send` is currently waiting on, by correlation id,
+    /// against the number of times each has been put on the wire. An answer
+    /// that names an id not in here is refused.
+    std::map<std::string, int> pendingApprovals_;
+    /// Answers that have arrived, by correlation id.
+    std::map<std::string, std::string> approvalAnswers_;
+
+    // ---- durability -------------------------------------------------------
+    //
+    // Its own lock, not `mutex_`: a save ends in an fsync, and holding the
+    // module's lock across one would stall every other skill call — including
+    // the `approveSpend` that a waiting `wallet.send` is depending on.
+    mutable std::mutex durableMutex_;
+    /// Null until the host hands over a persistence directory. Null is a
+    /// supported state — the module runs, and `meta.status` says plainly that
+    /// nothing is being written down.
+    std::unique_ptr<logos::agent::TaskPersistence> durable_;
+    /// What the last recovery found, for `meta.status`.
+    logos::agent::LoadReport lastLoad_;
+    bool loadRan_ = false;
+    /// The snapshot text last written, so a checkpoint that would rewrite the
+    /// same bytes does not.
+    std::string lastSaved_;
+    /// The last failed save, if any. Reported rather than thrown: the work the
+    /// skill did really did happen, and the thing that failed is the record of
+    /// it — which is exactly what an operator needs told.
+    std::string lastSaveError_;
 };

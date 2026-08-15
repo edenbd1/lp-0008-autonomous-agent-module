@@ -26,6 +26,9 @@ QVariant AgentProviderObject::callMethod(const QString& methodName, const QVaria
     if (methodName == "invoke") {
         return QVariant::fromValue(invoke(args.at(0).toString(), args.at(1).toString()));
     }
+    if (methodName == "approveSpend") {
+        return QVariant::fromValue(approveSpend(args.at(0).toString(), args.at(1).toString()));
+    }
     qWarning() << "AgentProviderObject::callMethod: unknown method:" << methodName;
     return QVariant();
 }
@@ -86,6 +89,18 @@ QJsonArray AgentProviderObject::getMethods()
         QJsonArray params;
         params.append(QJsonObject{{"type", QStringLiteral("QString")}, {"name", QStringLiteral("name")}});
         params.append(QJsonObject{{"type", QStringLiteral("QString")}, {"name", QStringLiteral("paramsJson")}});
+        obj["parameters"] = params;
+        methods.append(obj);
+    }
+    {
+        QJsonObject obj;
+        obj["name"] = QStringLiteral("approveSpend");
+        obj["returnType"] = QStringLiteral("LogosResult");
+        obj["isInvokable"] = true;
+        obj["signature"] = QStringLiteral("approveSpend(QString,QString)");
+        QJsonArray params;
+        params.append(QJsonObject{{"type", QStringLiteral("QString")}, {"name", QStringLiteral("requestId")}});
+        params.append(QJsonObject{{"type", QStringLiteral("QString")}, {"name", QStringLiteral("verdict")}});
         obj["parameters"] = params;
         methods.append(obj);
     }

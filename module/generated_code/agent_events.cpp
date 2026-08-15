@@ -24,3 +24,8 @@ void AgentModuleExport::moduleStopped(bool success, const std::string& message, 
     this->emitEventImpl_("moduleStopped", &_args);
 }
 
+void AgentModuleExport::ownerApprovalRequested(const std::string& requestJson, int64_t attempt, int64_t timestamp) {
+    QVariantList _args{QVariant(QString::fromStdString(requestJson)), QVariant(static_cast<qlonglong>(attempt)), QVariant(static_cast<qlonglong>(timestamp))};
+    this->emitEventImpl_("ownerApprovalRequested", &_args);
+}
+

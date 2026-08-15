@@ -10,7 +10,9 @@ module agent {
   method skills() -> tstr
   method status() -> tstr
   method invoke(name: tstr, paramsJson: tstr) -> tstr
+  method approveSpend(requestId: tstr, verdict: tstr) -> result
 
   event moduleStarted(success: bool, message: tstr, timestamp: int)
   event moduleStopped(success: bool, message: tstr, timestamp: int)
+  event ownerApprovalRequested(requestJson: tstr, attempt: int, timestamp: int)
 }
