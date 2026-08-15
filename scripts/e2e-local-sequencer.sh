@@ -219,9 +219,42 @@ assert len(b)==32, 'not a 32-byte account id: %r' % s
 print(b.hex())" "$1"
 }
 AGENT_HEX=$(id_hex "$AGENT")
+OWNER_HEX=$(id_hex "$TEST_SIGNER")
 POLICY=$(spel --idl "$IDL" --program "$PROGRAM" pda policy --agent-id "$AGENT_HEX" 2>/dev/null | tail -n1)
 [ -n "$POLICY" ] || die "could not resolve the policy account"
 echo "  policy $POLICY  (per-tx $PER_TX, per-period $PER_PERIOD)"
+
+# Anchoring is TWO signatures from two wallets that never meet. The agent signs
+# first and names the one account allowed to anchor over it; `create_policy`
+# then reads that claim and refuses any other signer (6020), or refuses outright
+# if the agent never claimed (6019). Before 07fcee4 the agent's public id was
+# enough, which meant anchoring over somebody else's agent needed only a value
+# published in the manifest and in its Agent Card.
+#
+# The claim is signed from the AGENT's wallet home and the policy from the
+# owner's, because that separation is the property: one instruction demanding
+# both signatures would demand both keys in one wallet.
+CLAIM=$(spel --idl "$IDL" --program "$PROGRAM" pda claim --agent-id "$AGENT_HEX" 2>/dev/null | tail -n1)
+[ -n "$CLAIM" ] || die "could not resolve the claim account"
+LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+  wallet_run account sync-private </dev/null >/dev/null 2>&1
+COUT=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+  spel --idl "$IDL" --program "$PROGRAM" -- claim_agent \
+    --agent "Private/$AGENT" --owner-id "$OWNER_HEX" 2>&1)
+echo "$COUT" | grep -q 'tx_hash: [0-9a-f]\{64\}' \
+  || { echo "$COUT" | tail -8; die "claim_agent submitted no transaction"; }
+# A hash is not a landed account. create_policy reads this one, so wait until
+# the chain actually has it rather than letting a race read as a 6019.
+for _ in $(seq 1 30); do
+  curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["'"$CLAIM"'"]}' \
+  | grep -q '"result":null' || break
+  sleep 2
+done
+curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["'"$CLAIM"'"]}' \
+| grep -q '"result":null' && die "the claim never landed at $CLAIM"
+echo "  agent claimed $TEST_SIGNER as the only account that may anchor it"
 
 spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
   --agent-id "$AGENT_HEX" \

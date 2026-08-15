@@ -115,6 +115,7 @@ jobs:
             'starting a real sequencer' \
             'funding it from the genesis vault' \
             'deploy the policy program' \
+            'as the only account that may anchor it' \
             'a second, unlimited policy for the same agent was refused' \
             '50 (inside the envelope)' \
             '+50, read back from the chain' \
