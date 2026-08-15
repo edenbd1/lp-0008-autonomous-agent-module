@@ -135,7 +135,18 @@ std::string ShareSkill::invoke(const std::string &paramsJson)
     // Sharing content-addressed data is not a storage operation: there is
     // nothing to copy or re-permission. It is sending someone the address. Both
     // halves are reported separately so a caller can tell which one failed.
-    if (storage_.ready && storage_.ready() && storage_.exists && !storage_.exists(cid)) {
+    // Refuse when the check cannot be made, rather than when it fails. The
+    // earlier form only rejected an address the node positively denied, so a
+    // stopped node or an unwired `exists` made the whole condition false and
+    // the share went out unverified, reporting ok:true for an address that may
+    // not exist. Deleting the check entirely used to pass the test suite.
+    if (!storage_.ready || !storage_.ready()) {
+        return fail("the storage node is not started, so the address cannot be verified");
+    }
+    if (!storage_.exists) {
+        return fail("no storage port to verify the address against");
+    }
+    if (!storage_.exists(cid)) {
         return fail("no such content address to share");
     }
     if (!share_.send) return fail("no messaging transport to share over");
