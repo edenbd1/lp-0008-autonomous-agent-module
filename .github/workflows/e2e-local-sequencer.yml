@@ -31,9 +31,23 @@ jobs:
   e2e:
     name: policy lifecycle vs standalone sequencer
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Two REAL Risc0 proofs are generated on a 4-vCPU runner in this job, and
+    # neither is optional. Measured on the runner: the shielded transfer that
+    # funds the agent takes ~50 min (run 31883398914, 12:07:51 -> 12:57:25) and
+    # the agent's own spend takes ~55 min (run 31867735056, 05:55:22 ->
+    # 06:49:21). At 120 the job was killed mid-proof with the lifecycle
+    # unfinished, which is the same as not running it. Raised with margin for a
+    # cold cache; the ceiling for a GitHub-hosted job is 360.
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
+
+      # Proving time is a function of cores, and the timeout above is justified
+      # by a measurement on a specific machine, so record which machine.
+      - name: What this is proving on
+        run: |
+          echo "cores: $(nproc)"
+          free -g || true
 
       - name: Check out logos-execution-zone
         run: |
@@ -86,7 +100,30 @@ jobs:
         env:
           RISC0_DEV_MODE: 0
           LEZ_SRC: ${{ github.workspace }}/_external/lez
-        run: ./scripts/e2e-local-sequencer.sh
+        run: |
+          set -o pipefail
+          ./scripts/e2e-local-sequencer.sh 2>&1 | tee e2e.out
+          # Same argument as the SKIPPED guard in ci.yml. An exit code of 0 says
+          # nothing died; it does not say the script reached the end. Assert on
+          # the banner the last assertion prints, so a lifecycle that stopped
+          # early cannot report itself green.
+          grep -q VERIFIED e2e.out || {
+            echo "the lifecycle never reached VERIFIED"; exit 1; }
+          # And on each stage of it by name, so a future edit that drops one
+          # fails here instead of quietly narrowing what this job claims.
+          for want in \
+            'starting a real sequencer' \
+            'funding it from the genesis vault' \
+            'deploy the policy program' \
+            'a second, unlimited policy for the same agent was refused' \
+            '50 (inside the envelope)' \
+            '+50, read back from the chain' \
+            '5000 (outside it) -> refused' \
+            'recipient balance unchanged'; do
+            grep -qF "$want" e2e.out || {
+              echo "missing from the run: $want"; exit 1; }
+          done
+          echo "every stage of the lifecycle is present in the log"
 
       - name: Sequencer log on failure
         if: failure()
