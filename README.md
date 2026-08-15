@@ -666,7 +666,10 @@ printf 'darwin-arm64' > variant
 ```
 
 Restart Basecamp and the tile is in the left rail, labelled **LP-0008 Agent**.
-The same `grep -ci agent` now returns **42**, and the lines that matter are:
+`grep -ci agent` over Basecamp's output is still 0 at startup — nothing has
+asked for the module yet — and clicking the tile is what asks. After one click
+it is 30, and after an approval round trip in the same run, 62. The number is
+not the point; **0 → nonzero** is, and these are the lines it is made of:
 
 ```
 App launcher clicked: "agent-ui"

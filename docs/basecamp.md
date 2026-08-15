@@ -660,14 +660,20 @@ incomplete:
 
 The same `grep -ci agent`, on a Basecamp launched with **both** packages
 installed — `module/agent.lgx` in the modules directory, `app/agent-ui.lgx` in
-the plugins directory — and with the sidebar tile clicked once:
+the plugins directory:
 
 ```
-$ grep -ci agent /tmp/out.log
-42
+$ grep -ci agent /tmp/out.log     # at startup, before anything is clicked
+0
+$ grep -ci agent /tmp/out.log     # after clicking the sidebar tile once
+30
 ```
 
-The lines that matter, in order:
+Still 0 at startup, and that is correct rather than a shortfall: nothing has
+asked for the module yet. The click is what asks. Do not read the number
+itself as the result — it counts every line the console's calls produce and
+was 62 after an approval round trip in the same run. **0 → nonzero** is the
+result, and the lines under it are what it is made of, in order:
 
 ```
 App launcher clicked: "agent-ui"
