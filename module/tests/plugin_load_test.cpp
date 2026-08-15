@@ -172,8 +172,13 @@ int main(int argc, char **argv)
 
     // ---- the module's real behaviour, through callMethod ------------------
     const QString owner = QStringLiteral("lez1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
+    // A real anchored policy hash — the blockchain agent's, from
+    // artifacts/anchored.tsv under the current program 8c87cc9b…. Any 64-hex
+    // string exercises the same path, but using the live one means a reader who
+    // greps for it lands on the policy account this module would actually
+    // configure against, rather than on a deploy transaction that never was one.
     const QString policy =
-        QStringLiteral("b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549");
+        QStringLiteral("1a317aae885143298b3b033539273a02ff9c0c4f55e586f979a22b15c6e7c356");
 
     QVariant status = provider->callMethod(QStringLiteral("status"), {});
     note("status(): " + status.toString());

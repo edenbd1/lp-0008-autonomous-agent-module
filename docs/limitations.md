@@ -2,21 +2,83 @@
 
 What does not work, stated before anyone has to discover it.
 
-## Anchors die with every guest change
+## Anyone can anchor a policy for anybody's agent
 
-Not currently broken, but the sequencing constraint is permanent and worth
-stating before it bites again.
+**The most serious open defect in the program, and the one to read before
+believing anything else in this repository about ceilings.**
+
+`create_policy` now checks that the signer is the `owner_id` the policy commits
+to (6012), and `spend` now checks that the account paying is the `agent_id` it
+commits to (6013). Both were missing until the current deployment and both are
+real improvements. Neither closes the hole, because `agent_id` is still a
+caller-supplied argument that is never compared to anything:
+
+1. An attacker holding the agent's key calls `create_policy`, signing with an
+   account they control, naming that account as `owner_id`, the compromised
+   agent as `agent_id`, and `per_tx = per_period = u128::MAX`. The owner check
+   passes — the signer really is the owner it names.
+2. They call `spend` with the agent's key. The agent check passes — the payer
+   really is the agent that policy names. `per_tx` is `u128::MAX`, so every
+   payment is autonomous and the approval path is never reached.
+
+Both halves are accepted at halt 0 by the deployed binary; `cargo run --release`
+in `crates/agent-verifier-adversarial` is the second row of its table. The two
+accounts may be the same one, so a single stolen key is enough.
+
+The predecessor of this defect is on chain rather than merely asserted:
+`c0b21ba6…`, a `create_policy` with `per_tx = per_period = u128::MAX` naming an
+owner nobody controls, was **accepted** by program `b028eabf…` at block 8652.
+The identical call to the current program was submitted as `30c93c61…` and never
+included. Absence is not evidence — a refused hash, a pending one and a hash
+nobody sent all read `null` — so the refusal is demonstrated against the binary,
+not inferred from the chain.
+
+The fix is not another comparison; there is no id left in the instruction to
+compare. It is to make the policy account's address depend on the agent alone,
+so an agent has exactly **one** policy account and `init` refuses a second — the
+limits moving out of the address and into the account's data, next to the
+ledger. That trades the pure address commitment the design is built on for a
+record this program writes once, and it changes the ImageID, the program and
+every anchor. It is named here rather than half-made.
+
+Until then: **the ceiling binds an honest agent and an outsider, not an attacker
+who holds the agent's key.** Everything else in `security-model.md` §6 is
+downstream of that sentence.
+
+## Anchors die with every guest change, and the guest is effectively frozen
+
+Not currently broken, but the sequencing constraint is permanent and it has now
+bitten twice.
 
 A policy account is a PDA derived from the program id, so rebuilding the guest
 changes the ImageID, changes the program, and orphans every anchor made under
-the old one. That happened once here: three agents were anchored, declared as
-evidence, and invalidated an hour later by the chained-transfer rebuild. They
-have since been re-anchored under the current program `b028eabf…` (blocks 8591,
-8594, 8596) and verified live with the cannot-exist control returning null.
+the old one. That has happened twice here: three agents were anchored, declared
+as evidence, and invalidated an hour later by the chained-transfer rebuild; and
+the same three were invalidated again by the rebuild that fixed the two defects
+below. They are now anchored under program `8c87cc9b…2d20ebbe` (ImageID
+`26ed1580…0bad50be`, deployed at block 8646) at blocks 8649, 8651 and 8652, and
+verified live with the cannot-exist control returning null.
 
 So criteria 1 and 2 must be satisfied under the *same* program, and the guest
 has to be final before any anchor counts as evidence. Re-anchoring also costs
 three signers that have never signed, for the reason below.
+
+**"Rebuilding the guest" includes editing a comment.** This is not a figure of
+speech and not a margin of caution. `#[lez_program]` generates a `panic!` for a
+refused instruction, and a Rust panic carries `core::panic::Location` — file,
+line and column — into the binary; the executor prints it as
+`agent_verifier.rs:176:1`, the line the macro sits on. Add a line anywhere above
+it, including in the header comment, and that becomes 177, the ELF changes, the
+ImageID changes, every policy PDA moves, and the committed binary no longer
+hashes to its deploy transaction. Three agents then need re-anchoring, and each
+needs a signer that has never signed.
+
+The practical consequence is that **the guest source is frozen between
+deployments**, and a documentation fix inside it is not free the way a
+documentation fix in this directory is. Comments in the guest are therefore
+written to last, and corrections that would otherwise live next to the code live
+in `docs/` instead. That is a deliberate trade and the reason some explanation
+here is longer than it would need to be if it could sit in the source.
 
 ## spel builds every transaction against nonce 0
 
@@ -41,17 +103,19 @@ autonomous below-threshold path survives, because each agent signs once.
 
 ## The owner can never approve a spend after anchoring a policy
 
-The most serious open defect, and it is structural rather than a bug.
+The most serious defect in the *tooling*, as against the program above, and it
+is structural rather than a bug.
 
 The constraint measured on chain is **one program transaction per public signer
 account**, not one policy. Proven with a second instruction: `approve_spend`,
 against a policy that genuinely exists and is program-owned, with a fresh marker
 seed, also fails to land as its signer's second transaction.
 
-`approve_spend` requires the owner as signer, and the policy hash commits
-`owner_id = sha256(owner account id)` — so the approval must come from the same
-account that anchored the policy. That account has already spent its one
-transaction on `create_policy`.
+`approve_spend` requires the owner as signer, and the current program compares
+that signer against the `owner_id` the policy hash commits to — the account's
+raw 32 bytes, not a hash of how they are printed. So the approval must come from
+the same account that anchored the policy. That account has already spent its
+one transaction on `create_policy`.
 
 So the above-threshold path cannot work as designed: the owner who anchored a
 policy is, by construction, unable to approve anything under it. The
@@ -73,10 +137,11 @@ either. The gate reads the signer's on-chain state, not the wallet's.
 Three things that used to be in this file are gone from it, because they were
 fixed rather than reworded: `spend` moved no balance at all, a second
 `create_policy` from one signer was silently dropped, and a repeat A2A
-settlement could not be produced. The last one is now two settlements in blocks
-8605 and 8624, with the recipient going 0 → 25 → 50 by `getAccount`. What
-replaced them is recorded in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md); what is
-still true is below.
+settlement could not be produced. The last one is now two settlements under the
+current program, `5a488f28…` at block 8677 and `f780df62…` at block 8686, with
+the recipient going 50 → 75 → 100 by `getAccount` (it had already reached 50
+under the previous program, in blocks 8605 and 8624). What replaced them is
+recorded in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md); what is still true is below.
 
 ## A shielded agent can pay, but cannot be paid at its shielded account
 
@@ -128,34 +193,53 @@ across every program in the transaction, so an accepted transaction that credits
 25 has debited 25 from an account in the same call — but "the payer's balance
 went down" is a statement only the payer's wallet can show directly.
 
-## `spend` does not bind the policy to the account presenting it
+## Two defects this file used to carry, and what replaced them
 
-`spend` re-derives the policy hash from `(owner_id, agent_id, limits)` and
-requires the policy account to be the PDA of that hash and to have been
-initialised. It does **not** check that the account signing as `agent` is the
-account `agent_id` names.
+Both were real, both were fixed by the current deployment rather than reworded,
+and both are recorded here because the fix is checkable and the claim was
+previously false in our favour.
 
-So a funded account can present any anchored policy, including one anchored for
-a different agent with a larger envelope. It can still only spend its own money
-— it has to sign — but per-agent limits are not per-agent under an adversary
-who reads the chain for the most generous anchored policy.
+- **`spend` did not bind the policy to the account presenting it.** Any funded
+  account could present any anchored policy, including one anchored for a
+  different agent with a larger envelope, so per-agent limits were not
+  per-agent. Now `spend` and `spend_approved` compare the payer's account id to
+  the policy's `agent_id` and refuse with 6013. The cost was the one predicted:
+  `agent_id` stopped being an opaque label, every policy hash changed, and all
+  three agents were re-anchored.
+- **`spent_this_period` was supplied by the caller.** The per-period ceiling was
+  compared against a number the agent passed in, both callers passed 0, and the
+  enforced ceiling was therefore `min(per_tx, per_period)` *per transaction* and
+  unbounded in aggregate. The running total now lives in the policy account's
+  data, written only by the program that owns the account (LEZ rule 6,
+  `UnauthorizedDataModification`). Read it off the chain:
 
-The fix is one comparison, `*agent.account_id.value() != agent_id`, and the cost
-is that `agent_id` stops being an opaque label and becomes the account id, which
-changes every policy hash and needs a redeploy and a re-anchor. It is the first
-thing to do next, not something to describe as done.
+  ```bash
+  curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["BLHNchq8haEZ8w1UPk68Qr6sGLzYZB6haBrZLZ4GhpsS"]}' \
+  | python3 -c "
+  import json,sys
+  d=bytes(json.load(sys.stdin)['result']['data'])
+  print('period', int.from_bytes(d[:8],'little'), 'spent', int.from_bytes(d[8:],'little'))"
+  # period 8000 spent 50
+  ```
 
-## `spent_this_period` is supplied by the caller
+  Empty at anchoring (block 8652), 25 after `5a488f28…` (block 8677), 50 after
+  `f780df62…` (block 8686), against an anchored `per_period` of 1000.
 
-The per-period ceiling is checked against a number the agent passes in. Nothing
-on chain accumulates it — the policy account holds no data, deliberately, so
-that its address alone encodes the envelope. An agent that always passes zero
-has a per-transaction limit and no period limit.
+The period itself needed a mechanism rather than a counter, because **no program
+on this chain can read the block height** — `ProgramInput` is the program id,
+the caller, the pre-states and the instruction, and nothing else. So the caller
+names its period and the guest makes the name binding: the period must start on
+a multiple of `period_blocks` (6014), may not be older than the one the ledger
+records (6015), and the transaction is pinned to
+`[window_start, window_start + period_blocks)` through `ProgramOutput`'s block
+validity window, which the state machine rejects outside of with
+`OutOfValidityWindow`. Sliding the window forward, replaying an old one and
+naming a future one are each refused by a different one of the three.
 
-Fixing it properly means the policy account carrying a counter and a window
-start, which means it stops being a pure address commitment and starts being
-mutable state. That is a design change with a real trade in it, so it is named
-here rather than half-made.
+What this does **not** give is a wall-clock period, or one that survives a chain
+with irregular block times. It is a block-height window, and that is all it
+claims to be.
 
 ## No model has been run against the inference port
 
@@ -217,10 +301,11 @@ anchored three in a row.
 `owner` is **not** removed, though removing it would also clear the rejection.
 `spel` signs only for accounts an instruction declares as signers, so an
 instruction with no signer produces a transaction with an empty witness set —
-and `create_policy` would become permissionless. Since `spend` accepts any
-policy account that exists and `owner_id` is caller-supplied bytes, an agent
-able to anchor a policy could anchor itself an unlimited one. The ceiling would
-mean nothing. So the requirement stands and is documented instead: **anchor with
+and `create_policy` would become permissionless. It is also the account the
+program now compares `owner_id` against (6012), so removing it would delete the
+one binding that makes anchoring authenticated at all, and would widen the hole
+in the first section of this file from "an attacker who holds the agent's key"
+to "anybody". So the requirement stands and is documented instead: **anchor with
 a signer that has already received a transfer.**
 
 Also falsified while chasing this: stale local wallet state is not a factor.
@@ -252,9 +337,19 @@ still reachable by its own hash. Only the last one is referenced by anything:
 | `49f75568…b5f58b03` | returned two accounts for a three-account instruction; violates the SPEL invariant |
 | `1ea86256…f18b6f3c` | `spend` without a recipient account — authorised payments, moved nothing |
 | `6e4a2000…f365321a` | `spend` with a recipient, debiting the agent directly — no settlement was ever built under it, and rule 5 would have refused one |
-| `b028eabf…b8c18549` | current: chains the transfer into the program that owns the accounts |
+| `b028eabf…b8c18549` | chains the transfer into the program that owns the accounts, but anchoring was unauthenticated and the period ceiling counted nothing — it accepted the attack transaction `c0b21ba6…` |
+| `8c87cc9b…2d20ebbe` | current: identity bindings on anchoring and paying, and the period total on chain |
 
-`artifacts/programs/agent_verifier.bin` hashes to the last row.
+`artifacts/programs/agent_verifier.bin` hashes to the last row. Recompute rather
+than trust it:
+
+```bash
+python3 -c "
+import hashlib,struct
+b=open('artifacts/programs/agent_verifier.bin','rb').read()
+print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())"
+# 8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe
+```
 
 ## The node runs are local, not CI
 

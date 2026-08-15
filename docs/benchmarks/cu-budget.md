@@ -58,7 +58,11 @@ Two consequences worth stating rather than leaving for a reader to discover:
 
 Cycle counts come from executing the **deployed binary** —
 `artifacts/programs/agent_verifier.bin`, the bytes that hash to deploy
-transaction `b028eabf…b8c18549` — under the risc0 executor, with no proving.
+transaction `8c87cc9b…2d20ebbe`, ImageID `26ed1580…0bad50be` — under the risc0
+executor, with no proving. Every number below was re-measured against that
+binary after the redeploy; the figures for the superseded program `b028eabf…`
+are not carried forward, because a cycle count belongs to one ImageID and
+carrying it across a rebuild would be a claim nobody measured.
 That is the same executor the sequencer runs (`default_executor().execute(env,
 self.elf())`, `lee/state_machine/src/program/mod.rs:73-77`), and the harness
 writes the guest's four inputs in exactly the order the state machine writes
@@ -80,19 +84,19 @@ identity we would then have to argue about.
 
 `user_cycles` is the real work. `total_cycles` is that rounded up to the next
 power of two, which is what a proof of the segment would actually cost — risc0
-pads to a power-of-two segment, so 185,885 cycles and 262,143 cycles prove
+pads to a power-of-two segment, so 190,584 cycles and 262,143 cycles prove
 identically.
 
 | Program | Instruction | Accounts | user_cycles | total_cycles (2^po2) | % of the 32M cap |
 |---|---|---:|---:|---:|---:|
-| agent_verifier | `create_policy` | 2 | 119,782 | 262,144 | 0.36% |
-| agent_verifier | `approve_spend` | 3 | 156,169 | 262,144 | 0.47% |
-| agent_verifier | `spend` (autonomous) | 3 | 185,885 | 262,144 | 0.55% |
-| agent_verifier | `spend_approved`, below threshold | 4 | 242,986 | 524,288 | 0.72% |
-| agent_verifier | `spend_approved`, above threshold | 4 | 245,935 | 524,288 | 0.73% |
-| authenticated_transfer | `Transfer`, payee already claimed | 2 | 81,391 | 131,072 | 0.24% |
-| authenticated_transfer | `Transfer`, payee unclaimed | 2 | 81,751 | 131,072 | 0.24% |
-| authenticated_transfer | `Transfer`, chained from `spend` | 2 | 83,980 | 131,072 | 0.25% |
+| agent_verifier | `create_policy` | 2 | 120,770 | 262,144 | 0.36% |
+| agent_verifier | `approve_spend` | 3 | 181,791 | 262,144 | 0.54% |
+| agent_verifier | `spend` (autonomous, fresh period) | 3 | 190,584 | 262,144 | 0.57% |
+| agent_verifier | `spend` (autonomous, period already open) | 3 | 197,250 | 262,144 | 0.59% |
+| agent_verifier | `spend_approved` | 4 | 245,946 | 524,288 | 0.73% |
+| authenticated_transfer | `Transfer`, payee already claimed | 2 | 81,767 | 131,072 | 0.24% |
+| authenticated_transfer | `Transfer`, payee unclaimed | 2 | 82,127 | 131,072 | 0.24% |
+| authenticated_transfer | `Transfer`, chained from `spend` | 2 | 84,349 | 131,072 | 0.25% |
 
 Every one of those runs exits `Halted(0)`; they are successful executions, not
 early rejections. A single segment each, so continuation overhead is zero.
@@ -101,8 +105,8 @@ early rejections. A single segment each, so continuation overhead is zero.
 no balance itself — LEZ rule 5 forbids a program from debiting an account it
 does not own — so it checks the envelope and chains a call into the transfer
 program, which does. The full autonomous settlement is therefore
-185,885 + 83,980 = **269,865 user cycles across two program executions**, or
-0.80% of one public-execution budget. Each execution in the chain is a separate
+190,584 + 84,349 = **274,933 user cycles across two program executions**, or
+0.82% of one public-execution budget. Each execution in the chain is a separate
 session with its own cap, and the chain may be 10 deep; ours is 1.
 
 Three things fall out of the table:
@@ -112,14 +116,22 @@ Three things fall out of the table:
   Going from three accounts to four is what pushes `spend_approved` over the
   2^18 boundary and doubles its padded cost, even though the extra logic — one
   hash, one comparison — is a rounding error.
-- **The approval check is nearly free.** Above threshold `spend_approved` costs
-  2,949 more cycles than below it (245,935 vs 242,986): a SHA-256 spend
-  reference, a marker derivation, a program-owner comparison and a period
-  comparison. The security argument in `docs/security-model.md` costs 1.2% of
-  the instruction.
+- **The period ledger costs 6,666 cycles, and it is the only row that moves
+  with state.** `spend` against a policy account whose data is empty costs
+  190,584; against one already carrying a total for the current period, 197,250.
+  That difference is the whole of the on-chain per-period accounting — decoding
+  24 bytes, comparing the window, adding, re-encoding — and it is what replaced
+  a number the caller used to pass in. 3.5% of the instruction, for the
+  difference between a ceiling and a suggestion.
+- **`spend_approved` no longer has two prices.** Earlier revisions of this table
+  listed it twice, below and above threshold, because the instruction used to
+  skip the marker checks when the payment happened to fall inside the envelope.
+  It does not any more — the approval is required whatever the amount, and
+  anything inside the envelope belongs in `spend`, where it is accounted against
+  the period. One path, one number.
 - **Chaining is cheap in cycles and expensive in proof time.** The callee costs
-  2,589 cycles more when invoked as a chained call than when invoked directly
-  (83,980 vs 81,391), because it carries a caller program id. What chaining
+  2,582 cycles more when invoked as a chained call than when invoked directly
+  (84,349 vs 81,767), because it carries a caller program id. What chaining
   actually costs is proving, and that is measured upstream rather than here —
   see the gaps below.
 
@@ -129,8 +141,8 @@ LEZ publishes its own cycle bench for the built-in programs
 (`logos-execution-zone/docs/benchmarks/cycle_bench.md` at rev `47eba25` — its
 repository, not this one) and reports
 `authenticated_transfer / Transfer` at **79,958 user cycles** on an Apple M2 Pro.
-We measure **81,391** for the same instruction on different hardware with
-different account contents — 1.8% higher, in the direction a non-empty payee
+We measure **81,767** for the same instruction on different hardware with
+different account contents — 2.3% higher, in the direction a non-empty payee
 account explains. Cycle counts are deterministic per input, so agreement to
 that margin against an independently produced number is the check that the
 harness is feeding the guest something real, rather than measuring a program
@@ -143,10 +155,12 @@ transactions this repository actually produced.
 
 | Operation | Transaction | Block | Bytes | Kind |
 |---|---|---:|---:|---|
-| Program deployment | `b028eabf…b8c18549` | 8590 | 413,917 | deploy |
-| `create_policy` (anchor an envelope) | `ab017c9c…d67735f2` | 8591 | 653 | public |
-| `create_policy` | `9373d809…92df8104` | 8594 | 653 | public |
-| `spend` settlement, chained transfer | `c45d3f24…94cf7275` | 8605 | 270,566 | privacy-preserving |
+| Program deployment | `8c87cc9b…2d20ebbe` | 8646 | 419,993 | deploy |
+| `create_policy` (anchor an envelope) | `d3a0fc9b…988db74b` | 8649 | 653 | public |
+| `create_policy` | `b0c78a6e…dcfe40ec` | 8651 | 653 | public |
+| `create_policy` | `e68411fa…18513c10` | 8652 | 653 | public |
+| `spend` settlement, chained transfer | `5a488f28…aa00c554` | 8677 | 270,718 | privacy-preserving |
+| `spend` settlement, chained transfer | `f780df62…54ae8969` | 8686 | 270,814 | privacy-preserving |
 
 Reproduce any row:
 
@@ -157,9 +171,9 @@ curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json'
 print('block', r[1], len(base64.b64decode(r[0])), 'bytes')"
 ```
 
-What the three sizes mean:
+What the sizes mean:
 
-- **A deployment is its own bytecode.** 413,917 = the 413,912-byte program
+- **A deployment is its own bytecode.** 419,993 = the 419,988-byte program
   binary plus a five-byte frame, and the deploy transaction hash is
   `SHA256(u32_le(len) || bytecode)` — content addressed, which is why
   `scripts/demo.sh` can recompute it from the committed file. Deployment is
@@ -168,13 +182,20 @@ What the three sizes mean:
   account and takes the public path, so it carries no proof — it re-executes on
   the sequencer instead. The first byte is the transaction kind (`00`), followed
   by the 32-byte ImageID of the program being called; you can read
-  `15d234e5…` straight out of the payload.
-- **A settlement is 270,566 bytes,** two orders of magnitude larger, and
-  essentially all of it is the proof. That size is a property of the privacy
-  circuit rather than of our instruction: the earlier settlement `aea80817…` — an
-  earlier program, which [`limitations.md`](../limitations.md) records as having
-  authorised a payment without moving one — is 270,566 bytes too. Upstream reports the same constancy — "`proof_bytes` is
-  constant: the outer succinct proof has fixed size".
+  `26ed1580…` straight out of the payload.
+- **A settlement is about 270 kB,** two orders of magnitude larger, and
+  essentially all of it is the proof. That the size is a property of the privacy
+  circuit rather than of our instruction is visible in how little it moves: the
+  two settlements under the previous program, `c45d3f24…` (block 8605) and
+  `8d7aba60…` (block 8624), are **270,566 bytes each** — identical in length —
+  and the two under the current program, whose instruction gained a period
+  argument and whose guest gained four checks, are 270,718 and 270,814. A
+  248-byte spread across a program rebuild, under 0.1%. Upstream reports the
+  proof itself as fixed-size — "`proof_bytes` is constant: the outer succinct
+  proof has fixed size" — and the residue is the rest of the transaction rather
+  than the proof. The two current settlements differ from *each other* by 96
+  bytes, so "constant" is a claim about the proof, not about the transaction
+  carrying it.
 
 Latency, for scale: blocks on this chain are 60 seconds apart, and each of the
 transactions above landed in the block after it was submitted. The wall-clock
@@ -215,7 +236,13 @@ Stated as gaps, not buried.
 
 The measurement harness is not committed — it depends on `lee_core` at a pinned
 git revision and would add a second Rust workspace to a repository that
-deliberately has one. It is small enough to state in full.
+deliberately has one. It is small enough to state in full, and most of it is
+already in the tree: `crates/agent-verifier-adversarial` loads the same binary
+into the same executor with pre-states built the same way, and differs only in
+asserting error codes instead of summing cycles. Start from that file if you
+would rather not retype this one. Note that it enables risc0's `prove` feature,
+which drags in GPU kernels; for execution-only measurement the feature set below
+is enough and builds without a Metal or CUDA toolchain.
 
 `Cargo.toml`:
 
@@ -231,8 +258,10 @@ The instruction enum is mirrored from the guest. Only the **order** of the
 variants and of their fields is on the wire — `#[lez_program]` generates the
 enum from the `#[instruction]` functions in declaration order, so
 `create_policy` is 0, `approve_spend` 1, `spend` 2, `spend_approved` 3. The
-`ctx: ProgramContext` parameter of `spend_approved` is injected by the
-dispatcher and is not part of the ABI.
+`ctx: ProgramContext` parameter — taken by `approve_spend`, `spend` and
+`spend_approved`, though not by `create_policy` — is injected by the dispatcher
+from the trusted `ProgramInput` and is not part of the ABI, so it does not
+appear in the mirrored enum or in the published IDL.
 
 ```rust
 let words: Vec<u32> = risc0_zkvm::serde::to_vec(&instruction)?;
@@ -249,11 +278,16 @@ let total: u64 = session.segments.iter().map(|s| 1u64 << s.po2).sum();
 
 The accounts have to be the ones the instruction expects or the guest refuses
 before doing the work, and a cycle count for a refusal is not a cycle count for
-the operation. For `spend`: the policy account is
+the operation — every row in the table above exits `Halted(0)`. For `spend`: the
+policy account is
 `AccountId::for_public_pda(&program_id, &PdaSeed::new(policy_hash))` with its
 `program_owner` set to the program itself, the agent account is
-`is_authorized: true` and owned by the transfer program, and the recipient is
-whatever the payment names. The same harness run against deliberately wrong
+`is_authorized: true`, owned by the transfer program, and its **account id must
+equal the `agent_id` the policy commits to** or the run halts with 6013; the
+recipient is whatever the payment names. `window_start` must be a multiple of
+`period_blocks`, or 6014. The "period already open" row differs from the row
+above it only in the policy account's `data`, which holds a 24-byte
+`SpendLedger` for the same window. The same harness run against deliberately wrong
 inputs is what produces the refusal table in
 [`docs/security-model.md`](../security-model.md) — same binary, same method,
 opposite expectation.

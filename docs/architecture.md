@@ -80,16 +80,21 @@ to make the fourth trustworthy.
 |---|---|---|---|
 | `create_policy` | owner | policy (init, PDA), owner | anchor an envelope by address |
 | `approve_spend` | owner | approval (init, PDA), policy (PDA), owner | authorise one exact payment |
-| `spend` | agent | policy (PDA), agent, recipient | pay inside the envelope, unattended |
-| `spend_approved` | agent | policy (PDA), approval (PDA), agent, recipient | pay outside it, on that approval |
+| `spend` | agent | policy (mut, PDA), agent, recipient | pay inside the envelope, unattended |
+| `spend_approved` | agent | policy (PDA), approval (mut, PDA), agent, recipient | pay outside it, on that approval |
 
 Two structural decisions are worth pulling out.
 
-**The policy is an address, not a record.** `compute_policy_hash` folds
-(owner, agent, per-tx, per-period, period) into a digest
+**The limits are an address; the running total is data.** `compute_policy_hash`
+folds (owner, agent, per-tx, per-period, period) into a digest
 (`crates/agent-policy-core/src/lib.rs:77-86`) and the policy account is the PDA
-seeded by it. Nothing is written into the account's data; the address *is* the
-policy. What that buys, and what it does not, is
+seeded by it, so a limit cannot be edited — a different limit is a different
+account. The account's *data* is the one thing that does change: a 24-byte
+ledger, `window_start` then `spent`, written by `spend` and by nothing else,
+because the account is this program's PDA and LEZ rule 6 refuses a data write
+from any other program. Earlier revisions of this file said nothing was written
+there at all, which made the per-period ceiling unenforceable and was wrong.
+What that buys, and what it still does not, is
 [`security-model.md`](security-model.md).
 
 **The program moves no money itself, and cannot.** LEZ rule 5 refuses any
@@ -99,7 +104,7 @@ account is owned by LEZ's `authenticated_transfer`. So `spend` checks the
 envelope and then returns a `ChainedCall` into whichever program already owns the
 agent's balance — `agent.account.program_owner`, read off the account rather than
 carried as a constant, so no argument and no deployment constant can redirect a
-payment (`agent_verifier.rs:424-452`). LEZ's own `vault` program does the same
+payment (`agent_verifier.rs:663-691`). LEZ's own `vault` program does the same
 thing (`lez/programs/vault/src/main.rs:47-58`).
 
 ```mermaid
@@ -118,7 +123,7 @@ sequenceDiagram
     C->>AT: run the transfer
     AT-->>C: sender debited, recipient credited
     C-->>W: receipt over the whole composition
-    W->>S: privacy-preserving transaction (270,566 bytes)
+    W->>S: privacy-preserving transaction (~270 kB)
     S->>S: verify against the pinned circuit id
     S-->>A: included in the next block
 ```
@@ -139,17 +144,31 @@ content hash and reads its ProgramId back off the chain rather than asserting it
 ## One derivation, two consumers
 
 `crates/agent-policy-core` is small and it is load-bearing. It holds the three
-derivations — policy hash, spend reference, approval marker — and the pure
-`is_autonomous` comparison, with domain separators so a digest computed for one
-role can never be valid in another (`lib.rs:35-37`).
+derivations — policy hash, spend reference, approval marker — each under its own
+domain separator, so a digest computed for one role can never be valid in
+another (`lib.rs:69-71`, and the test that asserts the three prefixes differ at
+`:541-542`).
+
+It also holds the spend decision itself. That used to be a pure comparison
+called `is_autonomous`; it is now `SpendPolicy::authorize`
+(`lib.rs:156-191`), which takes the ledger read out of the policy account and
+the period the caller declared, and returns either the ledger to write back or
+one of five typed refusals (`SpendRefusal`) that the guest maps to stable error
+codes. The decision moved here, rather than staying in the guest, so that the
+per-period arithmetic — window alignment, regression, saturating addition near
+`u128::MAX` — is covered by ordinary host unit tests instead of only by
+executing a zkVM binary.
 
 The point is that it is compiled **twice**: into the guest, where the chain
-checks the hash, and into the host, where `examples/policy-hash.rs` and
-`examples/spend-marker.rs` are invoked by the deploy and settlement scripts
-(`scripts/deploy-agents.sh:261`, `scripts/a2a-task.sh:161`,
-`scripts/e2e-local-sequencer.sh:206`). The address a script computes is
-therefore the address the program derives, by construction rather than by
-agreement — a divergence would be a compile error, not a transaction that fails
+checks the derivation, and into the host, where the crate's examples are invoked
+by the deploy and settlement scripts — `policy-hash` for the anchor
+(`scripts/deploy-agents.sh:276`, `scripts/e2e-local-sequencer.sh:222`),
+`spend-marker` for an approval (`scripts/a2a-task.sh:217`), and `window-start`
+for the period a spend declares (`scripts/a2a-task.sh:234`,
+`scripts/e2e-local-sequencer.sh:277`). The address a script computes is
+therefore the address the program derives, and the period it names is computed
+by the same `window_start_for` the guest checks — by construction rather than by
+agreement. A divergence would be a compile error, not a transaction that fails
 on chain for reasons nobody can see.
 
 The workspace split exists for the same reason it does in LP-0002 and LP-0003:
@@ -322,8 +341,8 @@ exactly that in [`skills.md`](skills.md), never as "works".
 
 ```mermaid
 flowchart LR
-    G["guest crate<br/>(own workspace)"] -->|cargo risczero build| ELF["agent_verifier.bin<br/>ImageID 15d234e5…"]
-    ELF -->|wallet deploy-program| TX["deploy tx b028eabf…<br/>= SHA256(u32le(len) ‖ bytes)"]
+    G["guest crate<br/>(own workspace)"] -->|cargo risczero build| ELF["agent_verifier.bin<br/>ImageID 26ed1580…"]
+    ELF -->|wallet deploy-program| TX["deploy tx 8c87cc9b…<br/>= SHA256(u32le(len) ‖ bytes)"]
     ELF -->|committed| ART["artifacts/programs/"]
     ART -->|demo.sh recomputes| TX
     IDL["idl/agent_verifier.idl.json"] -->|spel --idl| CALL["create_policy / spend"]
