@@ -71,8 +71,7 @@ field for.
 [`docs/limitations.md`](docs/limitations.md), and it is substantial: the owner
 can never approve an above-threshold spend after anchoring a policy, the
 messaging and storage skills have never been run against a live node, no model
-has ever been run against the inference port, one of the twenty-one default
-skills is missing, and there is no video.
+has ever been run against the inference port, and there is no video.
 
 ## Repository
 
@@ -256,7 +255,7 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   drives it through the same C API, in the same order, as Basecamp's own
   `app/main.cpp`, ending in `logos_core_load_module("agent", true)` — the call
   that runs when a user enables a module. The module loads and answers `skills()`
-  with 21 entries rather than `[]`, which was the failure mode worth testing
+  with 22 entries rather than `[]`, which was the failure mode worth testing
   against: a module that loads and offers nothing looks identical to one that
   works. What is **not** demonstrated is co-residency — the wallet, storage and
   messaging modules were never loaded alongside it, because the storage and
@@ -303,20 +302,33 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   approve anything under it.** Two ways out are identified and neither has been
   tried. See `docs/limitations.md`.
 
-- [ ] **UNMET — All default skills implemented and documented.**
-  Twenty of the twenty-one are implemented **and registered**, which are different
-  claims: thirteen skills were implemented here before anything registered them,
-  and the module answered `skills()` with an empty card while looking perfectly
-  healthy. `installBuiltinSkills` now registers 21 skills, and `start()` calls it
-  itself when no host wired the ports, so a module loaded as a plugin offers a full
-  card. **`meta.skills` is missing.** There is no skill by that name, `invoke()` is a
-  plain map lookup with no special case, so `invoke("meta.skills")` returns *no skill
-  named 'meta.skills' is registered* — and three C++ doc comments
-  (`agent_module_interface.h:55`, `agent_module_plugin.h:198`, `agent_skills.h:202`)
-  describe it as though it exists. The 21st registered skill is
-  `agent.evaluate_task`, which the prize does not ask for. The module's own
-  `skills()` method returns the card, so the *information* is reachable; the
-  *skill* is not.
+- [x] **MET — All default skills implemented and documented.**
+  All twenty-one are implemented **and registered**, which are different claims:
+  thirteen skills were implemented here before anything registered them, and the
+  module answered `skills()` with an empty card while looking perfectly healthy.
+  `installBuiltinSkills` registers 22 skills — the prize's twenty-one plus
+  `agent.evaluate_task`, which the prize does not ask for and which is kept
+  because it is the only skill on the pluggable-inference seam a *different*
+  criterion requires — and `start()` calls it itself when no host wired the
+  ports, so a module loaded as a plugin offers a full card.
+
+  `meta.skills` was the last one missing, and it was missing in the way that is
+  hardest to see: `invoke()` is a plain map lookup with no special case, so
+  `invoke("meta.skills")` returned *no skill named 'meta.skills' is registered*
+  while three C++ doc comments (`agent_module_interface.h:55`,
+  `agent_module_plugin.h:198`, `agent_skills.h:202`) described it as existing and
+  `AgentModuleImpl::skills()` really did produce the catalogue. The *information*
+  was reachable in-process; the *skill* was not, and a host that loads this module
+  reaches it through `invoke()` and nothing else. It is now registered like any
+  other skill — not special-cased in `invoke()` — and reads the same registry
+  `agent.card` does, so the catalogue and the card are one answer.
+
+  Asserted by execution rather than by reading: `module/tests/plugin_load_test.cpp`
+  loads the packaged `module/agent.lgx` through `QPluginLoader` and
+  `module/tests/logos_core_load_test.cpp` loads it through the installed
+  Basecamp's own `liblogos_core`. Both report 22 entries, each with a parameter
+  schema, `invoke()` dispatching to every one, and `meta.skills` listing all 22
+  — including itself — over the boundary. Recorded output in `docs/basecamp.md`.
 
 - [ ] **UNMET — A2A-compatible: cards follow the A2A schema, tasks follow the A2A
   lifecycle, documented as an A2A transport binding over Logos Messaging.**
@@ -537,15 +549,20 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   `RISC0_DEV_MODE=0` was active.**
   Not recorded. Blocker 1.
 
-**Tally at `1de38d8`: 9 MET, 14 UNMET, of the 23 criteria the prize lists.**
+**Tally: 10 MET, 13 UNMET, of the 23 criteria the prize lists.** The commit this
+tally describes is the one recorded at the top of this document, and it is
+recorded there only — a count anchored to a commit id in two places is two
+places to forget.
 
 ## FURPS Self-Assessment
 
 ### Functionality
 
 The agent holds a shielded LEZ account, signs its own transactions, and spends
-under a ceiling the chain enforces by address. Twenty of the twenty-one default
-skills are implemented and registered; `meta.skills` is not. The A2A coordination
+under a ceiling the chain enforces by address. All twenty-one default skills are
+implemented and registered — `meta.skills`, the last one missing, was documented
+in three headers while `invoke()` refused it, and is now asserted against the
+loaded binary rather than against the source. The A2A coordination
 path — card, discovery, task lifecycle, settlement — is the part that has actually
 run on the public testnet, twice, unattended.
 

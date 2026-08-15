@@ -86,7 +86,8 @@ const char *const kSkills[] = {
     "wallet.history",      "program.query",    "program.call",
     "program.deploy",      "agent.card",       "agent.discover",
     "agent.task",          "agent.subscribe",  "agent.cancel",
-    "meta.status",         "meta.configure",   "agent.evaluate_task",
+    "meta.status",         "meta.configure",   "meta.skills",
+    "agent.evaluate_task",
 };
 constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 
@@ -280,6 +281,36 @@ int main(int argc, char **argv)
     check(contains(metaStatus, "\"ok\":true") && contains(metaStatus, "\"started\":true")
               && metaStatus.toString().contains(policy),
           "meta.status answers over the boundary with what the agent is bound to");
+
+    // The catalogue the prize asks for by name, over the same boundary. This is
+    // the check that would have caught its absence: it was documented in three
+    // C++ headers and in the A2A binding while `invoke("meta.skills")` answered
+    // "no skill named 'meta.skills' is registered", because nothing in this
+    // harness had ever asked the loaded binary for it. Asserted on its content,
+    // not just its shape — a catalogue that omits the skill listing it, or
+    // disagrees with `skills()`, is the same defect one layer along.
+    QVariant catalogue = provider->callMethod(QStringLiteral("invoke"),
+                                              {QStringLiteral("meta.skills"),
+                                               QStringLiteral("{}")});
+    note("invoke(meta.skills): " + catalogue.toString());
+    const QJsonObject listing =
+        QJsonDocument::fromJson(catalogue.toString().toUtf8()).object();
+    const QJsonArray listed2 = listing.value("skills").toArray();
+    QSet<QString> catalogued;
+    for (const QJsonValue &entry : listed2) {
+        const QJsonObject object = entry.toObject();
+        if (object.value("parameters").isObject()) {
+            catalogued.insert(object.value("name").toString());
+        }
+    }
+    check(listing.value("ok").toBool() && listed2.size() == kSkillCount
+              && listing.value("count").toInt() == kSkillCount,
+          QStringLiteral("meta.skills lists all %1 skills over the boundary, and counts them")
+              .arg(kSkillCount));
+    check(catalogued == listed,
+          "and every one of them carries the parameter schema skills() published for it");
+    check(catalogued.contains(QStringLiteral("meta.skills")),
+          "including itself: it is a registered skill, not a special case in invoke()");
 
     // A skill whose transport nobody wired: refused, and refused with the port
     // it is missing rather than with a claim that it worked.

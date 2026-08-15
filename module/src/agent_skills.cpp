@@ -1605,4 +1605,59 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
     return done(out);
 }
 
+// ---------------------------------------------------------------------------
+// meta.skills
+// ---------------------------------------------------------------------------
+
+std::string SkillsSkill::parameterSchema() const
+{
+    return R"({"type":"object","required":[],"properties":{}})";
+}
+
+std::string SkillsSkill::invoke(const std::string &paramsJson)
+{
+    std::string err;
+    if (!paramsJson.empty()) {
+        parse(paramsJson, err);
+        if (!err.empty()) return fail(err);
+    }
+
+    // An unwired registry is refused as itself, like every other missing port.
+    // Registration wires this one to the module's own `skills()`, so reaching
+    // here means a host replaced it with nothing — and an empty catalogue would
+    // read as an agent that has no skills, which is the confusion this whole
+    // skill exists to end.
+    if (!port_.listing) {
+        return fail("no skill registry is wired");
+    }
+    const std::string listing = port_.listing();
+
+    // Bounded before it is parsed, and for the reason `agent.card` bounds the
+    // same document: the entries are copied out of here — `done()` takes its
+    // argument by value — and a copy recurses once per level.
+    if (!withinJsonDepth(listing, kMaxJsonDepth)) {
+        return fail(tooDeep("skill registry listing"));
+    }
+    auto parsed = json::parse(listing, nullptr, false);
+    // The registry answers `{"error":…}` rather than `[]` before the agent is
+    // started. Unreachable through `invoke()`, which refuses first — but a host
+    // that links this module calls the skill directly, and passing that error
+    // on is better than reporting a catalogue of nothing.
+    if (parsed.is_object() && parsed.contains("error") && parsed["error"].is_string()) {
+        return fail("the skill registry refused: " + parsed["error"].get<std::string>());
+    }
+    if (parsed.is_discarded() || !parsed.is_array()) {
+        return fail("the skill registry did not return a JSON array");
+    }
+
+    // Counted here rather than left to the caller, because the count is the
+    // claim this repository has got wrong before: a registry of twenty-one was
+    // described as twenty-one *default* skills while one of the names the prize
+    // asks for was not among them.
+    json out;
+    out["count"] = parsed.size();
+    out["skills"] = std::move(parsed);
+    return done(out);
+}
+
 } // namespace logos::agent

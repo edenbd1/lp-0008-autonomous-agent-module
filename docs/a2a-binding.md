@@ -205,9 +205,14 @@ The live one is in [`artifacts/agent-cards/storage.json`](../artifacts/agent-car
 Rules a producer MUST follow:
 
 - **`skills` comes from the skill registry, not from a literal.** `agent.card`
-  reads the module's own `meta.skills()` output (`agent_skills.cpp:667-709`,
-  wired at `agent_module_plugin.cpp:216-218`), so a card cannot advertise a skill
-  the agent has not registered, and cannot omit one it has.
+  reads the module's own `skills()` output (`agent_skills.cpp:900-953`, wired at
+  `agent_module_plugin.cpp:216-218`), so a card cannot advertise a skill the
+  agent has not registered, and cannot omit one it has. The `meta.skills` skill
+  reads the *same* function (wired at `agent_module_plugin.cpp:222-224`), so the
+  catalogue a peer can ask for and the card it can read are one answer rather
+  than two. This bullet used to call that output "`meta.skills()`" while no
+  skill of that name was registered — the card was right, and the thing it
+  named did not exist.
 - **`skills[].id` is the skill name**, e.g. `storage.upload`. `tags` is the
   substring before the first `.` (`["storage"]`), or `["logos"]` when there is no
   dot. A2A requires `tags` to be present and non-empty.

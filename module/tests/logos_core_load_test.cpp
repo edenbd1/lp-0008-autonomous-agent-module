@@ -150,7 +150,8 @@ const char *const kSkills[] = {
     "wallet.history",      "program.query",    "program.call",
     "program.deploy",      "agent.card",       "agent.discover",
     "agent.task",          "agent.subscribe",  "agent.cancel",
-    "meta.status",         "meta.configure",   "agent.evaluate_task",
+    "meta.status",         "meta.configure",   "meta.skills",
+    "agent.evaluate_task",
 };
 constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 

@@ -395,8 +395,23 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet |
 | Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
 | Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
+| Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
 | Example | `notary.digest` | **not part of the module.** A third-party skill in `examples/`, loaded at runtime; §4 |
+
+`meta.skills` is worth one paragraph of its own, because of how it was missing.
+It was documented in three C++ doc comments and in `docs/a2a-binding.md`, and
+`AgentModuleImpl::skills()` — which produces exactly the catalogue it returns —
+has existed the whole time. What did not exist was a *skill* by that name:
+`invoke()` is a plain map lookup with no special case, so `invoke("meta.skills")`
+answered `no skill named 'meta.skills' is registered`. Every reader of the
+source saw a working feature; every caller of the binary got a refusal. It is
+registered like any other skill now rather than special-cased in `invoke()`,
+which is why it appears in its own listing and in the Agent Card, and it reads
+the same registry `agent.card` does, so the catalogue and the card cannot become
+two answers to one question. `module/tests/plugin_load_test.cpp` asserts its
+contents against the loaded binary — the only check that can tell a documented
+skill from a registered one.
 
 The messaging and storage rows are the honest part. Those skills are written
 against the real signatures — `send(contentTopic, payload)`, `subscribe`,

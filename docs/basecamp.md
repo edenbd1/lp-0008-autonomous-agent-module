@@ -33,15 +33,27 @@ method table and asserts on the module's real behaviour:
   ok    a second configure is refused — the binding is the agent's identity
   ok    before start, skills() is an error rather than an empty card
   ok    status reflects the running agent
-  <-    skills(): 21 entries: storage.share, wallet.send, program.deploy, …
+  <-    skills(): 22 entries: storage.share, wallet.send, program.deploy, …
   ok    every skill the module ships with is listed: missing none
-  ok    the card has exactly 21 entries, and 21 distinct names
+  ok    the card has exactly 22 entries, and 22 distinct names
   ok    each carries a parameter schema: all present
   ok    invoke() dispatches to every one of them: undispatched none
+  <-    invoke(meta.skills): {"count":22,"ok":true,"skills":[{"name":"agent.cancel", …
+  ok    meta.skills lists all 22 skills over the boundary, and counts them
+  ok    and every one of them carries the parameter schema skills() published for it
+  ok    including itself: it is a registered skill, not a special case in invoke()
   ok    an unwired skill refuses as itself, not as a name nobody registered
   ok    and a name that is not registered is refused as that, without taking the module down
 all steps confirmed (0 failure(s))
 ```
+
+Those three `meta.skills` lines are the ones this harness did not have, and not
+having them is how the skill came to be documented in three C++ headers and in
+`docs/a2a-binding.md` while `invoke("meta.skills")` answered *no skill named
+'meta.skills' is registered*. `AgentModuleImpl::skills()` had always produced
+the catalogue, so every reader of the source saw a working feature; `invoke()`
+is a plain map lookup, and nothing had ever put that name in the map. A harness
+that asks the loaded binary is the only thing that tells those two apart.
 
 That run is against the `agent_plugin.dylib` unpacked from the committed
 `module/agent.lgx`, not against `build-basecamp/`.
@@ -80,11 +92,11 @@ module, which the runtime runs in its own `logos_host` process:
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
   ok    skills() answers with a JSON array, not an error object: [{"name":"agent.cancel", …
-  <-    skills(): 21 entries
-  ok    the loaded module lists all 21 documented skills
-  ok    it lists exactly 21 — no more, no fewer (got 21)
-  ok    every listed skill carries a parameter schema (21 checked)
-  ok    invoke() dispatches to every one of the 21
+  <-    skills(): 22 entries
+  ok    the loaded module lists all 22 documented skills
+  ok    it lists exactly 22 — no more, no fewer (got 22)
+  ok    every listed skill carries a parameter schema (22 checked)
+  ok    invoke() dispatches to every one of the 22
   ok    a name nobody registered is refused as unregistered: {"error":"no skill named 'wallet.definitely_not' is registered","ok":false}
 all steps confirmed (0 failure(s))
 ```
@@ -530,7 +542,7 @@ Honest list, in the order that matters:
 
 1. The skills need their ports wired from inside the loaded module. This item
    used to read "the plugin has to construct and register the skill objects";
-   it does now, and the shipped package is the one that does — all 21 are
+   it does now, and the shipped package is the one that does — all 22 are
    registered and every one dispatches. What remains is narrower and harder:
    `registerBuiltinSkills` takes `std::function` ports that cannot cross a
    plugin boundary, so what a reviewer sees is a full card whose entries refuse

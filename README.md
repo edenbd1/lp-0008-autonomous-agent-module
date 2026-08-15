@@ -464,18 +464,21 @@ That document also carries the two load harnesses and their recorded output:
 `logos_core_load_test` `dlopen`s the real `liblogos_core` out of the installed
 `LogosBasecamp.app`, loads the module through the same C API in the same order
 as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
-own transport: 21 skills listed, each with a parameter schema, `invoke()`
+own transport: 22 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
 Stated plainly, because a reviewer will check: there is **no click in the
 Basecamp GUI** behind that, only Logos Core's C API with Basecamp's own shipped
 library; the package is **macOS arm64 only**; there is **no owner-facing UI
-plugin**, only the `core` module; and the 21 registered skills **have no ports
-wired**, because a port is a `std::function` and a host that loads this as a
-plugin has no wire format for one. Each of them therefore refuses *as itself* —
+plugin**, only the `core` module; and 20 of the 22 registered skills **have no
+ports wired**, because a port is a `std::function` and a host that loads this as
+a plugin has no wire format for one. Each of those refuses *as itself* —
 `{"ok":false,"error":"no account to read: …"}` — which is what the harness
 asserts, and is the opposite of the failure worth hiding: a module that loads,
-answers `skills()` with `[]`, and looks like it works.
+answers `skills()` with `[]`, and looks like it works. The two that do answer
+are `meta.status` and `meta.skills`, and they answer for one reason: both are
+questions about *this module*, which it wires to itself. Every other skill asks
+about the world outside it.
 
 ## 8. The owner channel
 
