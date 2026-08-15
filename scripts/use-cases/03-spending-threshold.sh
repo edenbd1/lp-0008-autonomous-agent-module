@@ -327,7 +327,7 @@ else
   note "current state, not a settlement figure — this account has been spent from since"
 fi
 
-rule "6. above the ceiling: refused, three ways, before a transaction exists"
+rule "6. above the ceiling: refused, two ways, before a transaction exists"
 # Run against a COPY of the agent's wallet home. A refused `spend` panics inside
 # the guest while the proof is being built, and a panicking run leaves the wallet
 # store in a state the next run cannot load — observed here, and it would take
