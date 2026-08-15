@@ -516,6 +516,56 @@ afternoon teaches everyone to ignore it.
 Point `DELIVERY_SRC` and `STORAGE_SRC` at your checkouts if they are not under
 `_external/`.
 
+## 7b. The owner channel, between two processes, over the public network
+
+```sh
+./scripts/owner-channel-live.sh              # the exchange
+./scripts/owner-channel-live.sh --negatives  # and the ways it fails
+```
+
+§7 proves a node is real. This proves the *owner channel* is: two processes,
+each creating its own Delivery node on the public `logos.dev` network, sharing
+nothing but a content topic. One runs `logos::agent::OwnerChannel` — the
+module's own class, unmodified, with its port wired to `liblogosdelivery`
+instead of to the fake the unit suite uses. The other is the owner: it joins the
+same reliable channel from its own node, reads the request, and answers it.
+
+```
+agent:  <- decision: {"altered":0,"approved":true,"attempts":1,
+                      "detail":"the owner approved these exact terms",
+                      "owner_unreachable":false,"verdict":"approved"}
+        ..  312 ms, 1 attempt(s) on the wire
+```
+
+`approved` is not "a send returned success". `OwnerChannel` returns it only for
+a frame naming *this* request's id, policy hash, recipient, amount, nonce and
+marker seed, so the pass is an assertion about bytes that crossed the network.
+The relays in the middle are third-party public ones — DigitalOcean, Google
+Cloud — named in the nodes' own logs; nothing here operates a broker. **312 ms
+is what "in real time" has to mean.**
+
+That number was 12.6 seconds over two attempts until the run stopped starting
+both processes in one directory, and the reason is worth knowing before you
+write your own: a Delivery node keeps the reliable channel's state in
+`sds.db`, under a `data` directory it creates **in the working directory**, so two nodes started from the same
+place share it. Nothing reports a conflict. The first frame is simply not
+delivered — five sends and four deliveries in a bare probe — and the agent's
+retry covers for it, which makes the whole thing look like an unreliable
+network. Give each node a directory of its own and the retry stops being
+load-bearing.
+
+`--negatives` runs three failures and checks each: a node that never started
+makes `open()` refuse; with nobody listening the agent reports `unreachable`
+after five attempts and exits 1 — which matters, because a node receives its own
+published messages, so that is the proof it cannot settle its own request; and
+an owner answering `251` where `250` was asked yields
+`{"verdict":"refused","altered":6}` and exit 1.
+
+What this does **not** claim: the owner here is a Delivery node this repository
+starts, not a second Basecamp. "From a separate Logos app instance" is still
+open, and it is a host problem now rather than a transport one —
+[`docs/basecamp.md`](docs/basecamp.md) keeps the two apart.
+
 ## 8. Load the module in the Logos app (Basecamp)
 
 The loadable asset is committed: `module/agent.lgx`, one `darwin-arm64`
@@ -646,10 +696,13 @@ Measured against the packaged module inside Basecamp 0.2.2's runtime
   ok    approveSpend is reachable, and refuses a request nobody is waiting on
 ```
 
-Two things this does **not** claim. It is not Logos Messaging, so "the owner can
-interact with the agent from a separate Logos app instance using Logos
-Messaging" is still open — that needs `OwnerChannel`'s Delivery port wired, and
-it stays on [`docs/basecamp.md`](docs/basecamp.md)'s list. And an *approved*
+Two things this does **not** claim. It is not Logos Messaging: this exchange
+runs on Logos Core's own event/method transport, and the Delivery-backed
+`OwnerChannel` is a different object that a plugin cannot be handed a port for.
+§7b is where that one runs, between two processes on two real Delivery nodes —
+so the transport clause of "using Logos Messaging, with no intermediary server"
+is answered there and the *app instance* clause is answered nowhere yet. Keep
+those apart; [`docs/basecamp.md`](docs/basecamp.md) does. And an *approved*
 above-threshold spend is still not submitted: submitting one goes through the
 policy program's `spend_approved`, which needs an approval account only the
 owner's own signature can create, and
@@ -762,6 +815,8 @@ scripts/verify-deployment.sh      checks docs/DEPLOYMENT.md and artifacts/
                                   against the chain, and fails if they disagree
 scripts/a2a-task.sh               §6 — two agents, one A2A task, one settlement
 scripts/exercise-nodes.sh         §7 — real Delivery and Storage nodes
+scripts/owner-channel-live.sh     §7b — the owner channel between two processes
+                                  on two Delivery nodes, and its negatives
 scripts/e2e-local-sequencer.sh    §10 — the lifecycle against a real sequencer
 artifacts/                        the manifests: agents, anchors, settlements,
                                   Agent Cards, and the deployed program binaries

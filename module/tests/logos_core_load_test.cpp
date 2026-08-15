@@ -166,6 +166,20 @@ constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 /// name nobody registered.
 const char *const kUnregistered = "no skill named";
 
+/// The refusal `invoke()` gives *before* it ever consults the registry, when the
+/// module has not been started.
+///
+/// It has to be counted as a failure to dispatch, and it was not. `agent is not
+/// started` does not contain @ref kUnregistered, so a module that never started
+/// answered every one of the 22 names with it and the dispatch check printed
+/// `ok invoke() dispatches to every one of the 22` — directly under
+/// `skills(): 0 entries`. A check that passes hardest when nothing is running is
+/// worse than no check: it is the exact configuration this harness exists to
+/// catch, reported as a pass. Both strings are now failures, and they are kept
+/// apart because they mean different things to whoever reads the output: one
+/// says the module is not up, the other says the name is not in its registry.
+const char *const kNotStarted = "agent is not started";
+
 /// The installed layout is the package flattened: `manifest.json` beside the
 /// binary it names, plus a `variant` file saying which variant was unpacked.
 /// `main` is resolved by the host against that directory, and a `main` that
@@ -432,6 +446,7 @@ int main(int argc, char **argv)
     // That refusal is the skill's own and is the proof the call arrived. Only
     // the registry's "no skill named … is registered" means it did not.
     QStringList undispatched;
+    QStringList unstarted;
     for (int i = 0; i < kSkillCount; ++i) {
         const QString name = QString::fromUtf8(kSkills[i]);
         const QString answer =
@@ -439,17 +454,30 @@ int main(int argc, char **argv)
                 ->invokeRemoteMethod(target, QStringLiteral("invoke"),
                                      QVariant(name), QVariant(QStringLiteral("{}")))
                 .toString();
-        if (answer.isEmpty() || answer.contains(QString::fromUtf8(kUnregistered))) {
+        // Three ways this is not a dispatch, and only one of them used to
+        // count. `agent is not started` is the one that mattered: it comes
+        // from before the registry lookup, so it never contains
+        // kUnregistered, and a module that failed to start passed this check
+        // for all 22 names.
+        if (answer.contains(QString::fromUtf8(kNotStarted))) unstarted << name;
+        else if (answer.isEmpty() || answer.contains(QString::fromUtf8(kUnregistered)))
             undispatched << name;
-        }
     }
-    check(undispatched.isEmpty(),
-          undispatched.isEmpty()
+    check(unstarted.isEmpty(),
+          unstarted.isEmpty()
+              ? QStringLiteral("and it answered as a running agent, not as a stopped one")
+              : QStringLiteral("%1 of %2 name(s) answered '%3': the module is not running, "
+                               "and this check must not pass for that")
+                    .arg(unstarted.size())
+                    .arg(kSkillCount)
+                    .arg(QString::fromUtf8(kNotStarted)));
+    check(undispatched.isEmpty() && unstarted.isEmpty(),
+          undispatched.isEmpty() && unstarted.isEmpty()
               ? QStringLiteral("invoke() dispatches to every one of the %1")
                     .arg(kSkillCount)
               : QStringLiteral("invoke() reached no skill for %1 name(s): %2")
-                    .arg(undispatched.size())
-                    .arg(undispatched.join(QStringLiteral(", "))));
+                    .arg(undispatched.size() + unstarted.size())
+                    .arg((undispatched + unstarted).join(QStringLiteral(", "))));
 
     // ---- Reliability, in the module the runtime loaded --------------------
     //

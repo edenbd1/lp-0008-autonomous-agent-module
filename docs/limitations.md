@@ -547,3 +547,60 @@ accepted, not a paragraph saying it would have been.
 Building the Delivery and Storage libraries takes tens of minutes and the runs
 need live peers, so `scripts/exercise-nodes.sh` is a local command. The
 reasoning is in [`docs/skills.md`](skills.md).
+`scripts/owner-channel-live.sh` is local for the same reason and one more: it
+needs *two* nodes to find each other through public relays, so it depends on the
+health of a network this repository does not run. A required job that goes amber
+on a bad afternoon teaches everyone to ignore it.
+
+## The owner in the live owner-channel run is a node, not a second Basecamp
+
+`scripts/owner-channel-live.sh` answers the transport half of "the owner can
+interact with the agent in real time from a separate Logos app instance using
+Logos Messaging, with no intermediary server": two processes, two Delivery
+nodes, a correlated approval round trip on the owner content topic in 312 ms on
+the first attempt, and three watched failures showing the pass is not free.
+
+It does not answer the *app instance* half, and the distance is worth stating
+because it is easy to read the run as more than it is. The owner side is a
+process this repository starts and links against `liblogosdelivery` — not Logos
+Basecamp with a person in front of it. Two Logos apps have still never talked to
+each other over this channel, and they cannot yet: the class that speaks
+Delivery, `OwnerChannel`, needs a `DeliveryPort`, which is a `std::function` and
+cannot cross the plugin boundary into a Basecamp-loaded module
+([`docs/basecamp.md`](basecamp.md)). So the same object runs on the public
+network from a plain process and cannot be reached from the app.
+
+Two smaller things the run does not claim. Both processes were on one machine,
+so the frames went out to public relays (DigitalOcean, Google Cloud, and others
+named in the node logs) and may also have found a shorter path back; nothing
+here proves a particular hop count, only that no server this repository operates
+was in the middle, because there is none. And `verdict: approved` unlocks the
+`spend_approved` path — it does not move money. Whether a payment happened is
+the chain's answer, and the reason no owner on this testnet can give it is three
+sections above.
+
+## deploy-agents.sh is one command, plus four things it cannot do for you
+
+The prize asks that "the owner can deploy the agent and configure it with a
+single CLI command on any machine using Logos Core headless".
+`SIGNER=… ./scripts/deploy-agents.sh` is a single command and does deploy and
+anchor all three agents. Two gaps, measured rather than estimated.
+
+**It is one command on a prepared machine, not on any machine.** Run here with
+nothing set it says `SIGNER: set SIGNER to a funded public account id` and exits
+1; run with `SIGNER` set and no LEZ toolchain it says `FAILED to create an
+account` three times and `3 of 3 agents did not deploy`. Four things must exist
+first: a `wallet` built from LEZ at the pinned revision, `spel` from
+`vendor/spel`, a wallet home holding `SIGNER`'s key, and testnet balance for the
+three funding floors (5 + 55 + 5). The last cannot be scripted — it needs a
+faucet.
+
+**Nothing in that path is Logos Core.** `grep -rn 'logos_core' scripts/` returns
+nothing. The only thing in this repository that drives Logos Core is
+`module/tests/logos_core_load_test.cpp`, which does run it headless — no GUI,
+`logos_core_init` through `logos_core_load_module`, then `configure()` and
+`start()` on the loaded module. Wrapping install-plus-that into one command is
+perhaps thirty lines; what it would not buy is "on any machine", since it needs
+an installed Basecamp for `liblogos_core`, Qt 6.9.2 and three pinned SDK
+checkouts. Written down rather than half-built: a script that still failed the
+criterion would only make the gap harder to see.
