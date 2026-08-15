@@ -2,12 +2,17 @@
 
 > ## ⚠️ DRAFT — NOT READY FOR SUBMISSION
 >
-> **Pinned to commit `1de38d8` on `main`** (2026-08-15). The repository is public
-> and **actively changing** — a security redeploy, a CI fix, the A2A binding
-> spec, a deployment-doc regeneration and a third settlement all landed while
-> this was being written — so every claim below is stated against that commit and
-> was verified against the public sequencer directly. Anything dated after it is
-> newer than this document.
+> **Pinned to commit `51e57fc` on `main`.** The repository is public and
+> **actively changing** — a security redeploy, a CI fix, the A2A binding spec, a
+> deployment-doc regeneration, two settlements and a further redeploy all landed
+> while this was being written — so every claim below is stated against that
+> commit and was verified against the public sequencer directly. Anything dated
+> after it is newer than this document.
+>
+> The pin moved from `1de38d8`, and it had been left behind while the claims
+> under it were edited. A document that states its own commit and then describes
+> a later one is the same defect as a benchmark that names a superseded program:
+> everything in it is true of something, and the reader cannot tell of what.
 >
 > Because the volatile values move on every redeploy, this document does **not**
 > hardcode them. The program hash, the three policy hashes, the three anchor
@@ -76,10 +81,10 @@ has ever been run against the inference port, and there is no video.
 ## Repository
 
 - **Repo:** <https://github.com/edenbd1/lp-0008-autonomous-agent-module>
-- **Commit this document describes:** `1de38d8`
+- **Commit this document describes:** `51e57fc`
 - **License:** dual MIT / Apache-2.0
-- **Default branch:** `main` (public). ⚠️ `origin/main` is **four commits behind**
-  the state described here — see blocker 2.
+- **Default branch:** `main` (public). ⚠️ `origin/main` is at `801afbb` and is
+  **three commits behind** the state described here — see blocker 2.
 
 Everything asserted below is verifiable from a clean clone plus the public
 sequencer. No claim in this document depends on trusting the author.
