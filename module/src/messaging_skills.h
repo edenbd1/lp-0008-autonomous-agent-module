@@ -33,13 +33,53 @@ struct DeliveryPort {
     std::function<bool(const std::string &channelId)> channelCreate;
 };
 
+/// Whether `id` may be spliced into the `<name>` segment of a content topic.
+///
+/// The grammar this file cites is `/<application>/<version>/<name>/<encoding>`,
+/// and every topic below is built by concatenation — so the `<name>` segment is
+/// whatever the caller hands over, and a caller is often a stranger. Two
+/// measured consequences of not checking, both from identifiers a peer chooses:
+/// a recipient of `AAA/json", "x":1, "y":"` publishes on a topic of the
+/// attacker's choosing, and a member id of `../../owner-VICTIM/json` redirects a
+/// group invitation onto somebody else's topic. Since `agent_address` is read
+/// out of a peer's Agent Card, a stranger otherwise picks the topic a victim
+/// broadcasts on.
+///
+/// Letters, digits, `-` and `_`, up to 128 of them. That is a superset of every
+/// identifier this repository puts in a topic — base58 account ids, hex task
+/// ids, group names — and a subset of what the grammar can carry safely. `.` and
+/// `/` are not in it: `/` ends the segment, and `.` only buys `..`, which reads
+/// as a path to a human and as nothing at all to the topic router.
+///
+/// Defined inline, in the header, on purpose. The two translation units that
+/// splice identifiers into topics — this one and `agent_skills.cpp` — are linked
+/// into *separate* test binaries, so an out-of-line definition would force one
+/// of them to carry its own copy of the grammar, and a grammar with two
+/// implementations is a grammar with two answers.
+inline bool isTopicIdentifier(const std::string &id)
+{
+    if (id.empty() || id.size() > 128) return false;
+    for (const char c : id) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        const bool allowed = (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') ||
+                             (u >= '0' && u <= '9') || u == '-' || u == '_';
+        if (!allowed) return false;
+    }
+    return true;
+}
+
 /// Content topic for one-to-one traffic with a Logos account.
 ///
 /// Follows the content-topic grammar Logos documents rather than inventing a
 /// scheme: /<application>/<version>/<name>/<encoding>.
+///
+/// **Empty when `account` is not a @ref isTopicIdentifier.** A caller that
+/// forgets to check then publishes nowhere, rather than somewhere chosen by
+/// whoever supplied the id.
 std::string ownerTopic(const std::string &account);
 
-/// Content topic an agent publishes its A2A Agent Card on.
+/// Content topic an agent publishes its A2A Agent Card on. Empty on an
+/// identifier the grammar cannot carry, for the same reason.
 std::string discoveryTopic(const std::string &namespace_);
 
 /// `messaging.send(recipient, message)`

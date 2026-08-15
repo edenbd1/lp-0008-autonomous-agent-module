@@ -213,6 +213,46 @@ int main()
         check(invites == 2, "and invites every member on their own topic");
         check(!okOf(g.invoke(R"({"group_id":"g1","members":[]})")), "an empty member list is refused");
     }
+    {
+        // TOPICS ARE BUILT BY CONCATENATION, SO THE PARTS ARE CHECKED.
+        //
+        // `/<application>/<version>/<name>/<encoding>` is the grammar this
+        // repository cites, and every id below lands in `<name>`. Measured
+        // before the fix: a recipient of `AAA/json", "x":1, "y":"` published on
+        // `/lp-0008/1/owner-AAA/json/json` — a topic the sender chose, not the
+        // one the caller named — and a member id of `../../owner-VICTIM/json`
+        // redirected a group invitation onto somebody else's topic.
+        check(ownerTopic("abc") == "/lp-0008/1/owner-abc/json",
+              "an ordinary account still builds the documented topic");
+        check(ownerTopic(R"(AAA/json", "x":1, "y":")").empty(),
+              "an account carrying the topic separator names no topic at all");
+        check(ownerTopic("../../owner-VICTIM/json").empty(), "and neither does a traversal");
+        check(discoveryTopic("a/json").empty(), "the discovery topic is built the same way");
+        check(discoveryTopic("g1") == "/lp-0008/1/discovery-g1/json", "and still works");
+
+        std::string sentTopic;
+        int sends = 0, created2 = 0;
+        DeliveryPort up{[] { return true; },
+                        [&](const std::string &t, const std::vector<std::uint8_t> &) {
+                            sentTopic = t; ++sends; return true; },
+                        [](const std::string &) { return true; },
+                        [&](const std::string &) { ++created2; return true; }};
+
+        SendSkill s(up);
+        check(!okOf(s.invoke(R"({"recipient":"AAA/json\", \"x\":1, \"y\":\"","message":"hi"})")),
+              "messaging.send refuses a recipient that would name another topic");
+        check(sends == 0, "and publishes nothing at all");
+
+        JoinSkill j(up);
+        check(!okOf(j.invoke(R"({"group_id":"a/json"})")),
+              "messaging.join refuses a group id that would subscribe elsewhere");
+
+        CreateGroupSkill g(up);
+        check(!okOf(g.invoke(R"({"group_id":"g1","members":["../../owner-VICTIM/json"]})")),
+              "and create_group refuses to invite onto a forged topic");
+        check(created2 == 0 && sends == 0,
+              "before the channel is opened, so no half-built group is left behind");
+    }
 
     std::printf("storage\n");
     {
