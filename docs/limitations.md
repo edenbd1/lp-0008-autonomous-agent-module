@@ -2,25 +2,21 @@
 
 What does not work, stated before anyone has to discover it.
 
-## The three anchors do not belong to the program in this repository
+## Anchors die with every guest change
 
-Criterion 1 was met and is not met now, and the regression is ours.
+Not currently broken, but the sequencing constraint is permanent and worth
+stating before it bites again.
 
-The three anchored policies — storage `3dcb2378…`, messaging `28930c0a…`,
-blockchain `1075e47d…` — are all live on chain and each policy hash recomputes
-from its (owner, agent, limits) triple. But they were anchored against program
-`6e4a2000…`, and `artifacts/programs/agent_verifier.bin` now hashes to
-`b028eabf…` after the chained-transfer rebuild. A policy account is a PDA
-derived from the program id, so an anchor under the old program is not an
-anchor under the new one.
+A policy account is a PDA derived from the program id, so rebuilding the guest
+changes the ImageID, changes the program, and orphans every anchor made under
+the old one. That happened once here: three agents were anchored, declared as
+evidence, and invalidated an hour later by the chained-transfer rebuild. They
+have since been re-anchored under the current program `b028eabf…` (blocks 8591,
+8594, 8596) and verified live with the cannot-exist control returning null.
 
-Only re-anchoring all three under the current program fixes this, and it needs
-three signers that have never signed — see the next section for why.
-
-The lesson is a sequencing one worth stating plainly: on this stack, every guest
-change invalidates every anchor. Criterion 1 and criterion 2 have to be
-satisfied under the *same* program, so the guest must be final before the
-anchors are treated as evidence.
+So criteria 1 and 2 must be satisfied under the *same* program, and the guest
+has to be final before any anchor counts as evidence. Re-anchoring also costs
+three signers that have never signed, for the reason below.
 
 ## spel builds every transaction against nonce 0
 
