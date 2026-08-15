@@ -2,17 +2,20 @@
 
 > ## ⚠️ DRAFT — NOT READY FOR SUBMISSION
 >
-> **Pinned to commit `51e57fc` on `main`.** The repository is public and
+> **Pinned to commit `9e98d24` on `main`.** The repository is public and
 > **actively changing** — a security redeploy, a CI fix, the A2A binding spec, a
-> deployment-doc regeneration, two settlements and a further redeploy all landed
-> while this was being written — so every claim below is stated against that
-> commit and was verified against the public sequencer directly. Anything dated
-> after it is newer than this document.
+> deployment-doc regeneration, settlements and two further redeploys all landed
+> while this was being written — so the prose below is stated against that
+> commit. The evidence sections are stated against the *chain*, and carry their
+> own freshness check: `./scripts/submission-evidence.py --check
+> SUBMISSION-DRAFT.md` re-fetches every figure and fails if any has moved.
 >
-> The pin moved from `1de38d8`, and it had been left behind while the claims
-> under it were edited. A document that states its own commit and then describes
-> a later one is the same defect as a benchmark that names a superseded program:
-> everything in it is true of something, and the reader cannot tell of what.
+> The pin moved from `1de38d8` to `51e57fc` to here, and twice it was left
+> behind while the claims under it were edited. A document that states its own
+> commit and then describes a later one is the same defect as a benchmark that
+> names a superseded program: everything in it is true of something, and the
+> reader cannot tell of what. That is the argument for generating the parts that
+> move rather than pinning them.
 >
 > **Every figure in the evidence sections is generated, not typed.**
 > `./scripts/submission-evidence.py` fetches them from the committed binary and
@@ -40,7 +43,7 @@
 > | # | Blocker | State |
 > |---|---|---|
 > | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the one blocker with real work left in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
-> | 2 | **`HEAD` and `origin/main` have diverged.** `git rev-list --left-right --count origin/main...HEAD` reports **2 4** — two commits are on the published branch and not here, four are here and not published. So a reviewer cloning right now sees neither the settlement evidence nor `meta.skills`, and CI has not run on the four. Do not quote a number from this row; run the command, because it is wrong the moment either side moves. | Merge `origin/main`, push, confirm CI. |
+> | 2 | **`HEAD` and `origin/main` have diverged** — each has commits the other does not. A reviewer cloning right now sees neither the regenerated evidence nor `meta.skills`, and CI has not run on the unpublished side. No count is written here on purpose: `git rev-list --left-right --count origin/main...HEAD` answers it, and any number typed into this row is wrong the moment either side moves. | Merge `origin/main`, push, confirm CI. |
 >
 > Resolved while this was written, and no longer blockers: the
 > `spend`-does-not-bind-the-policy defect, the caller-supplied period total and
