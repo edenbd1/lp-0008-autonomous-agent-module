@@ -560,3 +560,159 @@ jobs:
           set -e
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "the manifest assertion cannot fail"; exit 1; }
+
+  use-cases:
+    name: The illustrative use cases verify against the public testnet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # This job exists because of a specific failure. `02-services-marketplace.sh`
+      # sat on the default branch destructuring a settlement row positionally,
+      # and when `artifacts/a2a-task.tsv` gained a leading `program` column every
+      # variable shifted by one: its header test compared `$task` against
+      # `task_id` while `$task` had become `program`, so the header was not even
+      # skipped. An agent auditing something else ran it and found it verified
+      # ZERO settlements and then died on `balance_after: unbound variable`.
+      #
+      # Nothing caught that, for one reason: no workflow ran these scripts. So
+      # the exit code is not the assertion here. Every step below also asserts on
+      # a banner that names HOW MUCH was verified, and compares it against how
+      # many rows the manifest actually holds — because the failure being closed
+      # is a script that exits 0 having checked nothing.
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            vendor/spel/target
+          key: spel-${{ runner.os }}-${{ hashFiles('vendor/spel/Cargo.lock') }}
+          restore-keys: spel-${{ runner.os }}-
+
+      # `spel` derives the PDAs these scripts check against the chain, and the
+      # runner has no `spel` on PATH. It is built rather than skipped: a script
+      # that quietly does less on the runner than it does on a developer's
+      # machine is the same class of defect as the one above. Without it,
+      # 02 and 05 fail loudly — which is correct, and is not a green build.
+      - name: Build spel
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path vendor/spel/Cargo.toml
+          echo "SPEL_BIN=$PWD/vendor/spel/target/release/spel" >> "$GITHUB_ENV"
+          "$PWD/vendor/spel/target/release/spel" --help > /dev/null
+
+      # Verification only. A settlement costs real testnet balance, the paying
+      # agent holds about 5 LEZ — which is the note it needs in order to sign at
+      # all — and the funder's balance is cited as evidence. So no step here
+      # passes `SETTLE=1`, and the two scripts that can write to the chain are
+      # run in their re-check modes.
+      #
+      # There is no agent wallet on the runner and there must not be one. The
+      # Agent Card is verified against the public key published beside it
+      # (`artifacts/agent-cards/storage.pub`) instead — the same 32 bytes the
+      # wallet would have supplied, so the same signature check.
+      - name: Use case 2 — every settlement decoded from the chain's own copy
+        run: |
+          set -euo pipefail
+          AGENT_HOMES=/nonexistent ./scripts/use-cases/02-services-marketplace.sh 2>&1 | tee uc02.out
+          if grep -q SKIPPED uc02.out; then
+            echo "02 reported SKIPPED"; exit 1
+          fi
+          # How many rows the manifest holds, and how many the script says it
+          # decoded. Not a hardcoded number: it was 4 last week and 6 today, and
+          # the invariant that matters is that NONE were silently passed over.
+          rows=$(( $(wc -l < artifacts/a2a-task.tsv) - 1 ))
+          got=$(sed -e 's/\x1b\[[0-9;]*m//g' uc02.out \
+                | sed -n 's/.*OK *\([0-9][0-9]*\) settlement(s), each one decoded.*/\1/p' | tail -1)
+          echo "manifest rows=$rows  decoded=${got:-none}"
+          [ -n "$got" ] || { echo "02 exited 0 without reporting how many it decoded"; exit 1; }
+          [ "$got" -ge 1 ] || { echo "02 decoded nothing"; exit 1; }
+          [ "$got" -eq "$rows" ] \
+            || { echo "02 decoded $got of $rows settlements — some were skipped"; exit 1; }
+          # The two checks that make the rest mean anything.
+          grep -q "control: rewriting the price breaks the signature" uc02.out \
+            || { echo "the Agent Card control did not run"; exit 1; }
+          grep -q "control: a transaction hash that cannot exist returns null" uc02.out \
+            || { echo "the cannot-exist control did not run"; exit 1; }
+          rm -f uc02.out
+
+      - name: Use case 4 — every notarisation still verifies against the chain
+        run: |
+          set -euo pipefail
+          NOTARY_VERIFY_ONLY=1 ./scripts/use-cases/04-privacy-notary.sh 2>&1 | tee uc04.out
+          if grep -q SKIPPED uc04.out; then echo "04 reported SKIPPED"; exit 1; fi
+          rows=$(( $(wc -l < artifacts/notary.tsv) - 1 ))
+          got=$(sed -e 's/\x1b\[[0-9;]*m//g' uc04.out \
+                | sed -n 's/.*OK *\([0-9][0-9]*\) notarisation(s), each verified.*/\1/p' | tail -1)
+          echo "manifest rows=$rows  verified=${got:-none}"
+          [ -n "$got" ] || { echo "04 exited 0 without reporting how many it verified"; exit 1; }
+          [ "$got" -eq "$rows" ] && [ "$got" -ge 1 ] \
+            || { echo "04 verified ${got:-0} of $rows notarisations"; exit 1; }
+          grep -q "control: a document nobody notarised" uc04.out \
+            || { echo "the un-notarised control did not run"; exit 1; }
+          rm -f uc04.out
+
+      - name: Use case 5 — every alert still verifies against the chain
+        run: |
+          set -euo pipefail
+          ALERTER_VERIFY_ONLY=1 ./scripts/use-cases/05-event-alerter.sh 2>&1 | tee uc05.out
+          if grep -q SKIPPED uc05.out; then echo "05 reported SKIPPED"; exit 1; fi
+          rows=$(( $(wc -l < artifacts/alerts.tsv) - 1 ))
+          got=$(sed -e 's/\x1b\[[0-9;]*m//g' uc05.out \
+                | sed -n 's/.*OK *\([0-9][0-9]*\) alert(s), each re-verified.*/\1/p' | tail -1)
+          echo "manifest rows=$rows  verified=${got:-none}"
+          [ -n "$got" ] || { echo "05 exited 0 without reporting how many it verified"; exit 1; }
+          [ "$got" -eq "$rows" ] && [ "$got" -ge 1 ] \
+            || { echo "05 verified ${got:-0} of $rows alerts"; exit 1; }
+          grep -q "control A: it reads as the default account" uc05.out \
+            || { echo "the unclaimed-agent control did not run"; exit 1; }
+          rm -f uc05.out
+
+      # The controls for this job itself. Every assertion above is a claim that
+      # these scripts can tell a good manifest from a bad one, and an assertion
+      # never observed failing is not evidence — this repository has shipped two
+      # of those. So each manifest is altered by one field and the script must go
+      # red. If any of these passes, the steps above are decoration.
+      - name: Negative control — a settlement whose price the chain contradicts
+        run: |
+          set -euo pipefail
+          awk -F'\t' 'BEGIN{OFS="\t"} NR==1{print;next} {$7=$7+1; print}' \
+            artifacts/a2a-task.tsv > /tmp/wrong-price.tsv
+          ! diff -q artifacts/a2a-task.tsv /tmp/wrong-price.tsv > /dev/null
+          set +e
+          AGENT_HOMES=/nonexistent A2A_MANIFEST=/tmp/wrong-price.tsv \
+            ./scripts/use-cases/02-services-marketplace.sh > /tmp/wp.out 2>&1
+          rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "02 accepted prices the chain contradicts"; exit 1; }
+          grep -q "for an advertised price of" /tmp/wp.out \
+            || { echo "02 went red for the wrong reason"; sed -e 's/\x1b\[[0-9;]*m//g' /tmp/wp.out; exit 1; }
+
+      - name: Negative control — a notarisation whose key the chain contradicts
+        run: |
+          set -euo pipefail
+          awk -F'\t' 'BEGIN{OFS="\t"} NR==1{print;next} {$1=$1 "x"; print}' \
+            artifacts/notary.tsv > /tmp/wrong-notary.tsv
+          set +e
+          NOTARY_VERIFY_ONLY=1 NOTARY_MANIFEST=/tmp/wrong-notary.tsv \
+            ./scripts/use-cases/04-privacy-notary.sh > /tmp/wn.out 2>&1
+          rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "04 accepted a content address the chain contradicts"; exit 1; }
+
+      - name: Negative control — an alert whose block the chain contradicts
+        run: |
+          set -euo pipefail
+          awk -F'\t' 'BEGIN{OFS="\t"} NR==1{print;next} {$5=$5+1; print}' \
+            artifacts/alerts.tsv > /tmp/wrong-alert.tsv
+          set +e
+          ALERTER_VERIFY_ONLY=1 ALERTER_MANIFEST=/tmp/wrong-alert.tsv \
+            ./scripts/use-cases/05-event-alerter.sh > /tmp/wa.out 2>&1
+          rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "05 accepted a block the chain contradicts"; exit 1; }

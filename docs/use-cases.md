@@ -1,8 +1,8 @@
 # The illustrative use cases, end to end
 
 The prize lists nine illustrative use cases and asks that at least three be
-"demonstrated end-to-end on LEZ testnet". Three of the nine are demonstrated
-here — 1, 2 and 4 below — each by a script that computes or fetches every claim
+"demonstrated end-to-end on LEZ testnet". Four of the nine are demonstrated
+here — 1, 2, 4 and 5 below — each by a script that computes or fetches every claim
 it makes in front of the reader, and each of which exits non-zero when its use
 case does not hold. Script 3 is a fourth script for a different criterion.
 
@@ -11,6 +11,7 @@ case does not hold. Script 3 is a fourth script for a different criterion.
 | 1 | **Personal file vault** — "owner sends files to the agent via chat; agent encrypts, stores on Logos Storage, and responds with a content address. Owner can retrieve from any device." | [`scripts/use-cases/01-file-vault.sh`](../scripts/use-cases/01-file-vault.sh) | no — real Storage and Messaging nodes, and the use case as the prize words it has no chain step in it |
 | 2 | **Agent services marketplace** — "agents advertise skills on a shared discovery topic with a LEZ price; other agents discover, request, and pay for services autonomously." | [`scripts/use-cases/02-services-marketplace.sh`](../scripts/use-cases/02-services-marketplace.sh) | yes — the settlements are on the public testnet, and the amount each one moved is decoded out of the transaction |
 | 4 | **Privacy-preserving notary** — "agent timestamps a document, uploads it to Logos Storage, and records the content address on LEZ — providing a verifiable, private proof of existence." | [`scripts/use-cases/04-privacy-notary.sh`](../scripts/use-cases/04-privacy-notary.sh) | yes — a real Storage node AND a transaction in a block on the public testnet |
+| 5 | **On-chain event alerter** — "agent monitors a LEZ program or account for state changes and notifies the owner via Logos Messaging." | [`scripts/use-cases/05-event-alerter.sh`](../scripts/use-cases/05-event-alerter.sh) | yes — a `claim_agent` transaction in a block, found by reading the blocks rather than by being told |
 | 3 | The spending threshold underneath all of them: **accepted below the anchored ceiling, refused above it.** | [`scripts/use-cases/03-spending-threshold.sh`](../scripts/use-cases/03-spending-threshold.sh) | yes — the ceiling is an account the chain holds |
 
 Script 3 is deliberately **not** counted among the three. It is not one of the
@@ -68,7 +69,23 @@ export WALLET_BIN=/path/to/wallet
 ./scripts/use-cases/04-privacy-notary.sh
 # re-check every notarisation ever made, without writing anything:
 NOTARY_VERIFY_ONLY=1 ./scripts/use-cases/04-privacy-notary.sh
+
+# two terminals: the watcher does not make the event it detects
+./scripts/use-cases/05-event-alerter.sh prepare
+./scripts/use-cases/05-event-alerter.sh          # terminal A
+./scripts/use-cases/05-event-alerter.sh claim    # terminal B
+# re-check every alert ever raised, without a wallet or a messaging node:
+ALERTER_VERIFY_ONLY=1 ./scripts/use-cases/05-event-alerter.sh
 ```
+
+**CI runs these.** `.github/workflows/ci.yml` has a `use-cases` job that runs 2,
+4 and 5 in their verification-only modes against the public testnet, asserts on
+the banner each one prints — and compares the count in that banner against the
+number of rows in the manifest, so a script that verifies *some* of them is as
+red as one that verifies none. Then it alters one field of each manifest and
+requires the script to go red. That job exists because
+`02-services-marketplace.sh` once sat on the default branch verifying zero
+settlements and nothing ran it.
 
 Each one reads `artifacts/agents.tsv` and `artifacts/a2a-task.tsv` **by column
 name**, never by position. Both files have gained columns more than once, and a

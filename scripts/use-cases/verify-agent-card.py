@@ -34,9 +34,17 @@ WHAT THIS STILL NEEDS THAT A STRANGER DOES NOT HAVE
 The public key. A LEZ account id is not its public key — the wallet stores `pk`
 separately, and the id is derived, so the mapping from the `kid` in the card to
 the 32 bytes that verify it is not something the card carries or the RPC serves.
-So this reads `pk` out of a wallet that holds the account. That is a real limit
-on who can check a card today and it is stated here rather than left for a
-reader to discover: `--wallet-home` is not a convenience, it is the gap.
+So this reads `pk` out of a wallet that holds the account. That was a real limit
+on who could check a card, and `--public-key` is the way out of it: a public key
+is public, so an agent that publishes the 32 bytes alongside its card makes the
+card checkable by a stranger who holds no wallet at all. The storage agent's key
+is published at `artifacts/agent-cards/<category>.pub` for exactly that reason,
+and it is what CI verifies against — a runner has no agent wallet and must not
+be given one.
+
+Both routes end at the same comparison. `--public-key` is not a weaker check: it
+supplies the same 32 bytes from a different place, and if those bytes are wrong
+the signature fails, which is the whole point of checking a signature.
 """
 
 import argparse
@@ -77,9 +85,15 @@ def public_key_for(wallet_home, account):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--wallet-home", required=True)
+    # Exactly one. The key has to come from somewhere and silently defaulting
+    # to "no key" would make an unverifiable card look verified.
+    ap.add_argument("--wallet-home")
+    ap.add_argument("--public-key",
+                    help="the signer's 32-byte x-only public key, hex")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+    if bool(args.wallet_home) == bool(args.public_key):
+        ap.error("give exactly one of --wallet-home or --public-key")
 
     # The verifier checks itself against the published BIP-340 vectors before it
     # is allowed to call anything valid. A verifier that returns True for
@@ -109,7 +123,12 @@ def main():
             .rstrip("=")
         )
         digest = hashlib.sha256(f"{protected_b64}.{payload_b64}".encode()).digest()
-        pk = public_key_for(args.wallet_home, kid)
+        if args.public_key:
+            pk = bytes.fromhex(args.public_key.strip().removeprefix("0x"))
+            if len(pk) != 32:
+                raise SystemExit("--public-key is not 32 bytes")
+        else:
+            pk = public_key_for(args.wallet_home, kid)
         if not schnorr_verify(digest, pk, bytes.fromhex(sig["signature"])):
             print(f"the signature by {kid} does not verify", file=sys.stderr)
             return 1

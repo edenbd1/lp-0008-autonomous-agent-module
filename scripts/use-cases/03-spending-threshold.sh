@@ -246,14 +246,21 @@ else
   # only demonstrated by a payment that actually happened, and `balance_before`
   # minus `balance_after` compared against `price` is three fields of one file
   # agreeing with each other. See scripts/use-cases/settlement-facts.py.
+  # Read as `name=value` per row, not destructured positionally. `paste` piped
+  # into `read -r a b c` with IFS=$'\t' looks header-keyed but collapses
+  # consecutive tabs — tab is IFS whitespace — so one empty cell shifts every
+  # later field left, which is the same defect the header names were meant to
+  # close. See the note in 02-services-marketplace.sh section 6.
   n=0; landed=0; prev_spent=; prev_window=; prev_ledger=; total=0
   mkdir -p "$WORK"
-  paste -d'\t' \
-    <(column_of "$SETTLEMENTS" price) \
-    <(column_of "$SETTLEMENTS" settlement_tx) \
-    <(column_of "$SETTLEMENTS" server_pay_account) > "$WORK/settlements.tsv" \
-    || die "$SETTLEMENTS is missing a column this script needs"
-  while IFS=$'\t' read -r price tx pay; do
+  for _c in price settlement_tx server_pay_account; do
+    column_of "$SETTLEMENTS" "$_c" >/dev/null || die "$SETTLEMENTS has no $_c column"
+  done
+  n_rows=$(rows_of "$SETTLEMENTS"); row_i=1
+  while [ "$row_i" -le "$n_rows" ]; do
+    r=$(row_of "$SETTLEMENTS" "$row_i") || die "could not read row $row_i"
+    row_i=$((row_i + 1))
+    price=$(kv "$r" price); tx=$(kv "$r" settlement_tx); pay=$(kv "$r" server_pay_account)
     [ -n "$tx" ] || continue
     n=$((n + 1))
     printf '  %s LEZ  %s\n' "$price" "$tx"
@@ -294,7 +301,7 @@ else
     [ "$ledger" = "$prev_ledger" ] || total=0
     prev_spent=$spent; prev_window=$window; prev_ledger=$ledger
     total=$((total + price))
-  done < "$WORK/settlements.tsv"
+  done
   [ "$landed" -gt 0 ] || bad "not one settlement in the manifest is on chain"
   # The ceiling is per period, so the figure it bounds is the running total —
   # read live, off the ledger the last settlements ACTUALLY charged rather than
