@@ -109,6 +109,11 @@ int main(void) {
   CHECK(manifest && strstr(reply, "lp0008-upload.txt"),
         "its manifest names the file we uploaded");
 
+  // Every early bail-out above lands here, so a node that was started always
+  // gets stopped and destroyed. libstorage.h requires exactly that before
+  // destroy, and leaking a running node would leave a repo directory locked
+  // against the next run.
+shutdown:
   printf("\n6. shut down\n");
   arm();
   storage_stop(ctx, (StorageCallback)cb, NULL);
