@@ -47,7 +47,13 @@ CLIENT_PER_TX=$(field $CLIENT_CAT 5); CLIENT_PER_PERIOD=$(field $CLIENT_CAT 6)
 CLIENT_PERIOD=$(field $CLIENT_CAT 7)
 SERVER_ID=$(field $SERVER_CAT 2)
 SERVER_PAY=$(field $SERVER_CAT 3)
+# The account that anchored the client's policy. It has to come from the
+# manifest: the policy hash commits to sha256(owner base58), and each agent was
+# anchored by a different signer, so assuming one owner produces a hash that
+# does not match anything on chain and `spend` refuses with 6001.
+CLIENT_OWNER=$(field $CLIENT_CAT 9)
 [ -n "$SERVER_PAY" ] || { echo "the server agent has no receiving account in $AGENTS" >&2; exit 1; }
+[ -n "$CLIENT_OWNER" ] || { echo "no owner recorded for $CLIENT_CAT in $AGENTS" >&2; exit 1; }
 
 # Read a balance straight off the chain. Only public accounts are readable this
 # way — a private account is a commitment in the private state and `getAccount`
@@ -143,7 +149,7 @@ rule "5. settlement on chain, by the client agent, unattended"
 # threshold.
 NONCE=$(python3 -c "import random;print(random.randrange(1,2**63))")
 OWNER_HEX=$(python3 -c "
-import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "${SIGNER:-DumJ4LCBnHE9jUu2yxPfqdL14g3v756Gzby6LuT9hE51}")
+import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$CLIENT_OWNER")
 AGENT_HEX=$(python3 -c "
 import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$CLIENT_ID")
 RECIP_HEX=$(python3 -c "

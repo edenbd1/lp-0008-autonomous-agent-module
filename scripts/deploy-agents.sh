@@ -47,7 +47,12 @@ FUND_AMOUNT="${FUND_AMOUNT:-40}"
 
 mkdir -p artifacts
 : > "$MANIFEST"
-printf 'category\tagent_id\tpay_account\tpolicy_hash\tper_tx\tper_period\tperiod_blocks\tcreate_tx\n' >> "$MANIFEST"
+# `owner` is the last column and it is not decoration: the policy hash commits
+# to sha256(owner base58), so anything that wants to CALL spend has to know
+# which account anchored the policy. Without it in the manifest the settlement
+# has to guess, and a wrong guess produces a policy hash that does not match the
+# anchored one — error 6001, from a script that looks correct.
+printf 'category\tagent_id\tpay_account\tpolicy_hash\tper_tx\tper_period\tperiod_blocks\tcreate_tx\towner\n' >> "$MANIFEST"
 
 confirmed() {
   curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
@@ -292,8 +297,8 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
     local prior; prior=$(anchored_tx "$DEPLOY_TX" "$policy_hash")
     if [ -n "$prior" ] && confirmed "$prior"; then
       echo "  create_policy $prior  already anchored (init refused a second one)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
       echo
       return 0
     fi
@@ -316,16 +321,16 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
     local prior; prior=$(anchored_tx "$DEPLOY_TX" "$policy_hash")
     if [ -n "$prior" ] && confirmed "$prior"; then
       echo "  create_policy $prior  already anchored (init refused a second one)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
       echo
       return 0
     fi
     echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$tx" >> "$MANIFEST"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$tx" "$signer" >> "$MANIFEST"
   echo
 }
 
