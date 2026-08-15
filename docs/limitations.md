@@ -22,11 +22,27 @@ Public/G8Aky5Rd…  {"balance":0,"program_owner":"1111…1111","nonce":1}
 `account get` between anchors, which does rewrite the stored state, does not
 make the second one land.
 
-So the working assumption for the morning is a stale local nonce: the wallet
-builds the second transaction against nonce 0 and the sequencer drops it as a
-replay, silently, like everything else here. A signer per policy would sidestep
-it — three owners rather than one — but that changes `owner_id` and so every
-policy hash, and it papers over the question rather than answering it.
+It is not the nonce. The wallet's own record for this account, in
+`~/.lez-wallet/storage.json`, carries an **empty chain index**:
+
+```
+{"Public": {"account_id": "G8Aky5Rd…", "chain_index": [], "data": {…}}}
+```
+
+That is the thing to fix first. A public account with no chain index can be
+used once — the wallet has enough to sign from a default state — and then has
+no way to build a transaction against what the chain now holds. It matches the
+symptom exactly: first anchor lands, every later one is submitted and dropped.
+
+`account sync-private` populates private accounts and does nothing here;
+`account get` refetches and prints the right state without filling this in.
+Whatever populates a public account's chain index is the missing step, and
+`wallet account import public` taking a `--chain-index` argument suggests the
+wallet expects it to be supplied rather than discovered.
+
+A signer per policy would sidestep the whole thing — three owners rather than
+one — but that changes `owner_id` and so every policy hash, and it answers
+nothing.
 
 ## Funding from the owner account breaks anchoring from the same account
 
