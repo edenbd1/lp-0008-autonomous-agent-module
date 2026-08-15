@@ -17,7 +17,18 @@ Three classes of rot, all of which this repository has shipped:
      `agent_verifier.rs:663-691` in a file 645 lines long. That one is decidable
      without knowing what the line was supposed to say, so it is checked here.
 
-  3. A symbol citation naming something that does not exist. Line numbers into
+  3. A document that promises to carry no identifiers, and then carries one.
+     README.md's second paragraph says "No transaction hash appears on this
+     page", and docs/skills.md 5 says "No program id, block height or balance
+     is quoted here". Those are the right policy — four programs have been
+     deployed and every redeploy moves the hash, the ImageID, every policy
+     address and, when a shielded transfer mints a new note, the agent ids
+     themselves; the storage agent's id changed from `7o9PT8uE...` to
+     `9Xpkkvos...` on one such migration. But a promise nothing checks is how
+     the four documents that asserted a superseded program as current came to
+     do so. So the promise is checked.
+
+  4. A symbol citation naming something that does not exist. Line numbers into
      `module/src/agent_skills.cpp` drifted by between +87 and +324 lines over one
      refactor — a fixed correction would have fixed the middle third and broken
      the rest — so citations into module sources name a *symbol* instead.
@@ -59,6 +70,23 @@ EXTERNAL = ("lee/", "lez/", "_external/", "logos-package/", "spel-framework-macr
 # Paths a document names *because they are gone*. A retraction has to be able to
 # say what it retracts. These are asserted ABSENT: if one comes back, the
 # retraction is now the wrong sentence, and that fails too.
+# Documents that promise, in their own words, to name no identifier. The reason
+# string is the sentence each one is being held to — so a reader who deletes the
+# promise knows to delete the entry, and one who deletes the entry has to face
+# the promise.
+HASH_FREE = {
+    "README.md":
+        'its own second paragraph: "No transaction hash appears on this page"',
+    "docs/skills.md":
+        'its own \u00a75: "No program id, block height or balance is quoted here"',
+}
+
+# A deploy hash, an ImageID or a policy PDA seed: 16+ hex characters in a row.
+HEX_RUN = re.compile(r"\b[0-9a-f]{16,}\b")
+# A LEZ account or agent id: base58, which has no 0, O, I or l. 32 characters is
+# already far past anything that occurs in English prose.
+BASE58 = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
+
 EXPECTED_ABSENT = {
     "scripts/use-cases/policy-hash.py":
         "deleted with the policy-hash design; docs/use-cases.md retracts it by name",
@@ -78,7 +106,7 @@ SYMBOL_RE = re.compile(
     r"(?:,| in) `((?:module/src/)?[A-Za-z0-9_]+\.(?:cpp|h))`")
 
 failures = []
-checked = {"path": 0, "line": 0, "symbol": 0}
+checked = {"path": 0, "line": 0, "symbol": 0, "promise": 0}
 
 
 def note_ok(kind, what):
@@ -168,8 +196,30 @@ for doc in DOCS:
         else:
             note_ok("symbol", "%s -> %s in %s" % (doc, symbol, path))
 
-print("checked %d paths, %d line citations, %d symbol citations across %d documents"
-      % (checked["path"], checked["line"], checked["symbol"], len(DOCS)))
+for doc, promise in HASH_FREE.items():
+    full = os.path.join(ROOT, doc)
+    if not os.path.exists(full):
+        continue
+    for lineno, raw in enumerate(open(full, encoding="utf-8"), 1):
+        # The promise itself, and the retraction paragraphs that explain why it
+        # exists, may quote a truncated id as an example. Anything under 16 hex
+        # or 32 base58 characters is too short to be mistaken for a live value.
+        for m in list(HEX_RUN.finditer(raw)) + list(BASE58.finditer(raw)):
+            token = m.group(0)
+            # sha256 of a fixed string is a constant, not a chain identifier:
+            # the worked example's digest is checked against `shasum` on every
+            # run and cannot go stale.
+            if "shasum" in raw or "digest" in raw or "sha256" in raw:
+                continue
+            failures.append(
+                "%s:%d  names an identifier (%s...) but promises not to \u2014 %s"
+                % (doc, lineno, token[:12], promise))
+        checked["promise"] += 1
+
+print("checked %d paths, %d line citations, %d symbol citations, "
+      "%d lines of two hash-free documents, across %d documents"
+      % (checked["path"], checked["line"], checked["symbol"], checked["promise"],
+         len(DOCS)))
 if failures:
     print("\n%d documentation reference(s) point at something that is not there:\n"
           % len(failures))

@@ -115,7 +115,7 @@ account is owned by LEZ's `authenticated_transfer`. So `spend` checks the
 envelope and then returns a `ChainedCall` into whichever program already owns the
 agent's balance — `agent.account.program_owner`, read off the account rather than
 carried as a constant, so no argument and no deployment constant can redirect a
-payment (`agent_verifier.rs:663-691`). LEZ's own `vault` program does the same
+payment (`delegated_transfer` in `agent_verifier.rs`). LEZ's own `vault` program does the same
 thing (`lez/programs/vault/src/main.rs:47-58`).
 
 ```mermaid
@@ -204,7 +204,8 @@ dependency of the guest.
 `AgentModuleImpl` (`module/src/agent_module_plugin.h`) is a registry, not a god
 object. Its whole contract is `configure` once with the anchored policy address,
 `start` before any skill call, `stop` before shutdown
-(`agent_module_plugin.h:17-19`), plus `registerSkill` and `skills()`.
+(`AgentModuleImpl::configure`, `::start`, `::stop` in `agent_module_plugin.h`),
+plus `registerSkill` and `skills()`.
 
 A skill is anything implementing `ISkill` — a name, a JSON Schema for its
 parameters, and an `invoke` (`module/src/agent_module_interface.h:51-79`). That
@@ -231,15 +232,15 @@ through it:
 
 | Port | Header | Members |
 |---|---|---|
-| `DeliveryPort` | `messaging_skills.h:28` | `ready`, `send(topic, payload)`, `subscribe`, `channelCreate` |
-| `StoragePort` | `storage_skills.h:22` | `ready`, `upload`, `download`, `manifests`, `exists` |
-| `SharePort` | `storage_skills.h:37` | `send(recipient, message)` |
-| `WalletPort` | `wallet_skills.h:102` | `getAccount`, `walletAccount`, `getTransaction`, `journal`, `spend`, `spentThisPeriod` |
-| `ProgramPort` | `program_skills.h:66` | `call`, `deploy`, `read` |
-| `SequencerPort` | `program_skills.h:80` | `rpc(method, params)` |
-| `OwnerChannelPort` | `owner_channel.h:193` | `ready`, `channelCreate`, `channelSend`, `drain`, `nowMs`, `idle` |
-| `CardPort` / `DiscoveryPort` / `TaskPort` / `StatusPort` / `ConfigPort` | `agent_skills.h:186`, `:218`, `:227`, `:244`, `:261` | the A2A seams |
-| `HttpTransport` | `inference.h:229` | `post` |
+| `DeliveryPort` | `struct DeliveryPort`, `messaging_skills.h` | `ready`, `send(topic, payload)`, `subscribe`, `channelCreate` |
+| `StoragePort` | `struct StoragePort`, `storage_skills.h` | `ready`, `upload`, `download`, `manifests`, `exists` |
+| `SharePort` | `struct SharePort`, `storage_skills.h` | `send(recipient, message)` |
+| `WalletPort` | `struct WalletPort`, `wallet_skills.h` | `getAccount`, `walletAccount`, `getTransaction`, `journal`, `spend`, `spentThisPeriod` |
+| `ProgramPort` | `struct ProgramPort`, `program_skills.h` | `call`, `deploy`, `read` |
+| `SequencerPort` | `struct SequencerPort`, `program_skills.h` | `rpc(method, params)` |
+| `OwnerChannelPort` | `struct OwnerChannelPort`, `owner_channel.h` | `ready`, `channelCreate`, `channelSend`, `drain`, `nowMs`, `idle` |
+| `CardPort` / `DiscoveryPort` / `TaskPort` / `StatusPort` / `ConfigPort` | the five `struct …Port` declarations in `agent_skills.h` | the A2A seams |
+| `HttpTransport` | `struct HttpTransport`, `inference.h` | `post` |
 
 This is not indirection for its own sake. It is what lets CI assert the
 behaviour that actually matters — that a skill refuses when the node is down,
@@ -277,14 +278,15 @@ refusal — on `/lp-0008/1/owner-channel/<owner>/<agent>`, sends a
 `spend_approval_request` naming the policy, recipient, amount, nonce and marker
 seed, re-sends every 15 s, and after 120 s with no answer returns
 `ApprovalVerdict::Unreachable`, which is terminal
-(`owner_channel.h:233`, `owner_channel.cpp:456`). It never falls back to acting
+(`OwnerChannelConfig::timeoutMs`, `owner_channel.h`; the verdict comes back from
+`OwnerChannel::requestApproval`, `owner_channel.cpp`). It never falls back to acting
 alone; the prize is explicit that an above-threshold transaction which cannot
 reach its owner must not execute.
 
 A reply is only an answer if it agrees on every field of the request, and a reply
 carrying `per_tx`, `per_period`, `period_blocks` or `policy` is refused outright
 — "an approval names a payment, it cannot change a limit"
-(`owner_channel.cpp:155-158`).
+(`checkReply` in `owner_channel.cpp`).
 
 ## Where the A2A layer sits
 
@@ -293,18 +295,18 @@ Both gaps are filled here, and nowhere else in the stack:
 
 - **Transport**: Logos Messaging replaces A2A's HTTP. Agent Cards carry
   `"preferredTransport": "logos-messaging"` and a `logos-messaging://<account>`
-  URL (`module/src/agent_skills.cpp:634-641`); requests are A2A JSON-RPC
+  URL (`validateAgentCard` in `module/src/agent_skills.cpp`); requests are A2A JSON-RPC
   (`message/send`, `tasks/cancel`) carried as message payloads on a content
   topic derived from the agent and the task (`taskTopic`,
-  `agent_skills.cpp:193-196`).
+  `taskTopic` in `agent_skills.cpp`).
 - **Payment**: an `x-logos` extension block on the card carries the LEZ account,
   the public payment account, the price per task, and
   `"settlement": "lez-chained-authenticated-transfer"`
-  (`agent_skills.cpp:711-721`).
+  (`CardSkill::invoke` in `agent_skills.cpp`).
 
 The task lifecycle is A2A's — `submitted`, `working`, `input-required`,
 `auth-required`, `completed`, `canceled`, `failed`, `rejected`
-(`agent_skills.h:51-61`) — with the legal transitions enforced in one place
+(`enum class TaskState` in `agent_skills.h`) — with the legal transitions enforced in one place
 (`canTransition`) and state kept in a `TaskStore` that can be snapshotted and
 restored so a node restart does not lose an open task.
 
