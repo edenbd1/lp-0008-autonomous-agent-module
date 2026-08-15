@@ -14,28 +14,42 @@
 > a later one is the same defect as a benchmark that names a superseded program:
 > everything in it is true of something, and the reader cannot tell of what.
 >
-> Because the volatile values move on every redeploy, this document does **not**
-> hardcode them. The program hash, the three policy hashes, the three anchor
-> transactions and the agent identities are read from
-> [`artifacts/agents.tsv`](artifacts/agents.tsv) and
-> [`artifacts/anchored.tsv`](artifacts/anchored.tsv), which the deploy script
-> writes, and every one of them is re-derivable from the chain with the commands
-> in [Reading the evidence](#reading-the-evidence-without-trusting-this-document).
-> The three settlements *are* quoted literally, because a landed transaction is
-> immutable.
+> **Every figure in the evidence sections is generated, not typed.**
+> `./scripts/submission-evidence.py` fetches them from the committed binary and
+> from `https://testnet.lez.logos.co`, and splices them into the three blocks
+> below marked `BEGIN GENERATED`. It derives the deploy transaction from the
+> committed bytes rather than quoting it, reads the manifests by column name,
+> confirms every transaction it cites is inside the block it names and absent
+> from both neighbours, and exits non-zero if any of that fails — so a stale
+> version of this document cannot be produced. `--check` re-runs the comparison
+> without writing.
+>
+> That machinery exists because the previous draft did the opposite and it went
+> badly. It carried a settlement table whose columns were headed `(getAccount)`
+> and `(from getTransaction)` under the caption "Verified independently for this
+> document", in which every value was a literal somebody had typed; its balances
+> had never been true; the three transactions it led with are ones
+> `docs/DEPLOYMENT.md` disowns by name; and the two snippets it offered a
+> reviewer for checking the manifests without trusting the author both crashed,
+> because they named a column that had been renamed. None of it was noticed for
+> weeks. A hand-written fact does not announce that it has gone stale, and on a
+> content-addressed chain every redeploy moves all of them at once.
 >
 > ### What blocks submission today
 >
 > | # | Blocker | State |
 > |---|---|---|
 > | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the one blocker with real work left in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
-> | 2 | **`HEAD` is 4 commits ahead of `origin/main`.** The third settlement, the A2A binding spec, the regenerated deployment guide and the README rewrite are committed but **unpushed**, so a reviewer cloning right now sees none of them — and CI has not run on them. The last CI run on the published branch is green, but it is green on a commit four behind this one. | `git push`, then confirm CI. |
+> | 2 | **`HEAD` and `origin/main` have diverged.** `git rev-list --left-right --count origin/main...HEAD` reports **2 4** — two commits are on the published branch and not here, four are here and not published. So a reviewer cloning right now sees neither the settlement evidence nor `meta.skills`, and CI has not run on the four. Do not quote a number from this row; run the command, because it is wrong the moment either side moves. | Merge `origin/main`, push, confirm CI. |
 >
 > Resolved while this was written, and no longer blockers: the
-> `spend`-does-not-bind-the-policy defect and the caller-supplied period total are
-> both fixed, redeployed and re-anchored; **two settlements have landed under the
-> shipped program** (`4e3a3454…` block 8740, `7cad4fbd…` block 8747), so the
-> anchors and the settlement evidence are now under the *same* program; CI went green after the `<cstdint>`
+> `spend`-does-not-bind-the-policy defect, the caller-supplied period total and
+> the caller-chosen policy address are all fixed, redeployed and re-anchored;
+> **settlements have landed under the shipped program**, so the anchors and the
+> settlement evidence are under the *same* program — the generated table says
+> which, and how many, and this line deliberately does not, because the last
+> three versions of it named transactions that had stopped being current; CI
+> went green after the `<cstdint>`
 > fix; the Agent Card is signed (BIP-340 Schnorr, `scripts/sign-agent-card.py`,
 > which self-verifies before emitting); `docs/a2a-binding.md` specifies the
 > transport binding; and `docs/DEPLOYMENT.md` has been regenerated.
@@ -51,23 +65,42 @@
 
 An agent that participates in the Logos stack directly rather than through an
 API key: it holds its own shielded LEZ account, and the limit on what it may
-spend is not a check inside the agent process but **an account address on
-chain**.
+spend is not a check inside the agent process but **state on chain that the
+agent's own program is the only thing permitted to write**.
 
 The core idea is one design decision. An agent runs unattended on a remote node
 and holds its own signing key, so any spending rule the agent evaluates can be
 evaluated differently by whoever holds the process. So the rule is not evaluated
-by the agent at all. The policy account's address is the PDA seed
-`SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks)`. Raising a limit
-does not edit an account — it *names a different account*, one that
-`create_policy` never initialised, so the spend is rejected by the state machine
-before the program body runs. The ceiling is enforced by arithmetic on an
-address, not by trust in a process.
+by the agent at all. Each agent has exactly **one** policy account, at
+`PDA(["agent-policy/v1", agent_id])` — the agent and nothing else — and the
+owner, both limits, the period and the running total all live in that account's
+data, which LEZ rule 6 (`UnauthorizedDataModification`) lets only this program
+write. `create_policy` declares it `#[account(init, …)]`, so the first anchor for
+an agent is the only anchor for that agent; a second is not detected, it is
+impossible. `spend` derives the same address from the *paying* account's id out
+of the pre-state, so there is no argument to lie about, and it reads the limits
+off the account rather than from the call.
+
+That is the second design. The first three deployments seeded the address with
+the policy *contents* — owner, agent and both limits — so that raising a limit
+named a different, uninitialised account. **It was broken, and it is worth
+saying how, because the repair is the interesting part.** Each of three
+successive fixes added a comparison, and each time the attack moved; the version
+that mattered needed no missing comparison at all. An attacker holding a
+compromised agent's key does not have to impersonate an owner or borrow a
+policy — *it is* the owner: it anchors a fresh policy naming the compromised
+agent and itself, with `per_tx = per_period = u128::MAX`, and every check
+passes, because every check is satisfied. That was executed against the deployed
+binary in three variants. The defect was that folding the limits into the
+address let the caller choose the address, so an uninitialised account was
+always available. Removing the choice — one address per agent — is the fix.
+`crates/agent-verifier-spel/methods/guest/src/bin/agent_verifier.rs` opens with
+the whole account.
 
 Three agents — one per default skill category — are anchored on the public LEZ
 testnet, each with its own shielded account and its own envelope. Two of them
-have run an A2A task to completion and settled it in LEZ three times, unattended,
-with the per-period total accumulating on chain.
+have run an A2A task to completion and settled it in LEZ, unattended, with the
+per-period total accumulating on chain.
 Agent-to-agent coordination is A2A-shaped: cards carry the A2A schema plus an
 `x-logos` extension for the price and payment address that vanilla A2A has no
 field for.
@@ -83,8 +116,9 @@ has ever been run against the inference port, and there is no video.
 - **Repo:** <https://github.com/edenbd1/lp-0008-autonomous-agent-module>
 - **Commit this document describes:** `51e57fc`
 - **License:** dual MIT / Apache-2.0
-- **Default branch:** `main` (public). ⚠️ `origin/main` is at `801afbb` and is
-  **three commits behind** the state described here — see blocker 2.
+- **Default branch:** `main` (public). ⚠️ `origin/main` has **diverged** from the
+  state described here — see blocker 2, and run the command in it rather than
+  believing a count written down here.
 
 Everything asserted below is verifiable from a clean clone plus the public
 sequencer. No claim in this document depends on trusting the author.
@@ -103,25 +137,30 @@ pass it just as happily. It is green at this commit.
 
 ### Reading the evidence without trusting this document
 
-The values that move on a redeploy live in two generated manifests, read by
-**column name** — the columns have been reordered before, and a positional read
-has already produced a false result here:
+Regenerate the evidence sections yourself. They are produced by, and only by,
+this command:
 
 ```bash
-# the three anchored agents, current program
-python3 -c "
-import csv
-for r in csv.DictReader(open('artifacts/agents.tsv'), delimiter='\t'):
-    print(r['category'], r['agent_id'], r['policy_hash'], r['create_tx'])"
-
-# every (program, policy_hash) ever anchored, including superseded programs
-python3 -c "
-import csv
-for r in csv.DictReader(open('artifacts/anchored.tsv'), delimiter='\t'):
-    print(r['program'], r['policy_hash'], r['create_tx'])"
+./scripts/submission-evidence.py                       # print them
+./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md   # or just check
 ```
 
-Each `create_tx` is then checkable directly, and **the control is what makes the
+`--check` re-fetches every figure and exits non-zero if this document has
+drifted from what the chain now says, which is the only reason to believe the
+numbers below. It refuses to write anything it could not fetch: there is no
+"TBD" path, no blank cell and no placeholder in it, and a fact the chain cannot
+show is emitted as a sentence saying so.
+
+Two earlier commands lived here, offered for exactly this purpose, and **both of
+them crashed** — they read `artifacts/agents.tsv` and `artifacts/anchored.tsv`
+for a `policy_hash` column that had been renamed to `policy_account` some
+commits earlier, so a reviewer who ran them got `KeyError` and no reason to
+believe anything else here. That is why the check is now a script that runs in
+CI rather than a snippet nobody executes. The manifests are still read by
+**column name**, never by position; positional reads have produced three
+separate false results in this repository.
+
+If you would rather ask the sequencer directly, **the control is what makes the
 check mean anything**:
 
 ```bash
@@ -129,10 +168,17 @@ q() { curl -s -X POST https://testnet.lez.logos.co \
         -H 'Content-Type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"; }
 
-q <create_tx>   # => {"result":[<bytes>,<block>]}   present
+q <any create_tx from artifacts/anchored.tsv>
+                # => {"result":[<bytes>,<block>]}   present
 q dededededededededededededededededededededededededededededededede
                 # => {"result":null}               absent — as it must be
 ```
+
+A returned block number is the sequencer's word for it, and this repository has
+been wrong about block attribution before, so the generator does not stop there:
+it fetches `getBlock` for that block and for both neighbours and requires the
+transaction's own bytes to be present in the first and absent from the other
+two. Earlier drafts claimed that check in prose while no script performed it.
 
 One warning, because it has misled readers of this repository before:
 **`getAccount` is not an existence check.** It answers with a fully-populated
@@ -143,47 +189,69 @@ public state only. Presence proves nothing there; the *program owner* and the
 
 ## Approach
 
-### The ceiling is an address, not a check
+### One policy account per agent, and the limits are its data
 
 A spending limit enforced inside the agent is enforced by whoever controls the
 agent's process — which, for an agent deployed on a remote node with its own
 key, is not necessarily the owner. So the limit is moved out of the process
 entirely.
 
-`create_policy` initialises one account, whose address is
-`PDA(SHA256(owner_id ‖ agent_id ‖ per_tx ‖ per_period ‖ period_blocks))`. It is
-`#[account(init, …)]`, so it can be created exactly once. `spend` re-derives that
-address from the limits the caller presents and requires the account at that
-address to exist and to be owned by the policy program. An agent that wants a
-larger envelope cannot edit the account — it can only name a *different* address,
-which nobody ever initialised, and the state machine rejects the transaction
-before the program body executes.
+`create_policy` initialises exactly one account per agent, at
+`PDA(["agent-policy/v1", agent_id])`. It is `#[account(init, …)]`, and `init`
+refuses an account that is not in its default state, so the first anchor for an
+agent is the only anchor for that agent — a second is not *detected*, it is
+impossible. The owner, both limits, the period and the running total live in
+that account's data, which LEZ rule 6 (`UnauthorizedDataModification`) permits
+only this program to write. `spend` derives the same address from the *paying*
+account's id, taken from the pre-state the state machine built rather than from
+the instruction the agent serialised, so there is no `agent_id` argument to lie
+about, and it reads the limits off the account rather than from the call.
+
+The address derivation above is not typed into this document: it is printed from
+the shipped `idl/agent_verifier.idl.json` by the generator, in the table under
+[the program](#the-program-on-chain). It was typed once, and this document then
+spent three deployments describing a derivation the program had abandoned.
 
 This is checkable by anyone, and the check has a control:
 
 ```bash
-# the policy account for an anchored envelope
+# the policy account for an anchored agent, from the IDL the repo ships
 spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
-     pda policy --policy-hash <policy_hash from agents.tsv>
+     pda policy --agent-id <agent_id from artifacts/agents.tsv>
 # then getAccount that address:
 #   program_owner = the policy program's ProgramId   -> anchored
 #   program_owner = [0,0,0,0,0,0,0,0]                -> never anchored
 ```
 
-Run against an anchored hash the owner comes back as the policy program's own
-`ProgramId` (`spel program-id artifacts/programs/agent_verifier.bin` prints it to
-compare). Run against a hash nobody anchored — the `dedede…` control — the PDA
+It should reproduce the `policy_account` column of
+[`artifacts/agents.tsv`](artifacts/agents.tsv), and `./scripts/verify-deployment.sh`
+checks that it does. Run against an anchored agent the owner comes back as the
+policy program's own `ProgramId` (`spel program-id
+artifacts/programs/agent_verifier.bin` prints it to compare, and the generated
+section below compares them for you). Run against an id nobody anchored, the PDA
 resolves fine and comes back with the **default** owner. That difference is the
 whole mechanism, visible from outside with two RPC calls.
 
-**Alternatives rejected.** Storing the *limits* in the policy account's data was
-the obvious design and was rejected: it would make the envelope something a
-transaction can rewrite, and the address would stop being a commitment to the
-terms. The split that was adopted instead is that **the address carries the limits
-and the data carries what has been spent** — the immutable half stays in the
-address, the accumulating half is state only this program may write.
+**The alternative, and why it was abandoned rather than rejected.** Putting the
+limits in the *address* — `PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖
+period_blocks))`, so that raising a limit named a different, never-initialised
+account — was the original design, and this document recommended it at length.
+It shipped in three deployments and it does not work. The reason is worth more
+than the design was: an attacker holding a compromised agent's key does not need
+to impersonate an owner or reuse someone else's policy, because **it is** the
+owner. It anchors a *fresh* policy naming the compromised agent as `agent_id`
+and itself as `owner_id` with `per_tx = per_period = u128::MAX`, and spends the
+balance under that. Every comparison in the program passes, because every one of
+them is satisfied. Three earlier fixes had each added one more comparison and
+each time the attack had simply moved. Folding the limits into the address is
+what made this available: every `(owner, agent, limits)` triple had an account of
+its own, all uninitialised, so "anchor a new policy" was always on the table.
+One address per agent removes the choice, and `init` gives that address to
+whoever writes first — the owner, when it creates the agent, before the agent has
+run at all. `crates/agent-verifier-adversarial` executes the attack against the
+deployed binary and asserts the halt code it now stops at.
 
-That split is recent, and it closed a real hole. `spend` used to take
+The per-period total closed a second hole. `spend` used to take
 `spent_this_period` as an argument, which both callers passed as `0`, so the
 per-period ceiling was advisory and an agent that always passed zero had a
 per-transaction limit and no period limit. It now takes `window_start` instead,
@@ -195,12 +263,11 @@ executes the committed guest against that: three spends of 200 accumulate to 600
 within one period, and a window that does not start on a multiple is refused with
 code 6014.
 
-> ⚠️ **`docs/limitations.md` has not caught up with this.** It still lists
-> "`spent_this_period` is supplied by the caller" as an open defect. That entry is
-> stale as of the current program — the IDL, the guest source and the demo all
-> disagree with it. Flagged here rather than silently relied on, because a stale
-> limitation is the one kind of documentation error that costs nothing to leave in
-> and everything to be caught on.
+`docs/limitations.md` records both of these under "Two defects this file used to
+carry, and what replaced them", in the past tense and with the replacement
+named. An earlier version of this document warned that it had *not* caught up
+and still listed `spent_this_period` as open. That warning was itself out of
+date when it was written, which is the same failure one level up.
 
 ### `spend` moves no balance itself, and cannot
 
@@ -218,9 +285,42 @@ byte-identical copy of the chain's own program — not deployed by this reposito
 committed because the circuit looks the callee up by ImageID; `scripts/demo.sh`
 checks its ImageID against `getProgramIds` rather than asserting it.
 
-Three superseded programs are still on the testnet, since deployment is
+Superseded programs are still on the testnet, since deployment is
 content-addressed, and `docs/limitations.md` lists what each got wrong. That list
 is part of the evidence: it is what "tried and did not work" looks like.
+
+### The program on chain
+
+<!-- BEGIN GENERATED program -- scripts/submission-evidence.py; do not edit by hand -->
+
+Every figure in this section was fetched by `./scripts/submission-evidence.py` at generation time. Nothing in it is transcribed from another document, and the transaction hash is not quoted from anywhere — it is derived from the committed bytes.
+
+`artifacts/programs/agent_verifier.bin` is 417,348 bytes. Deployment on LEZ is content-addressed, so the deploy transaction is `SHA256(u32_le(len) ‖ bytecode)` of exactly those bytes:
+
+| | |
+|---|---|
+| deploy transaction | [`a780003b…8576841e`](https://explorer.testnet.lez.logos.co/transaction/a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e) |
+| block | 8720 |
+| on the wire | 417,353 bytes |
+| bytes found in block | 8720, and in neither 8719 nor 8721 |
+| ImageID recomputed from the committed binary | `12fa95d9382121791f11feb4ac6f7e3ee19e20d296f2eb09a61a069eb578c9d8` |
+| ProgramId owning every policy account below | `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293` |
+
+The ImageID recomputed from the committed ELF and the `program_owner` the chain reports for the anchored policy accounts agree. The binary in this repository is the program enforcing these envelopes on chain.
+
+`spend` moves no balance itself — LEZ rule 5 refuses any post-state that decreases the balance of an account the executing program does not own — so it chains a call into the authenticated transfer program, which does own them. `artifacts/programs/authenticated_transfer.bin` is committed because the circuit resolves the callee by ImageID; it is not deployed by this repository. Its ImageID recomputes to `583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078`, and `getProgramIds` reports `authenticated_transfer` as `583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078` — the same program.
+
+Read out of the shipped `idl/agent_verifier.idl.json` rather than described — the address derivation is the security argument, so it is quoted from the interface the repository actually ships:
+
+| instruction | policy account address |
+|---|---|
+| `approve_spend`, `create_policy` | `PDA("agent-policy/v1", agent_id (arg))` |
+| `spend`, `spend_approved` | `PDA("agent-policy/v1", agent (account))` |
+
+There is **one policy account per agent**: the seed is the agent, and every limit is the account's *data*, which LEZ rule 6 (`UnauthorizedDataModification`) lets only this program write. Where the seed is `(account)` it comes from the pre-state the state machine built and there is no argument to lie about; where it is `(arg)` it is caller-supplied, which is why `create_policy` is `#[account(init, …)]` and the first anchor for an agent is the only one.
+
+The control: `getTransaction` on `dededededededededededededededededededededededededededededededede`, a hash nobody has submitted, returned `null` on this run. Without it "the sequencer returned a transaction" would prove nothing.
+<!-- END GENERATED program -->
 
 ### Why Logos, specifically
 
@@ -358,50 +458,45 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
 - [x] **MET — Two or more agents discover each other via Agent Cards, execute a
   task following the A2A lifecycle, and transfer LEZ payment autonomously, without
   owner intervention.**
-  Three settlements, each run with no special handling between them — the repeats
-  matter as much as the first, because a repeat settlement is what this repository
-  could not produce for most of its life. Verified independently for this document
-  against `https://testnet.lez.logos.co`:
+  Settlements run with no special handling between them — the repeats matter as
+  much as the first, because a repeat settlement is what this repository could
+  not produce for most of its life. The table below is **generated**, not
+  transcribed; reproduce it with `./scripts/submission-evidence.py`.
 
-  | | first | second |
-  |---|---|---|
-  | settlement tx | `4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1` | `7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019` |
-  | block (from `getTransaction`) | 8740 | 8747 |
-  | size | 271,471 bytes | 271,471 bytes |
-  | policy program | **shipped** | **shipped** |
-  | skill / price | `storage.upload` at 25 LEZ | same |
-  | payee balance (`getAccount`) | 45 → 70 | 70 → 95 |
+<!-- BEGIN GENERATED settlements -- scripts/submission-evidence.py; do not edit by hand -->
 
-  Both rows are the `settlement_tx` column of
-  [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv) and both are checked against
-  the chain by `./scripts/verify-deployment.sh`. Four earlier settlements exist
-  under the two superseded programs — `c45d3f24…` and `8d7aba60…` (blocks 8605,
-  8624), `5a488f28…` and `f780df62…` (blocks 8677, 8686). They are still on
-  chain and they all moved balance; what they do not do is say anything about the
-  binary this repository ships, and this table listed one of them as "current"
-  after it had stopped being so.
+Every figure in this table is decoded out of the settlement transaction itself. `getAccount` is deliberately **not** used for the balances: it reports current state, this chain has no historical-state RPC, and the payee's balance has since moved both up and down — so what it holds today is not evidence about a settlement that landed hundreds of blocks ago. A LEZ transaction commits to its own post-state, and the hash proves the bytes are that transaction, so the balance below is the balance *at* the settlement rather than a number cached in a file.
 
-  Each transaction's bytes were checked to be **inside** the block it names and
-  **absent** from both adjacent blocks, so the block attribution is not taken on the
-  RPC's word alone. The payee's public account reads `balance: 75` today, matching
-  three 25-LEZ credits, and is owned by the authenticated transfer program. The
-  control hash returned `null` on every pass. Manifest:
-  [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv); reproduce with
-  `./scripts/a2a-task.sh`, which refuses to write its manifest unless the
-  transaction confirms **and** the recipient's balance moved by exactly the price.
-  Only the credit side is publicly readable — the payer is shielded — but rule 8
-  requires total balance to be preserved across every program in a transaction, so
-  a transaction that credited 25 debited 25.
+| # | settlement | block | on the wire | skill | price | payee balance after | policy `window` / `spent` after |
+|---|---|---|---|---|---|---|---|
+| 1 | [`4e3a3454…a490ddb1`](https://explorer.testnet.lez.logos.co/transaction/4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1) | 8740 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `Coxz1Cmf…` at 8,000 / 25 |
+| 2 | [`7cad4fbd…7168f019`](https://explorer.testnet.lez.logos.co/transaction/7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019) | 8747 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `Coxz1Cmf…` at 8,000 / 50 |
 
-  The third settlement is the one that matters most, for two reasons. It is under
-  the **current** policy program, so the anchors and the settlement evidence are no
-  longer split across a superseded deployment — the rule `docs/limitations.md` sets,
-  and that this repository has broken before. And it left a trace the earlier two
-  could not: the paying agent's policy account now carries
-  `data = [64,31,0,0,0,0,0,0, 25,0,0,0,0,0,0,0, …]` — little-endian, that is
-  `window_start = 8000` and `spent_this_period = 25` — written by the program, not
-  by the caller. The account is owned by the current program's own `ProgramId`. The
-  per-period ceiling is now a number the chain keeps.
+Settlement 1: the sequencer's bytes hash to `4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1`, which is the hash cited, and those bytes were found inside block 8740 and in neither block 8739 nor 8741. The transaction touches 2 accounts.
+  The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+Settlement 2: the sequencer's bytes hash to `7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019`, which is the hash cited, and those bytes were found inside block 8747 and in neither block 8746 nor 8748. The transaction touches 2 accounts.
+  The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+
+What the chain cannot show, stated rather than implied: the payer is a shielded account, so only the credit side of each settlement is publicly readable. `getAccount` answers with a fully-populated default account — zero balance, zero nonce, zero owner — for a shielded address exactly as it does for one that has never existed, so it is not an existence check and no debit is quoted here. The debit is constrained anyway: LEZ rule 8 requires total balance to be preserved across every program in a transaction, so a transaction that credited 25 LEZ debited 25 LEZ.
+
+The explorer indexes roughly an hour and three quarters behind the sequencer, so a settlement that landed in the last hour or two reads "not found" at the links above while `getTransaction` already returns it. That is an indexing lag, not a missing transaction; the RPC is the immediate source of truth and this document was generated from it.
+<!-- END GENERATED settlements -->
+
+  Reproduce the settlements themselves with `./scripts/a2a-task.sh`, which
+  refuses to write its manifest unless the transaction confirms **and** the
+  recipient's balance moved by exactly the price.
+
+  Two things this criterion used to claim, withdrawn because they were not true.
+  It said each transaction's bytes had been checked inside its own block and
+  absent from both neighbours — a good check that **no script in this repository
+  performed**; `scripts/submission-evidence.py` performs it now, and the
+  generated notes above report the block numbers it compared. And it read the
+  payee's balance out of `getAccount` as though that were evidence about a past
+  settlement. It is not: `getAccount` returns current state, this chain has no
+  historical-state RPC, and the payee's balance has since gone *down* as well as
+  up, so the running total the old table showed could never have been rechecked.
+  The balances above come out of each transaction's own committed post-state
+  instead, which is what makes them provable.
 
 - [ ] **UNMET — At least 3 illustrative use cases demonstrated end-to-end on LEZ
   testnet.**
@@ -416,18 +511,41 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
 - [x] **MET — Three separate agents deployed on LEZ testnet, one per default skill
   category, each with a demonstrated, reproducible deployment and evidence.**
   Storage, messaging and blockchain, each with its own shielded account, its own
-  public receiving account and its own anchored envelope — the envelopes differ on
-  purpose, since identical limits under one owner collapse to a single policy hash.
-  All three `create_tx` values in [`artifacts/agents.tsv`](artifacts/agents.tsv)
-  return a transaction from the sequencer while the control returns `null`; this was
-  re-verified for both the committed set and the in-flight re-anchored set, and all
-  six are live. Stronger than transaction presence: the derived policy PDA for an
-  anchored envelope comes back owned by the policy program's own `ProgramId`, while
-  the PDA of a never-anchored hash comes back with the default owner. Reproduce with
-  `./scripts/deploy-agents.sh`, which is deliberately not idempotent — a second run
-  derives the same policy hash and `create_policy` refuses it, which is the
-  single-use guarantee working, and the script reports it as already-anchored via
-  `artifacts/anchored.tsv` keyed on `(program, policy_hash)`.
+  public receiving account and its own anchored envelope. The table below is
+  **generated** from `artifacts/agents.tsv` and the chain, read by column name:
+
+<!-- BEGIN GENERATED agents -- scripts/submission-evidence.py; do not edit by hand -->
+
+Read from `artifacts/agents.tsv` **by column name**, then checked against the chain. Limits below are the ones the state machine holds, not the ones the manifest claims; where they differed this section would say so and the generator would exit non-zero.
+
+| category | agent | policy account | per-tx | per-period | period | window | spent | `create_policy` |
+|---|---|---|---|---|---|---|---|---|
+| storage | `7o9PT8uE…` | `HHhRoBfv…` | 50 | 500 | 1,000 blocks | 0 | 0 | [`79c91ec7…a24b70f5`](https://explorer.testnet.lez.logos.co/transaction/79c91ec796a14b7c0c2df11ac96ff944f915fe767db397b31331c48fa24b70f5), block 8729 |
+| messaging | `GpRdooEW…` | `7ewsGn9S…` | 25 | 250 | 1,000 blocks | 0 | 0 | [`eb294055…38e53249`](https://explorer.testnet.lez.logos.co/transaction/eb294055f61645852e03fb96cc794a01b421b7dd714358c4e1a5000838e53249), block 8731 |
+| blockchain | `A7UBoMbS…` | `Coxz1Cmf…` | 200 | 1,000 | 1,000 blocks | 8,000 | 50 | [`0266f48b…d3cae867`](https://explorer.testnet.lez.logos.co/transaction/0266f48bcef250fc5c9fd68c6ebdd7e46d33e4e84c40a2cbbe7c7174d3cae867), block 8732 |
+
+Each `create_policy` above was confirmed present in the block named and absent from both neighbours. The limits are the chain's own copy: the address of a policy account is `PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so raising a limit does not edit this record — it names a different address that `create_policy` never initialised, and the state machine rejects the spend before the program body runs. `window` and `spent` are the halves only the owning program may write.
+
+`artifacts/anchored.tsv` records every `(program, anchor)` pair this repository has ever written, keyed on the program, which is why a redeploy shows up in it rather than overwriting it. Under the program deployed above there are 3:
+
+| what | agent | transaction | block |
+|---|---|---|---|
+| `anchor` | `7o9PT8uE…` | [`79c91ec7…a24b70f5`](https://explorer.testnet.lez.logos.co/transaction/79c91ec796a14b7c0c2df11ac96ff944f915fe767db397b31331c48fa24b70f5) | 8729 |
+| `anchor` | `GpRdooEW…` | [`eb294055…38e53249`](https://explorer.testnet.lez.logos.co/transaction/eb294055f61645852e03fb96cc794a01b421b7dd714358c4e1a5000838e53249) | 8731 |
+| `anchor` | `A7UBoMbS…` | [`0266f48b…d3cae867`](https://explorer.testnet.lez.logos.co/transaction/0266f48bcef250fc5c9fd68c6ebdd7e46d33e4e84c40a2cbbe7c7174d3cae867) | 8732 |
+
+No superseded rows remain in that manifest at this commit.
+<!-- END GENERATED agents -->
+
+  Stronger than transaction presence: each policy account comes back owned by
+  the policy program's own `ProgramId`, while the PDA of an agent nobody
+  anchored comes back with the default owner, and the `dedede…` control returns
+  `null` on every pass. Reproduce with `./scripts/deploy-agents.sh`, which is
+  deliberately not idempotent — a second run derives the same address and
+  `create_policy` refuses it, because `#[account(init, …)]` will not take an
+  account that is not in its default state, which is the single-use guarantee
+  working. The script reports it as already-anchored via
+  `artifacts/anchored.tsv`, keyed on `(program, agent_id)`.
 
 - [x] **MET — Full documentation and a clean public repository.**
   Skill interface spec [`docs/skills.md`](docs/skills.md), deployment guide
@@ -512,8 +630,11 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   model behind it. So nothing is labelled "CU", because the conversion would have to
   be invented. What is measured instead are the three real budgets: cycles against
   `MAX_NUM_CYCLES_PUBLIC_EXECUTION` (32M), chained calls against
-  `MAX_NUMBER_CHAINED_CALLS` (10), and bytes on the wire — 270,566 per settlement,
-  read back from the sequencer. Cycle counts are measured by executing the
+  `MAX_NUMBER_CHAINED_CALLS` (10), and bytes on the wire, read back from the
+  sequencer per settlement rather than estimated — the generated settlement
+  table above prints the figure, and this sentence deliberately does not repeat
+  it, because the number written here was 270,566 for three deployments after
+  it had stopped being true. Cycle counts are measured by executing the
   **deployed** binary, not a rebuild.
 
 ### Supportability
@@ -529,22 +650,32 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   anchor, spend inside the envelope, be refused outside it — with
   `RISC0_DEV_MODE: 0`. It has **no skip path**, deliberately: a competing submission
   was closed with "the standalone-sequencer E2E did not run in CI; the job completed
-  through its explicit skip path". Last green run:
+  through its explicit skip path". Last green run on this branch's lineage:
   [31867735056](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31867735056),
-  2026-08-15 05:45 UTC, 1h 04m. One caveat, stated because it will be noticed: that
-  run was at commit `5a52efe`, four commits before this one, and the workflow is on a
-  daily schedule rather than on push.
+  `success`, commit `5a52efe`, 2026-08-15 05:45 UTC, 1h 03m 58s. Two caveats,
+  both stated because they will be noticed. That run is a long way back —
+  `git rev-list --count 5a52efe..HEAD` says how far, and an earlier version of
+  this line guessed "four", which was wrong by an order of magnitude. And the
+  workflow runs on a daily schedule rather than on push, so a green badge here
+  is never evidence about `HEAD`. A more recent green run of the same workflow
+  exists ([31890967866](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31890967866),
+  18m 49s) but it is on the `e2e-preflight` branch at a commit that is **not** an
+  ancestor of this one, so it is not evidence about this tree either.
 
 - [x] **MET, with a caveat — CI must be green on the default branch.**
-  The latest run on the published branch is **green**
-  ([31883389383](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31883389383)),
-  all three jobs. The run before it was red, and worth recording because of how it
-  failed: `messaging_skills.h` and `storage_skills.h` used `std::uint8_t` /
+  CI is green on the published branch. Do not quote a run id from this
+  paragraph — "latest" moves, and the id written here was already two runs stale
+  by the time anyone read it. Ask instead:
+  `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.
+  One red run is worth recording because of *how* it failed
+  ([31882516164](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31882516164),
+  `failure`): `messaging_skills.h` and `storage_skills.h` used `std::uint8_t` /
   `std::int64_t` without `<cstdint>`, which the runner's libstdc++ 14 no longer
   supplies transitively, and the job died at its **first** compile step — so six C++
   suites did not run at all while the badge said only "one job failed". The fix was
-  two include lines. The caveat: `HEAD` is four commits ahead of the green commit,
-  and those four have not been through CI. See blocker 2.
+  two include lines. The caveat that keeps this from being a clean MET: the
+  commits at `HEAD` are not on the published branch and have not been through
+  CI. See blocker 2.
 
 - [ ] **UNMET — A README documenting end-to-end usage: deployment steps, agent
   configuration, and step-by-step instructions for deploying and interacting with
@@ -573,7 +704,7 @@ places to forget.
 ### Functionality
 
 The agent holds a shielded LEZ account, signs its own transactions, and spends
-under a ceiling the chain enforces by address. All twenty-one default skills are
+under a ceiling the chain keeps in state only its own program may write. All twenty-one default skills are
 implemented and registered — `meta.skills`, the last one missing, was documented
 in three headers while `invoke()` refused it, and is now asserted against the
 loaded binary rather than against the source. The A2A coordination
@@ -627,8 +758,9 @@ commit these are design claims plus a previously-green run, not current evidence
 ### Performance
 
 No fees exist to measure on LEZ v0.2.4, so the document measures the budgets that do
-exist rather than inventing a CU number. A settlement is 270,566 bytes on the wire,
-read back from the sequencer rather than estimated. Cycles are measured against the
+exist rather than inventing a CU number. A settlement's size on the wire is read back
+from the sequencer rather than estimated, and is printed in the generated settlement
+table above rather than restated here. Cycles are measured against the
 32M public-execution cap by running the deployed binary; the settlements take the
 privacy-preserving path, which is bounded by the prover rather than by that constant.
 The real bottleneck is proving time, and the real operational cost is that anchoring
@@ -667,14 +799,14 @@ failed rather than blaming the wrong one.
   [`artifacts/anchored.tsv`](artifacts/anchored.tsv),
   [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv),
   [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Read the TSVs **by column name**.
-- **Settlements:** `4e3a3454…a490ddb1` (block 8740) and `7cad4fbd…7168f019`
-  (block 8747), both under the shipped program, payee `5Sa13NyN…dHtjnZ` going
-  45 → 70 → 95. Read them from
-  [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv) rather than from this line.
-  [explorer](https://explorer.testnet.lez.logos.co/transaction/4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1)
-  — note the explorer indexes roughly an hour and three quarters behind the
-  sequencer, so a recent hash reads "not found" there while `getTransaction`
-  already returns it. The RPC is the immediate source of truth.
+- **Settlements, anchors and the deployed program:** every hash, block, balance
+  and explorer link is in the three generated sections above, with the checks
+  that were run to get them. They are deliberately **not** repeated here: this
+  bullet used to restate them, and restating a fact in a second place is how
+  this document came to cite three transactions its own deployment guide
+  disowns. Regenerate with `./scripts/submission-evidence.py`, or verify the
+  document still matches the chain with
+  `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md`.
 - **Documentation:** [architecture](docs/architecture.md) ·
   [skill interface](docs/skills.md) · [security model](docs/security-model.md) ·
   [deployment](docs/DEPLOYMENT.md) · [Logos app integration](docs/basecamp.md) ·
