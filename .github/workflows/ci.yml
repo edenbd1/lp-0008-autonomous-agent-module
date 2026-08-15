@@ -167,6 +167,48 @@ jobs:
           rm -f drift.md drift.out evidence.out
           echo "OK the document matches the chain, and a drifted one is rejected"
 
+      # The generated sections must be a function of the chain and the
+      # repository, and of nothing else about the machine.
+      #
+      # This step exists because they once were not. The generator shelled out
+      # to `spel program-id` and swallowed OSError, so it rendered 36 different
+      # lines depending on whether that tool was installed. The machine that
+      # wrote the document had it, this runner does not, and main went red
+      # twice. What makes it worth a permanent gate rather than a one-off fix
+      # is the shape of the trap: regenerating HERE would have turned CI green
+      # by making the document say less — "**This settlement was made under a
+      # superseded deployment**" degrades to "not compared on this run" — so
+      # the gate would have been satisfied by deleting the claim it guarded.
+      #
+      # Rendering twice under different environments and requiring the bytes to
+      # match catches the whole family, not just that one tool: a new PATH
+      # lookup, a clock read, a locale-dependent format, an unsorted set.
+      - name: The generated evidence does not depend on this machine
+        run: |
+          set -e
+          ./scripts/submission-evidence.py > env-a.md
+          # A deliberately hostile environment: no inherited variables, a PATH
+          # holding only the interpreter, a different locale, a different
+          # timezone and a different working directory.
+          mkdir -p /tmp/minpath
+          ln -sf "$(command -v python3)" /tmp/minpath/python3
+          ( cd /tmp && env -i PATH=/tmp/minpath LC_ALL=de_DE.UTF-8 TZ=Asia/Tokyo \
+              python3 "$GITHUB_WORKSPACE/scripts/submission-evidence.py" ) > env-b.md
+          if ! cmp -s env-a.md env-b.md; then
+            echo "the generated evidence differs between environments:"
+            diff env-a.md env-b.md | head -40
+            echo "a document that depends on the machine cannot be checked on another one"
+            exit 1
+          fi
+          # Both runs must have produced real content, or this compares two
+          # empty files and calls them equal.
+          grep -q "BEGIN GENERATED settlements" env-a.md \
+            || { echo "the generator produced no settlements section"; exit 1; }
+          test "$(wc -c < env-a.md)" -gt 4000 \
+            || { echo "the generated output is implausibly short"; exit 1; }
+          rm -f env-a.md env-b.md
+          echo "OK identical under a stripped PATH, a different locale, timezone and cwd"
+
       - name: demo.sh runs from a clean clone
         run: ./scripts/demo.sh
 

@@ -70,6 +70,32 @@ What makes each number safe to print
     `agents.tsv` and a disagreement is a real defect; the running total is shown
     per settlement instead, out of that transaction's immutable post-state.
 
+  * THE OUTPUT IS A FUNCTION OF THE CHAIN AND THE REPOSITORY, AND OF NOTHING
+    ELSE ABOUT THE MACHINE. This is the rule that was learned the hard way. An
+    earlier version shelled out to `spel program-id` and swallowed OSError, and
+    three rendering sites branched on the result -- so the document said
+    different things depending on whether a tool was installed. The machine
+    that wrote it had `spel`; CI did not; --check compared 36 lines that could
+    never match, and main was red twice. The trap in the easy fix is what makes
+    this worth writing down: regenerating in CI WOULD have gone green, by
+    silently replacing "**This settlement was made under a superseded
+    deployment**" with "not compared on this run". A gate can be satisfied by
+    deleting the claim it was guarding.
+
+    So identity is established from the chain -- committed bytes -> deploy
+    transaction (derived, and checked to embed those bytes) -> anchor payload
+    -> ImageID -> ProgramId -- which also proves MORE than the tool did: `spel`
+    only recomputes an ImageID from a file, while this ties the committed file
+    to the program that owns the accounts. `spel` remains as a cross-check that
+    may only raise Fatal; it contributes no character of output.
+
+    Everything else of that family is checked too, and the output is identical
+    with and without `spel` on PATH, under LC_ALL=C/en_US/de_DE/ja_JP, under
+    three timezones, and from a different working directory. No clock is read.
+    The one environment variable, SEQUENCER_URL, selects which chain to ask,
+    which is supposed to change the answer -- and the endpoint is never rendered,
+    only explorer links are.
+
   * Nothing may be left blank. `render` refuses to emit "TBD", "TODO", a
     placeholder or an empty table cell — that pattern is quoted verbatim in the
     closing comments on rejected submissions to this programme. A fact that
@@ -410,12 +436,78 @@ def policy_seeds(idl_path):
     return out
 
 
-def spel_program_id(binary):
-    """ImageID recomputed from the committed ELF, or None if spel is absent.
+def shipped_identity(chain, root, agents):
+    """Who the shipped program is, established entirely from the chain.
 
-    None is not a hole: the caller writes the sentence saying spel was not
-    available and falls back to the ProgramId the chain reports as owning the
-    policy accounts, which is a chain fact either way.
+    This function exists because the version it replaces shelled out to `spel
+    program-id` and swallowed OSError. That made the rendered document a
+    function of whether a tool happened to be installed: three sites branched
+    on it, the machine that wrote the document had `spel`, CI did not, and
+    --check compared 36 lines of text that could never match. Worse than the
+    red build, the tool-less rendering was the WEAKER one -- the ImageID row
+    vanished and the superseded-settlement labelling degraded to "not compared
+    on this run". Turning CI green by regenerating there would have quietly
+    deleted the strongest claim in the document.
+
+    The identity is a chain fact, so it is read from the chain:
+
+      1. `SHA256(u32_le(len) || bytecode)` of the committed binary is the deploy
+         transaction, because deployment is content-addressed. It is confirmed
+         on chain, and the transaction is checked to EMBED those exact bytes --
+         so the file in this repository is the program that was deployed.
+      2. A `create_policy` payload begins with a kind discriminant of 0 and then
+         carries, in bytes 1..33, the ImageID of the program it calls. Any
+         anchor in artifacts/agents.tsv yields it. That is the shipped ImageID.
+      3. Its ProgramId words are what `getAccount` reports as `program_owner`
+         for the accounts that anchor created, which is how every settlement
+         below is attributed.
+
+    Nothing here reads PATH, the environment, the clock, or anything outside
+    the repository, so every machine renders the same bytes.
+    """
+    binary = os.path.join(root, "artifacts/programs/agent_verifier.bin")
+    tx, size = deploy_tx_of(binary)
+    c = confirm(chain, tx)
+    if open(binary, "rb").read() not in c["raw"]:
+        raise Fatal("%s resolves on chain but the transaction does not contain "
+                    "the committed bytes" % tx)
+
+    image = None
+    for a in agents:
+        got = chain.transaction(a["create_tx"])
+        if got is None:
+            continue
+        payload = got[0]
+        if len(payload) > 33 and payload[0] == 0:
+            image = {"hex": payload[1:33].hex(),
+                     "words": program_id_words(payload[1:33]),
+                     "from_tx": a["create_tx"], "from": a["category"]}
+            break
+    if image is None:
+        raise Fatal("no anchor in artifacts/agents.tsv carries a readable "
+                    "ImageID, so the shipped program cannot be identified from "
+                    "the chain and no settlement can be attributed")
+
+    # `spel`, if it is here, may only DISAGREE. It never contributes a
+    # character to the output, so its absence cannot change a single byte.
+    recomputed = spel_recomputed_image(binary)
+    if recomputed is not None and recomputed != image["hex"]:
+        raise Fatal("`spel program-id` recomputes the committed binary's "
+                    "ImageID as %s, but the anchors on chain were made against "
+                    "%s. The repository ships a different program from the one "
+                    "enforcing these envelopes." % (recomputed, image["hex"]))
+
+    return {"deploy_tx": tx, "size": size, "confirm": c,
+            "image": image, "spel_agrees": recomputed is not None}
+
+
+def spel_recomputed_image(binary):
+    """ImageID recomputed locally from the ELF, or None if `spel` is absent.
+
+    A CROSS-CHECK ONLY. Its result may fail a run and may never be rendered:
+    text that depends on a local tool is text that differs between machines,
+    which is the bug this whole module now documents. Callers must treat None
+    as "no second opinion available", never as a fact worth printing.
     """
     try:
         out = subprocess.run(["spel", "program-id", binary],
@@ -425,10 +517,7 @@ def spel_program_id(binary):
     if out.returncode != 0:
         return None
     m = re.search(r"ImageID \(hex bytes\):\s*([0-9a-f]{64})", out.stdout)
-    if not m:
-        return None
-    raw = bytes.fromhex(m.group(1))
-    return {"hex": m.group(1), "words": program_id_words(raw), "raw": raw}
+    return m.group(1) if m else None
 
 
 # --------------------------------------------------------------------------
@@ -454,13 +543,9 @@ class Doc:
         return "\n".join(self.lines).rstrip() + "\n"
 
 
-def section_program(chain, root, agents):
+def section_program(chain, root, agents, ident):
     d = Doc()
-    binary = os.path.join(root, "artifacts/programs/agent_verifier.bin")
-    transfer = os.path.join(root, "artifacts/programs/authenticated_transfer.bin")
-
-    tx, size = deploy_tx_of(binary)
-    c = confirm(chain, tx)
+    tx, size, c = ident["deploy_tx"], ident["size"], ident["confirm"]
 
     d("Every figure in this section was fetched by "
       "`./scripts/submission-evidence.py` at generation time. Nothing in it is "
@@ -479,7 +564,6 @@ def section_program(chain, root, agents):
     d("| bytes found in block | %d, and in neither %s |"
       % (c["block"], " nor ".join(str(n) for n in c["neighbours"])))
 
-    ident = spel_program_id(binary)
     owners = {}
     for a in agents:
         acct = chain.account(a["policy_account"])
@@ -487,31 +571,30 @@ def section_program(chain, root, agents):
         if any(w):
             owners.setdefault(tuple(w), []).append(a["category"])
 
-    if ident:
-        d("| ImageID recomputed from the committed binary | `%s` |" % ident["hex"])
-    if len(owners) == 1:
-        words = list(owners)[0]
-        d("| ProgramId owning every policy account below | `%s` |"
-          % ",".join(str(x) for x in words))
+    d("| the deployed bytes | the transaction embeds this repository's copy of "
+      "`agent_verifier.bin` verbatim |")
+    d("| shipped ImageID, read off the on-chain `%s` anchor | `%s` |"
+      % (ident["image"]["from"], ident["image"]["hex"]))
+    d("| its ProgramId | `%s` |"
+      % ",".join(str(x) for x in ident["image"]["words"]))
     d()
 
-    if ident and len(owners) == 1:
-        match = tuple(ident["words"]) == list(owners)[0]
-        d("The ImageID recomputed from the committed ELF and the `program_owner` "
-          "the chain reports for the anchored policy accounts %s. %s"
-          % ("agree" if match else "**disagree**",
-             "The binary in this repository is the program enforcing these "
-             "envelopes on chain."
-             if match else
-             "**The repository ships a different program from the one that owns "
-             "these accounts.**"))
+    if len(owners) == 1 and list(owners)[0] == tuple(ident["image"]["words"]):
+        d("Every step of that is a chain fact, and none of it depends on a tool "
+          "being installed. The deploy transaction is *derived* from the "
+          "committed bytes rather than quoted, it resolves, and it contains "
+          "those bytes — so the file in this repository is the program that was "
+          "deployed. The anchor transaction that created these policy accounts "
+          "names the ImageID it called, and `getAccount` reports that same "
+          "ProgramId as the `program_owner` of every one of them. **The binary "
+          "in this repository is the program enforcing these envelopes on "
+          "chain.**")
     elif len(owners) == 1:
-        words = list(owners)[0]
-        d("`spel` is not on PATH here, so the ImageID was not recomputed from the "
-          "committed ELF for this run; the ProgramId above is the "
-          "`program_owner` the chain reports for the anchored policy accounts, "
-          "which is a chain fact independent of any local tool. Run "
-          "`spel program-id artifacts/programs/agent_verifier.bin` to compare.")
+        raise Fatal(
+            "the anchors were made against ImageID %s but the policy accounts "
+            "are owned by %s"
+            % (ident["image"]["hex"],
+               ",".join(str(x) for x in list(owners)[0])))
     else:
         d("The policy accounts named in `artifacts/agents.tsv` are **not all "
           "owned by the same program** (%s). That means the manifest describes "
@@ -522,35 +605,36 @@ def section_program(chain, root, agents):
 
     # The callee. Not deployed by this repository, so the claim to check is
     # identity with the chain's own program, and the chain will state it.
-    tid = spel_program_id(transfer)
     named = chain.program_ids() or {}
     chain_transfer = named.get("authenticated_transfer")
-    if tid and chain_transfer:
-        agree = tid["words"] == list(chain_transfer)
+    # `program_owner` comes back as eight u32 words already, not as 32 bytes.
+    payee_owners = {tuple(chain.account(a["pay_account"]).get("program_owner") or [])
+                    for a in agents}
+    payee_owners.discard(())
+    payee_owners.discard(tuple([0] * 8))
+    if chain_transfer and payee_owners == {tuple(chain_transfer)}:
         d("`spend` moves no balance itself — LEZ rule 5 refuses any post-state "
           "that decreases the balance of an account the executing program does "
           "not own — so it chains a call into the authenticated transfer "
           "program, which does own them. "
           "`artifacts/programs/authenticated_transfer.bin` is committed because "
           "the circuit resolves the callee by ImageID; it is not deployed by "
-          "this repository. Its ImageID recomputes to "
-          "`%s`, and `getProgramIds` reports `authenticated_transfer` as "
-          "`%s` — %s."
-          % (",".join(str(x) for x in tid["words"]),
-             ",".join(str(x) for x in chain_transfer),
-             "the same program" if agree
-             else "**a different program, which is a defect**"))
-    elif chain_transfer:
-        d("`spend` chains a call into the authenticated transfer program, which "
-          "the chain reports as ProgramId `%s`. The committed copy's ImageID was "
-          "not recomputed for this run because `spel` is not on PATH here; "
-          "`spel program-id artifacts/programs/authenticated_transfer.bin` "
-          "compares them."
+          "this repository. `getProgramIds` reports `authenticated_transfer` as "
+          "`%s`, and that is exactly the `program_owner` the chain gives every "
+          "agent's receiving account — which is why the policy program cannot "
+          "move those balances itself and has to chain the call."
           % ",".join(str(x) for x in chain_transfer))
+    elif chain_transfer:
+        raise Fatal(
+            "`getProgramIds` reports authenticated_transfer as %s, but the "
+            "agents' receiving accounts are owned by %s — the callee this "
+            "document describes is not the one holding the money"
+            % (",".join(str(x) for x in chain_transfer),
+               "; ".join(",".join(str(x) for x in w) for w in sorted(payee_owners))))
     else:
-        d("`getProgramIds` did not report an `authenticated_transfer` entry on "
-          "this sequencer, so the callee's identity could not be confirmed "
-          "against the chain for this run.")
+        raise Fatal("`getProgramIds` did not report an `authenticated_transfer` "
+                    "entry on this sequencer, so the callee's identity cannot "
+                    "be confirmed and the chained-call claim is unsupported")
     d()
 
     seeds = policy_seeds(os.path.join(root, "idl/agent_verifier.idl.json"))
@@ -682,10 +766,13 @@ def section_agents(chain, root, agents, anchors):
     return d.text()
 
 
-def section_settlements(chain, root, agents, tasks):
+def section_settlements(chain, root, agents, tasks, ident):
     d = Doc()
-    current, _ = deploy_tx_of(os.path.join(root, "artifacts/programs/agent_verifier.bin"))
-    ident = spel_program_id(os.path.join(root, "artifacts/programs/agent_verifier.bin"))
+    # The shipped program's ProgramId, read off an on-chain anchor rather than
+    # recomputed locally: the superseded-versus-shipped labelling below is the
+    # strongest claim in this document and it must not depend on which tools a
+    # machine happens to have installed.
+    shipped = ident["image"]["words"]
     by_agent = {a["agent_id"]: a for a in agents}
     named = chain.program_ids() or {}
     transfer = list(named.get("authenticated_transfer") or [])
@@ -742,7 +829,7 @@ def section_settlements(chain, root, agents, tasks):
             # manifest. One under a superseded program charges a PDA the
             # redeploy moved, so its address differs for a reason the chain
             # states -- that gets written down below, not treated as a bug.
-            if (client and ident and under == ident["words"]
+            if (client and under == shipped
                     and client["policy_account"] != ledger_account):
                 mismatches.append(
                     "%s charges policy account %s under the current program, but "
@@ -794,8 +881,8 @@ def section_settlements(chain, root, agents, tasks):
             % (i, c["tx"], c["block"],
                " nor ".join(str(n) for n in c["neighbours"]),
                r["updates"], "" if r["updates"] == 1 else "s"))
-        if r["under"] is not None and ident:
-            same = r["under"] == ident["words"]
+        if r["under"] is not None:
+            same = r["under"] == shipped
             notes.append(
                 "  The envelope it charged, `%s`, is owned by ProgramId `%s`, "
                 "which %s the program this repository ships. %s"
@@ -808,14 +895,6 @@ def section_settlements(chain, root, agents, tasks):
                    "no longer exists under the program deployed today. It is a "
                    "real transaction and it resolves on the explorer, but it is "
                    "not evidence about the program in this repository."))
-        elif r["under"] is not None:
-            notes.append(
-                "  The envelope it charged, `%s`, is owned by ProgramId `%s`. "
-                "`spel` is not on PATH here, so that was not compared against "
-                "the committed ELF on this run; "
-                "`spel program-id artifacts/programs/agent_verifier.bin` "
-                "compares them."
-                % (r["ledger_account"], ",".join(str(x) for x in r["under"])))
         else:
             notes.append(
                 "  Its post-state contains no 97-byte policy record, so the "
@@ -833,7 +912,7 @@ def section_settlements(chain, root, agents, tasks):
     d()
 
     orphans = sum(1 for r in rows
-                  if r["under"] is not None and ident and r["under"] != ident["words"])
+                  if r["under"] is not None and r["under"] != shipped)
     if orphans:
         d("**%d of the %d settlements above predate the program this repository "
           "ships.** They are kept because they are on chain and a reviewer will "
@@ -887,10 +966,15 @@ def render(chain, root):
         raise Fatal("the cannot-exist control hash returned a transaction; this "
                     "sequencer's answers carry no information")
 
+    # Established once, from the chain, and handed to both sections that need
+    # it. Two sections deriving it separately is two chances to derive it
+    # differently.
+    ident = shipped_identity(chain, root, agents)
+
     return {
-        "program": section_program(chain, root, agents),
+        "program": section_program(chain, root, agents, ident),
         "agents": section_agents(chain, root, agents, anchors),
-        "settlements": section_settlements(chain, root, agents, tasks),
+        "settlements": section_settlements(chain, root, agents, tasks, ident),
     }
 
 
