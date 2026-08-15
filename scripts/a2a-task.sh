@@ -21,11 +21,20 @@ RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
 SPEL="${SPEL_BIN:-spel}"
 IDL=idl/agent_verifier.idl.json
 PROGRAM=artifacts/programs/agent_verifier.bin
+# The transfer program the settlement chains into. It is not called by name: the
+# policy program derives the callee from the agent account's own `program_owner`,
+# so this file only has to be *present* for the privacy circuit to compose the
+# inner call — `ProgramWithDependencies` looks the callee up by ImageID and fails
+# with `UndeclaredProgramDependency` if it is missing. Byte-identical to the one
+# the sequencer runs: ImageID 22c496fe… = the `authenticated_transfer` id the
+# chain reports from `getProgramIds`.
+AUTH_TRANSFER=artifacts/programs/authenticated_transfer.bin
 AGENTS=artifacts/agents.tsv
 CARDS=artifacts/agent-cards
 OUT="${A2A_MANIFEST:-artifacts/a2a-task.tsv}"
 
 [ -f "$AGENTS" ] || { echo "run scripts/deploy-agents.sh first" >&2; exit 1; }
+[ -f "$AUTH_TRANSFER" ] || { echo "missing $AUTH_TRANSFER" >&2; exit 1; }
 mkdir -p "$CARDS" artifacts
 
 field() { awk -F'\t' -v c="$1" -v n="$2" 'NR>1 && $1==c {print $n}' "$AGENTS"; }
@@ -33,10 +42,22 @@ field() { awk -F'\t' -v c="$1" -v n="$2" 'NR>1 && $1==c {print $n}' "$AGENTS"; }
 CLIENT_CAT=blockchain          # has the largest envelope, so it pays
 SERVER_CAT=storage             # advertises a skill and gets paid
 
-CLIENT_ID=$(field $CLIENT_CAT 2);  CLIENT_POLICY=$(field $CLIENT_CAT 3)
-CLIENT_PER_TX=$(field $CLIENT_CAT 4); CLIENT_PER_PERIOD=$(field $CLIENT_CAT 5)
-CLIENT_PERIOD=$(field $CLIENT_CAT 6)
+CLIENT_ID=$(field $CLIENT_CAT 2);  CLIENT_POLICY=$(field $CLIENT_CAT 4)
+CLIENT_PER_TX=$(field $CLIENT_CAT 5); CLIENT_PER_PERIOD=$(field $CLIENT_CAT 6)
+CLIENT_PERIOD=$(field $CLIENT_CAT 7)
 SERVER_ID=$(field $SERVER_CAT 2)
+SERVER_PAY=$(field $SERVER_CAT 3)
+[ -n "$SERVER_PAY" ] || { echo "the server agent has no receiving account in $AGENTS" >&2; exit 1; }
+
+# Read a balance straight off the chain. Only public accounts are readable this
+# way — a private account is a commitment in the private state and `getAccount`
+# answers with the default account for it — which is exactly why the agent being
+# paid is paid into a public account.
+balance_of() {
+  curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$1\"]}" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['balance'])"
+}
 
 PRICE=25                       # inside the client's per-transaction limit of 200
 
@@ -70,17 +91,18 @@ cat > "$CARDS/$SERVER_CAT.json" <<JSON
   ],
   "x-logos": {
     "lezAccount": "$SERVER_ID",
+    "paymentAccount": "Public/$SERVER_PAY",
     "pricePerTask": $PRICE,
-    "settlement": "lez-shielded-transfer"
+    "settlement": "lez-chained-authenticated-transfer"
   }
 }
 JSON
 echo "  published $CARDS/$SERVER_CAT.json"
-python3 -c "import json;d=json.load(open('$CARDS/$SERVER_CAT.json'));print('  skill:',d['skills'][0]['id'],' price:',d['x-logos']['pricePerTask'],'LEZ')"
+python3 -c "import json;d=json.load(open('$CARDS/$SERVER_CAT.json'));print('  skill:',d['skills'][0]['id'],' price:',d['x-logos']['pricePerTask'],'LEZ',' pay to:',d['x-logos']['paymentAccount'])"
 
 rule "2. the client agent discovers it and accepts the price"
 echo "  client  $CLIENT_ID  ($CLIENT_CAT, per-tx limit $CLIENT_PER_TX)"
-echo "  server  $SERVER_ID  ($SERVER_CAT)"
+echo "  server  $SERVER_ID  ($SERVER_CAT), paid at Public/$SERVER_PAY"
 echo "  task    storage.upload at $PRICE LEZ"
 if [ "$PRICE" -le "$CLIENT_PER_TX" ]; then
   echo "  inside the client's anchored envelope: no owner approval needed"
@@ -130,9 +152,10 @@ MARKER=$(cargo run --quiet --release -p agent-policy-core --example spend-marker
   "$CLIENT_POLICY" "$RECIP_HEX" "$PRICE" "$NONCE")
 echo "  nonce  $NONCE"
 echo "  marker $MARKER"
-# KNOWN ISSUE — a repeat settlement does not currently land. See
-# docs/limitations.md; do not present a resubmitted hash as a payment without
-# checking it on chain first, which is what the confirmation gate below is for.
+
+# The balance that has to move, read off the chain before anything is signed.
+BEFORE=$(balance_of "$SERVER_PAY")
+echo "  server balance before: $BEFORE"
 
 # The settlement is signed by the CLIENT AGENT, not by the owner — that is what
 # "without owner intervention" means here — so point the wallet at the agent's
@@ -141,15 +164,28 @@ AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
 export LEE_WALLET_HOME_DIR="$AGENT_HOMES/$CLIENT_CAT"
 export NSSA_WALLET_HOME_DIR="$AGENT_HOMES/$CLIENT_CAT"
 echo "  signing from $LEE_WALLET_HOME_DIR"
-# `spend` is the autonomous instruction and takes two accounts, policy and
-# agent. It deliberately does not take an approval account: declaring one it
-# never reads is what made every settlement after the first fail to build.
-# An above-threshold payment calls `spend_approved` instead, with the marker.
-# `recipient` is now an ACCOUNT, not a 32-byte argument. That is the whole
-# difference between authorising a payment and making one: the program cannot
-# credit an account it was never handed.
+# `spend` is the autonomous instruction and takes three accounts: the anchored
+# policy, the agent that pays, and the account paid. It deliberately does not
+# take an approval account — declaring one it never reads is what made every
+# settlement after the first fail to build. An above-threshold payment calls
+# `spend_approved` instead, with the marker.
+#
+# `spend` moves nothing itself. It cannot: LEZ rule 5 refuses a post-state that
+# debits an account the executing program does not own, and the agent's account
+# belongs to the transfer program. So the policy check gates a CHAINED CALL into
+# that program, and `--bin-auth-transfer` is how its ELF reaches the circuit that
+# has to prove the inner call. Without it the build stops at
+# `UndeclaredProgramDependency` rather than producing a payment that isn't one.
+#
+# The payer is shielded and the payee is public, and that asymmetry is forced:
+# `spel` resolves `Private/<id>` only for accounts the *signing* wallet holds
+# keys for, so one agent cannot name another's private account without holding
+# its spending key. The payee's public account is what its Agent Card
+# advertises, and it is also the only reason this payment is checkable from
+# outside with `getAccount`.
 OUT_TXT=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
-  -- spend --agent "Private/$CLIENT_ID" --recipient "Private/$SERVER_ID" \
+  --bin-auth-transfer "$AUTH_TRANSFER" \
+  -- spend --agent "Private/$CLIENT_ID" --recipient "Public/$SERVER_PAY" \
   --policy-hash "$CLIENT_POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
   --per-tx "$CLIENT_PER_TX" --per-period "$CLIENT_PER_PERIOD" --period-blocks "$CLIENT_PERIOD" \
   --amount "$PRICE" --spent-this-period 0 2>&1)
@@ -181,9 +217,32 @@ if [ "$LANDED" -eq 0 ]; then
   exit 1
 fi
 
-printf 'task_id\tclient\tserver\tskill\tprice\tnonce\tsettlement_tx\n' > "$OUT"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$TASK_ID" "$CLIENT_ID" "$SERVER_ID" storage.upload "$PRICE" "$NONCE" "$TX" >> "$OUT"
+rule "6. the money actually moved"
+# An included transaction is still not a payment. Earlier versions of this
+# instruction produced a real, confirmed, on-chain proof that a policy PERMITTED
+# 25 LEZ and moved nothing, and it was written up as a settlement. So the last
+# word belongs to the balance, read from the chain, not to the transaction hash.
+AFTER=$(balance_of "$SERVER_PAY")
+DELTA=$((AFTER - BEFORE))
+echo "  Public/$SERVER_PAY  $BEFORE -> $AFTER  (delta $DELTA, price $PRICE)"
+if [ "$DELTA" -ne "$PRICE" ]; then
+  echo "  THE BALANCE DID NOT MOVE BY THE PRICE — refusing to record a payment" >&2
+  echo "  the manifest is left untouched" >&2
+  exit 1
+fi
+echo "  the recipient is $PRICE LEZ richer, and no owner signed anything"
+
+# Appended, not overwritten. One settlement is a demonstration; a second one on
+# top of it is the part that was missing, so the manifest has to be able to hold
+# both. A run that does not confirm never reaches this line, so nothing
+# unconfirmed can accumulate here.
+HEADER='task_id	client	server	server_pay_account	skill	price	nonce	settlement_tx	balance_before	balance_after'
+if [ ! -s "$OUT" ] || [ "$(head -n1 "$OUT")" != "$HEADER" ]; then
+  printf '%s\n' "$HEADER" > "$OUT"
+fi
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$TASK_ID" "$CLIENT_ID" "$SERVER_ID" "$SERVER_PAY" storage.upload "$PRICE" "$NONCE" "$TX" \
+  "$BEFORE" "$AFTER" >> "$OUT"
 echo
 echo "manifest: $OUT"
 echo "explorer: https://explorer.testnet.lez.logos.co/transaction/$TX"
