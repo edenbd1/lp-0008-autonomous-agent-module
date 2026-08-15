@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 export RISC0_DEV_MODE=0
 
 RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
-DEPLOY_TX=8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe
+DEPLOY_TX=a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e
 IMPOSSIBLE=dededededededededededededededededededededededededededededededede
 # The previous deployment, kept here because the attack that it accepted is the
 # evidence that the defect was real. See section 5.

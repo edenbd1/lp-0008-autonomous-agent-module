@@ -9,10 +9,11 @@
 # demonstrated, reproducible deployment and evidence provided". This is that,
 # and it writes a manifest so the evidence is a file rather than a screenshot.
 #
-# Each agent gets its own shielded account and its own policy. The policies
-# differ deliberately: identical limits would produce the same policy hash for
-# the same owner, and the point of anchoring by address is easier to see when
-# three different envelopes give three different addresses.
+# Each agent gets its own shielded account and its own policy. There is exactly
+# one policy account per agent — its address is PDA(program, ["agent-policy/v1",
+# agent_id]) and nothing else — so anchoring is a once-per-agent act and the
+# envelopes below differ because the agents do different work, not because
+# different limits would give different addresses. They no longer would.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
@@ -30,29 +31,37 @@ SIGNER_HOME="${LEE_WALLET_HOME_DIR:-$HOME/.lez-wallet}"
 IDL=idl/agent_verifier.idl.json
 PROGRAM=artifacts/programs/agent_verifier.bin
 MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
-# Anchoring is single-use by design: create_policy is declared #[account(init)]
-# and init refuses to overwrite. Once an agent is funded its identity is stable,
-# so a second run derives the same policy hash and is correctly refused. Without
-# a record of what was already anchored, that correct refusal looks identical to
-# a failure and wipes the entry out of the manifest.
+# Anchoring is single-use by design, and now once per AGENT rather than once per
+# (owner, agent, limits): create_policy is declared #[account(init)] on an
+# address derived from the agent alone, and init refuses an account that already
+# exists. That is the whole of the fix for the anchoring bypass — a second
+# policy for an agent is not detected, it has nowhere to go. It also means a
+# second run of this script is correctly refused, and without a record of what
+# was already anchored that correct refusal looks identical to a failure and
+# wipes the entry out of the manifest.
 LEDGER="${LEDGER:-artifacts/anchored.tsv}"
-[ -f "$LEDGER" ] || printf 'program\tpolicy_hash\tcreate_tx\n' > "$LEDGER"
-# Keyed by (program, policy_hash), not by policy_hash alone. A policy account is
-# a PDA of the *program*, so redeploying the program moves every policy to a new
-# address that has never been initialised. A ledger keyed on the hash alone would
-# report those as already anchored and skip the anchoring the new program needs.
-anchored_tx() { awk -F'\t' -v p="$1" -v h="$2" 'NR>1 && $1==p && $2==h {print $3; exit}' "$LEDGER"; }
+[ -f "$LEDGER" ] || printf 'program\tagent_id\tcreate_tx\n' > "$LEDGER"
+# Keyed by (program, agent), not by agent alone. A policy account is a PDA of the
+# *program*, so redeploying the program moves every policy to a new address that
+# has never been initialised. A ledger keyed on the agent alone would report
+# those as already anchored and skip the anchoring the new program needs.
+anchored_tx() { awk -F'\t' -v p="$1" -v a="$2" 'NR>1 && $1==p && $2==a {print $3; exit}' "$LEDGER"; }
 # Each agent is funded so it can pay for real; spend moves balance, not just proof.
 FUND_AMOUNT="${FUND_AMOUNT:-40}"
 
 mkdir -p artifacts
 : > "$MANIFEST"
-# `owner` is the last column and it is not decoration: the policy hash commits
-# to sha256(owner base58), so anything that wants to CALL spend has to know
-# which account anchored the policy. Without it in the manifest the settlement
-# has to guess, and a wrong guess produces a policy hash that does not match the
-# anchored one — error 6001, from a script that looks correct.
-printf 'category\tagent_id\tpay_account\tpolicy_hash\tper_tx\tper_period\tperiod_blocks\tcreate_tx\towner\n' >> "$MANIFEST"
+# `policy_account` replaces the old `policy_hash` column, and that is the change
+# rather than a rename: there is no policy hash any more. The account's address
+# is derived from the agent, so this column is a fact a reader can check with
+# getAccount rather than a digest they have to recompute — and the limits beside
+# it are only a copy of what that account's data says.
+#
+# `owner` stays, and it is no longer needed to CALL anything: `spend` derives the
+# policy address from the paying account and reads the owner out of it. It is
+# here so a reader can check the on-chain record against the account that
+# actually signed the anchor.
+printf 'category\tagent_id\tpay_account\tpolicy_account\tper_tx\tper_period\tperiod_blocks\tcreate_tx\towner\n' >> "$MANIFEST"
 
 confirmed() {
   curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
@@ -80,12 +89,10 @@ new_agent() {
 }
 
 # An account id, base58 as the wallet prints it, as the 32 raw bytes the chain
-# holds. This is not cosmetic and it is not the old sha256(base58) label: the
-# program now compares `owner_id` against the id of the account that SIGNED and
-# `agent_id` against the id of the account that PAYS, so both have to be the
-# account itself. A hash of the printed form is unverifiable on chain, which is
-# exactly how an agent used to be able to anchor a policy naming an owner that
-# did not exist.
+# holds. `agent_id` is the PDA seed of the policy account, so these bytes are the
+# address: get them wrong and `create_policy` anchors somewhere no `spend` will
+# ever look. The owner needs no such conversion any more — `create_policy` takes
+# no owner argument at all and records the account that signed.
 id_hex() {
   python3 -c "
 import sys
@@ -248,9 +255,9 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   # and 8051). Fresh signers are passed below because they are unambiguous;
   # `SIGNER` may be reused if it is program-owned.
   local signer="${6:-$SIGNER}"
-  local OWNER_HEX; OWNER_HEX=$(id_hex "$signer")
   echo "  owner  $signer"
-  echo "         committed into this policy hash as $OWNER_HEX"
+  echo "         create_policy takes no owner argument: this account signs, and"
+  echo "         the program writes the signer's own id into the policy record"
   echo "[$cat] new shielded account"
   local seed; seed=$(new_agent "$cat")
   if [ -z "$seed" ]; then echo "  FAILED to create an account" >&2; return 1; fi
@@ -265,18 +272,19 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   if [ -z "$pay" ]; then echo "  FAILED to open a receiving account" >&2; return 1; fi
   echo "  pays into Public/$pay  (advertised in its Agent Card)"
 
-  # Same again for the agent, and for the same reason: `spend` compares this
-  # against the id of the account presenting itself as the payer, so a policy
-  # anchored for one agent cannot be borrowed by another.
+  # The agent's id as the 32 bytes the chain holds. This is the policy account's
+  # PDA seed, so it is the address rather than a label.
   local agent_hex; agent_hex=$(id_hex "$agent")
 
-  # The policy hash is computed by the same code the on-chain program runs, so
-  # a mismatch here would be caught by create_policy rather than silently
-  # producing an account nobody can spend against.
-  local policy_hash; policy_hash=$(cargo run --quiet --release -p agent-policy-core --example policy-hash -- \
-      "$OWNER_HEX" "$agent_hex" "$per_tx" "$per_period" "$period" 2>/dev/null)
-  if [ -z "$policy_hash" ]; then echo "  FAILED to compute the policy hash" >&2; return 1; fi
-  echo "  policy $policy_hash  (per-tx $per_tx, per-period $per_period, window $period blocks)"
+  # And the address itself, resolved by `spel` from the published IDL rather than
+  # recomputed here. There is exactly one of these per agent, which is why a
+  # second anchor cannot exist: `init` refuses an account that is already there.
+  local policy_account
+  policy_account=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
+      pda policy --agent-id "$agent_hex" 2>/dev/null | tail -n1)
+  if [ -z "$policy_account" ]; then echo "  FAILED to resolve the policy account" >&2; return 1; fi
+  echo "  policy $policy_account  (per-tx $per_tx, per-period $per_period, window $period blocks)"
+  echo "         one account per agent; the limits are its data, not its address"
 
   # Resync the owner before proving. Funding this agent just changed the
   # owner's account on chain, and create_policy is proved against the wallet's
@@ -293,8 +301,7 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   # rewrites the stored state, which is what makes the next anchor provable.
   "$WALLET" account get --account-id "Public/$signer" </dev/null >/dev/null 2>&1
   local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
-    -- create_policy --owner "Public/$signer" \
-    --policy-hash "$policy_hash" --owner-id "$OWNER_HEX" --agent-id "$agent_hex" \
+    -- create_policy --owner "Public/$signer" --agent-id "$agent_hex" \
     --per-tx "$per_tx" --per-period "$per_period" --period-blocks "$period" 2>&1)
   local rc=$?
   local tx; tx=$(echo "$out" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
@@ -307,13 +314,13 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
     echo "$out" | grep -E "NOT confirmed|error|Error" | head -3 | sed 's/^/    /' >&2
   fi
   if [ -z "$tx" ]; then
-    # Before calling this a failure, ask whether this exact policy is already
-    # anchored from an earlier run. If it is, that refusal is init doing its job.
-    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$policy_hash")
+    # Before calling this a failure, ask whether this agent is already anchored
+    # from an earlier run. If it is, that refusal is init doing its job.
+    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$agent")
     if [ -n "$prior" ] && confirmed "$prior"; then
       echo "  create_policy $prior  already anchored (init refused a second one)"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
+        "$cat" "$agent" "$pay" "$policy_account" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
       echo
       return 0
     fi
@@ -326,18 +333,18 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   for _ in $(seq 1 24); do sleep 30; confirmed "$tx" && break; done
   if confirmed "$tx"; then
     echo "  create_policy $tx  landed"
-    printf '%s\t%s\t%s\n' "$DEPLOY_TX" "$policy_hash" "$tx" >> "$LEDGER"
+    printf '%s\t%s\t%s\n' "$DEPLOY_TX" "$agent" "$tx" >> "$LEDGER"
   else
     # A policy that is already anchored does not make spel fail: init refuses
     # inside the program, so the transaction is built, submitted, given a hash,
     # and then simply never lands — the same shape as every other failure on
     # this chain. So the ledger has to be consulted here, on the unconfirmed
     # path, and not only when spel submitted nothing.
-    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$policy_hash")
+    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$agent")
     if [ -n "$prior" ] && confirmed "$prior"; then
       echo "  create_policy $prior  already anchored (init refused a second one)"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
+        "$cat" "$agent" "$pay" "$policy_account" "$per_tx" "$per_period" "$period" "$prior" "$signer" >> "$MANIFEST"
       echo
       return 0
     fi
@@ -345,7 +352,7 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$tx" "$signer" >> "$MANIFEST"
+    "$cat" "$agent" "$pay" "$policy_account" "$per_tx" "$per_period" "$period" "$tx" "$signer" >> "$MANIFEST"
   echo
 }
 
@@ -359,9 +366,9 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
 # transaction is built with a stale nonce, submitted, given a hash, and then
 # silently dropped. Nothing reports it. Make three more the same way if you are
 # re-anchoring — the ids below are only useful to a wallet that holds their keys.
-deploy_agent storage    50   500  1000  10  5SbpPMeLbjsA1FZ4SKasmFi9V2xghZfq7TAZQjb1Qzmc
-deploy_agent messaging  25   250  1000  10  7qq3wppDveZo8eHM26k4g7SLD3juZaJPAEHK7bigbwk6
-deploy_agent blockchain 200 1000  1000  30  FF8HZ8d38chXGDoZ1VV1pKBkoFx4QqyLwDsRjzEbngy9
+deploy_agent storage    50   500  1000  10  149XhNKgoGmXoHfUSvpk93giP7FTK23YByZ3QenSYnoF
+deploy_agent messaging  25   250  1000  10  6Bt7jcHBaqocf4TyGifCUw86U3fEvCAR5emzRJdaUfA3
+deploy_agent blockchain 200 1000  1000  30  Bf4MG9AWypDXikj3uN5Q5hnJFNMGavFcsXGPQ2vbs6Du
 
 echo "manifest: $MANIFEST"
 column -t -s$'\t' "$MANIFEST" 2>/dev/null || cat "$MANIFEST"
