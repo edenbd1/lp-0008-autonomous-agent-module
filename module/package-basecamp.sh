@@ -61,6 +61,53 @@ if [ -z "$plugin" ]; then
     exit 1
 fi
 
+# The third way a package is wrong, and the only one of the three that is
+# invisible even to a reviewer who unpacks it: the binary loads perfectly and is
+# built from source nobody has read. This repository shipped that too — an
+# `agent.lgx` packaged at f53f822 stayed committed across five commits to
+# module/src, so the downloadable artefact was missing content-topic identifier
+# validation, the owner-channel hardening, `program.call`'s flag-value checking
+# and task persistence, while README §7 offered it as the loadable asset. Every
+# check in this script passed on it, because every one of them was true.
+#
+# Nothing here can tell what source a binary was built from. What it can tell is
+# whether the build directory it is being handed is older than the source, which
+# is how the stale package got made: package a build tree nobody rebuilt. mtime
+# is a weak signal in general and an exact one for this — CMake relinks on any
+# source it is newer than, so a source newer than the plugin means the plugin
+# does not contain it.
+newer="$(find "$here/src" "$here/generated_code" "$here/metadata.json" \
+              "$here/agent_module_plugin_export.h" \
+              -newer "$plugin" -type f 2>/dev/null || true)"
+if [ -n "$newer" ]; then
+    echo "  FAIL  the plugin in $build is older than the source it is built" >&2
+    echo "        from, so this package would ship code nobody wrote:" >&2
+    printf '%s\n' "$newer" | sed "s|^$here/|          module/|" >&2
+    echo "        rebuild first:  cmake --build $build" >&2
+    exit 1
+fi
+echo "  ok    the plugin is newer than every source it is built from"
+
+# The other way a package loads nowhere: built against a Qt the host does not
+# have. Basecamp's bundled Qt is a ceiling, not a floor, and a Homebrew build
+# additionally hardcodes /opt/homebrew/... as its library paths, which resolve
+# on this machine and on no other. An official Qt references @rpath.
+if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
+    qtrefs="$(otool -L "$plugin" | awk '/Qt[A-Za-z]*\.framework/ {print $1, $NF}')"
+    if [ -z "$qtrefs" ]; then
+        echo "  FAIL  the plugin references no Qt frameworks at all" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$qtrefs" | grep -qv '^@rpath/'; then
+        echo "  FAIL  a Qt framework is referenced by absolute path, so it" >&2
+        echo "        resolves only on this machine — see docs/basecamp.md:" >&2
+        printf '%s\n' "$qtrefs" | grep -v '^@rpath/' >&2
+        exit 1
+    fi
+    echo "  ok    Qt is referenced through @rpath, version(s):" \
+         "$(printf '%s\n' "$qtrefs" | tr -d ')' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
+fi
+
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/$variant"
@@ -154,26 +201,6 @@ for variant, main in sorted(mains.items()):
 if failures:
     sys.exit("\n".join("  FAIL  " + f for f in failures))
 PY
-
-# The other way a package loads nowhere: built against a Qt the host does not
-# have. Basecamp's bundled Qt is a ceiling, not a floor, and a Homebrew build
-# additionally hardcodes /opt/homebrew/... as its library paths, which resolve
-# on this machine and on no other. An official Qt references @rpath.
-if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
-    qtrefs="$(otool -L "$plugin" | awk '/Qt[A-Za-z]*\.framework/ {print $1, $NF}')"
-    if [ -z "$qtrefs" ]; then
-        echo "  FAIL  the plugin references no Qt frameworks at all" >&2
-        exit 1
-    fi
-    if printf '%s\n' "$qtrefs" | grep -qv '^@rpath/'; then
-        echo "  FAIL  a Qt framework is referenced by absolute path, so it" >&2
-        echo "        resolves only on this machine — see docs/basecamp.md:" >&2
-        printf '%s\n' "$qtrefs" | grep -v '^@rpath/' >&2
-        exit 1
-    fi
-    echo "  ok    Qt is referenced through @rpath, version(s):" \
-         "$(printf '%s\n' "$qtrefs" | tr -d ')' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
-fi
 
 "$lgx" verify "$out"
 "$lgx" manifest "$out"
