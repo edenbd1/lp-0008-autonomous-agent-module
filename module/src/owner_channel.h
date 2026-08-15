@@ -3,11 +3,8 @@
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <optional>
 #include <string>
 #include <vector>
-
-#include "agent_module_interface.h"
 
 /**
  * @brief The owner channel: the agent asks, the owner answers, over Logos
@@ -77,7 +74,7 @@ inline constexpr const char *kInboundListenerName = "onChannelMessageReceived";
 /// `onChannelMessageReceived`, then match that same string against `eventType`,
 /// and nothing ever fires. The channel sends perfectly and never hears a word,
 /// which looks exactly like an owner who never answered — and this class would
-/// dutifully report `SpendOutcome::OwnerUnreachable`, a wrong answer that reads
+/// dutifully report the owner as unreachable — a wrong answer that reads
 /// like a right one. Hence two constants, and @ref parseInboundEvent matches the
 /// second.
 inline constexpr const char *kInboundEventType = "channel_message_received";
@@ -107,7 +104,14 @@ bool parseInboundEvent(const std::string &eventJson,
 /// `amount` is a decimal string because the chain's amounts are `u128`, which no
 /// JSON number can hold; passing it as text keeps the agent, the owner's app and
 /// the transaction builder looking at the same digits.
-struct SpendRequest {
+///
+/// Named for the exchange it belongs to, not for the payment: `wallet_skills.h`
+/// already has a `SpendRequest`, which is the *other* half — what goes to the
+/// policy program once there is something to submit. Two different structs of
+/// the same name in one namespace is not a warning, it is a silent ODR
+/// violation, and both headers now live in one library target, so the two halves
+/// of the approval path could never have been included together.
+struct ApprovalRequest {
     /// Correlation id: a name for *these terms*, unique for the life of the
     /// channel. Answers are matched on it.
     std::string id;
@@ -163,21 +167,23 @@ struct ApprovalDecision {
 
     bool approved() const { return verdict == ApprovalVerdict::Approved; }
 
-    /// The `SpendOutcome` the module must report, where the interface's enum can
-    /// say it honestly.
+    /// The state the prize calls "the owner could not be reached": terminal, and
+    /// never a fallback to acting alone. "Above-threshold transactions that fail
+    /// to reach the owner for approval are not executed — the agent retries
+    /// notification before timing out and reports the failure."
     ///
     /// `Unreachable`, `ChannelUnavailable` and `Refused` all mean the same thing
-    /// to the caller — no valid approval arrived, so nothing is submitted — and
-    /// `OwnerUnreachable` is the enum's terminal no-submit value. The three stay
-    /// distinct in @ref verdict because an operator needs to know whether the
-    /// node was down, the owner was away, or someone was answering with altered
-    /// terms.
+    /// to a caller holding an above-threshold payment: no valid approval arrived,
+    /// so nothing is submitted. They stay distinct in @ref verdict because an
+    /// operator needs to know whether the node was down, the owner was away, or
+    /// somebody was answering with altered terms.
     ///
-    /// `Approved` and `Denied` return nothing on purpose. An approval only
-    /// unlocks the `spend_approved` path; `ApprovedAndSubmitted` belongs to
-    /// whoever watched the transaction land, and claiming it here would report a
-    /// payment that has not happened. The enum has no value for a refusal at all.
-    std::optional<SpendOutcome> outcome() const;
+    /// It is deliberately false for `Approved`. An approval unlocks the
+    /// `spend_approved` path and nothing more: whether the payment happened is
+    /// the chain's answer, given to whoever watched the transaction land, and
+    /// reporting it from here would announce a payment that has not been made.
+    /// It is false for `Denied` too — the owner was reached and said no.
+    bool ownerUnreachable() const;
 
     /// Same shape as the skills return, so a caller — or the owner's app — can
     /// branch without knowing what produced it. Deliberately no `ok` field: a
@@ -263,12 +269,12 @@ public:
     std::string open();
 
     /// Ask the owner, wait, and answer with what actually happened.
-    ApprovalDecision requestApproval(const SpendRequest &request);
+    ApprovalDecision requestApproval(const ApprovalRequest &request);
 
     /// The exact bytes @ref requestApproval puts on the wire. Exposed so the
     /// owner-side app can be written against the same document, and so a test can
     /// read what was sent rather than trust that something was.
-    static std::string encodeRequest(const SpendRequest &request,
+    static std::string encodeRequest(const ApprovalRequest &request,
                                      const std::string &agentAccount,
                                      std::int64_t expiresAtMs);
 
