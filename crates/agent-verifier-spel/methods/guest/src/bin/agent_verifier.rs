@@ -138,21 +138,76 @@ mod agent_verifier {
         Ok(SpelOutput::execute(vec![approval, policy, owner], vec![]))
     }
 
-    /// The agent spends.
+    /// The agent spends inside its envelope, alone.
     ///
-    /// Below the threshold this needs nothing but the anchored policy. Above it,
-    /// the caller must present the approval account the owner created, and it is
-    /// checked to be owned by this program — an account merely *existing* at the
-    /// right address proves nothing, since anyone can fund an address.
+    /// This instruction does not take an approval account, and that is the
+    /// point. An earlier version declared one for both paths and passed
+    /// whatever the caller handed over on the autonomous path. It could not
+    /// work: SPEL requires one returned account per declared account, while the
+    /// privacy circuit counts *distinct* identities and accepts two. Declaring
+    /// three and naming a never-initialised PDA fails with `Invalid
+    /// account_identities length, left: 3, right: 2`; passing the policy
+    /// account twice to collapse them fails with `Pre-state account IDs are not
+    /// unique`. Both happen while building the transaction, so nothing reaches
+    /// the chain and no explorer shows a reason.
+    ///
+    /// An above-threshold payment goes to `spend_approved`, which declares the
+    /// approval account because it actually reads it.
     ///
     /// Accounts:
     /// - `policy` (PDA seeded by `policy_hash`): the anchored limits.
-    /// - `approval` (PDA seeded by `marker_seed`): the owner's authorisation.
-    ///   For an autonomous spend the caller passes the same policy account here
-    ///   and `requires_approval` is false.
     /// - `agent` (signer): the agent's own shielded account.
     #[instruction]
     pub fn spend(
+        #[account(pda = arg("policy_hash"))]
+        policy: AccountWithMetadata,
+        #[account(signer)]
+        agent: AccountWithMetadata,
+        policy_hash: [u8; 32],
+        owner_id: [u8; 32],
+        agent_id: [u8; 32],
+        per_tx: u128,
+        per_period: u128,
+        period_blocks: u64,
+        amount: u128,
+        spent_this_period: u128,
+    ) -> SpelResult {
+        let pol =
+            agent_policy_core::SpendPolicy { per_tx, per_period, period_blocks };
+        let expected = agent_policy_core::compute_policy_hash(&owner_id, &agent_id, &pol);
+        if expected != policy_hash {
+            return Err(SpelError::custom(
+                E_POLICY_MISMATCH,
+                "policy_hash does not commit to these limits",
+            ));
+        }
+        if policy.account.program_owner == nssa_core::program::DEFAULT_PROGRAM_ID {
+            return Err(SpelError::custom(
+                E_POLICY_NOT_ANCHORED,
+                "no policy is committed for these limits",
+            ));
+        }
+        // Refuse rather than silently fall through: an agent that is over its
+        // limit must be told to go and get an approval, not handed a success.
+        if !pol.is_autonomous(amount, spent_this_period) {
+            return Err(SpelError::custom(
+                E_OVER_PER_TX_LIMIT,
+                "the spend needs an owner approval: use spend_approved",
+            ));
+        }
+        Ok(SpelOutput::execute(vec![policy, agent], vec![]))
+    }
+
+    /// The agent spends above its envelope, on an approval the owner signed.
+    ///
+    /// Accounts:
+    /// - `policy` (PDA seeded by `policy_hash`): the anchored limits.
+    /// - `approval` (PDA seeded by `marker_seed`): the owner's authorisation,
+    ///   checked to be owned by this program — an account merely *existing* at
+    ///   the right address proves nothing, since anyone can fund an address.
+    /// - `agent` (signer): the agent's own shielded account.
+    #[instruction]
+    pub fn spend_approved(
         // Injected by the dispatcher from the trusted ProgramInput; never part
         // of the instruction ABI, so the published IDL does not carry it.
         ctx: ProgramContext,
@@ -196,7 +251,9 @@ mod agent_verifier {
             ));
         }
 
-        // 3. Inside the envelope, the agent acts alone.
+        // 3. Below the threshold there is nothing to approve, and this
+        //    instruction is the wrong one — `spend` costs the agent no approval
+        //    account and is what it should have called.
         if pol.is_autonomous(amount, spent_this_period) {
             return Ok(SpelOutput::execute(vec![policy, approval, agent], vec![]));
         }

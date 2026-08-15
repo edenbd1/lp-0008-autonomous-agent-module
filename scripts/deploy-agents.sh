@@ -76,7 +76,11 @@ if confirmed "$DEPLOY_TX"; then
   echo "program  $DEPLOY_TX  already on chain"
 else
   echo "program  $DEPLOY_TX  deploying"
-  "$WALLET" deploy-program "$PROGRAM" </dev/null >/dev/null 2>&1
+  # The owner's wallet signs the deployment, and its home is only exported
+  # further down inside deploy_agent — without it here the wallet has no config
+  # and fails silently.
+  LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
+    "$WALLET" deploy-program "$PROGRAM" </dev/null >/dev/null 2>&1
   for _ in $(seq 1 25); do sleep 6; confirmed "$DEPLOY_TX" && break; done
   confirmed "$DEPLOY_TX" || { echo "  the program did not deploy" >&2; exit 1; }
   echo "         landed"

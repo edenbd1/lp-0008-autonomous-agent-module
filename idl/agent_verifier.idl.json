@@ -162,6 +162,80 @@
           }
         },
         {
+          "name": "agent",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "owner_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "agent_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "per_tx",
+          "type": "u128"
+        },
+        {
+          "name": "per_period",
+          "type": "u128"
+        },
+        {
+          "name": "period_blocks",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "spent_this_period",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "spend_approved",
+      "accounts": [
+        {
+          "name": "policy",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "policy_hash"
+              }
+            ]
+          }
+        },
+        {
           "name": "approval",
           "writable": false,
           "signer": false,

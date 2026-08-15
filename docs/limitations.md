@@ -32,6 +32,25 @@ and return all three with the sender debited and the recipient credited. The
 policy check is then what it always claimed to be: a gate in front of a real
 transfer rather than a substitute for one.
 
+## Splitting the instruction fixed the first settlement, not the second
+
+Splitting `spend` (autonomous, two accounts) from `spend_approved` (approved,
+three) was deployed as `26db5997…` and the first settlement under it landed:
+`7f5a506b…`. The second failed while building, with the expected count changed:
+
+```
+first  settlement:  built and landed
+second settlement:  Invalid account_identities length, left: 2, right: 1
+```
+
+The circuit expected two identities on one run and one on the next, for the
+same instruction and the same accounts. That is the useful clue: the expectation
+is not a constant to be matched but follows what the transaction actually
+*modifies*, and this instruction modifies nothing — it returns its accounts
+untouched. An instruction that genuinely debits the sender and credits the
+recipient has a well-defined account set on every run, which is a second reason
+to implement the transfer above rather than to keep guessing at counts.
+
 ## A repeat A2A settlement does not land
 
 `scripts/a2a-task.sh` produced one settlement that is on chain
