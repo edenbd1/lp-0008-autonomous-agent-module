@@ -126,7 +126,34 @@ struct WalletPort {
     std::function<std::string()> spentThisPeriod;
 };
 
-/// How an above-threshold spend reaches the owner for approval.
+/// How long an above-threshold spend waits for its owner before the agent gives
+/// up on it. Terminal: the wait never falls back to spending unattended.
+constexpr std::int64_t kDefaultApprovalTimeoutMs = 120000;
+
+/// How often the same request — same id, same terms — is put back on the wire
+/// while that wait runs. "The agent retries notification before timing out."
+constexpr std::int64_t kDefaultApprovalResendMs = 15000;
+
+/// How many consecutive passes of the approval wait may read the *same* clock
+/// value before the agent concludes the clock is stuck and stops.
+///
+/// Not a policy — a guard against a clock that does not advance. `nowMs` is
+/// injected, so a fake that returns a constant (or a monotonic source that has
+/// stopped) makes `now >= deadline` false forever, and the result is a hang
+/// *inside a skill call*, which from the host's side is indistinguishable from
+/// the registry deadlock this module was restructured to avoid.
+///
+/// Counted as *consecutive passes at one clock reading*, not as a total pass
+/// count, and the difference matters: a host that wires no `idle` spins, so a
+/// 120-second wait on a real clock runs millions of passes and any total cap
+/// would fire on it and report a stuck clock that is running perfectly. The
+/// counter resets the moment the clock moves, so only a clock that has genuinely
+/// stopped trips it — and that is reported as the stuck clock it is, never as a
+/// deadline that passed.
+constexpr int kMaxApprovalPollsAtOneInstant = 100000;
+
+/// How an above-threshold spend reaches the owner for approval, and how the
+/// answer — or the silence — comes back.
 ///
 /// Separate from `WalletPort` for the same reason `SharePort` is separate from
 /// `StoragePort`: it is a messaging act, over the owner channel, and a failure
@@ -138,14 +165,59 @@ struct WalletPort {
 /// that implements it could not be included in one translation unit. That is the
 /// wiring this port exists for, so the collision would have surfaced exactly when
 /// somebody first tried to do it.
+///
+/// WHY THE RETRY IS HERE AND NOT ONLY IN `OwnerChannel`
+///
+/// The prize asks that "above-threshold transactions that fail to reach the
+/// owner for approval are not executed — the agent retries notification before
+/// timing out and reports the failure". All three clauses are decided on this
+/// path, and this path is what ships: `OwnerChannel` implements the same
+/// discipline over Logos Delivery, and it is constructed by a host that links
+/// this module, never by a host that *loads* it as a plugin — a port is a
+/// `std::function` and there is no wire format for one. A module loaded into
+/// Basecamp with the retry living only in `OwnerChannel` therefore retries
+/// nothing, which was measured: one notification attempt, no wait, no timeout
+/// and no report. So the discipline is here, where `wallet.send` is, and any
+/// transport wired underneath inherits it.
 struct OwnerApprovalPort {
-    /// Deliver an approval request. False means the owner was not reached — and
-    /// the prize is explicit that such a spend must not execute.
+    /// **One** notification attempt. False means this attempt did not reach the
+    /// owner; the wait below tries again until the deadline. It is not the
+    /// verdict — a delivered request is not an approved one.
     std::function<bool(const std::string &requestJson)> requestApproval;
     /// A fresh nonce for the spend being approved. Without one, an approval for
     /// "send 100 to Bob" authorises the same transfer forever, so a missing
     /// nonce source is a refusal rather than a zero.
     std::function<std::uint64_t()> nextNonce;
+
+    /// The owner's answer to `requestId`, if one has arrived yet: `"approved"`,
+    /// `"denied"`, or empty for "nothing yet". Polled rather than pushed so the
+    /// answer can arrive on any transport — a Delivery channel, a module method,
+    /// a host's own console — without this file naming one.
+    ///
+    /// **Absent means this deployment has no path by which an answer could
+    /// arrive at all**, which is a different thing from an owner who is slow.
+    /// The agent then does not pretend to wait: it notifies once and says
+    /// `answer_path:false`, because a wait for an answer that has no route here
+    /// is theatre, and reporting `owner_unreachable` after it would blame an
+    /// owner who was never given a way to reply. Nothing is submitted either
+    /// way.
+    std::function<std::string(const std::string &requestId)> pollDecision;
+
+    /// Monotonic milliseconds. Injected so a timeout is testable without
+    /// sleeping through one — the same reason `OwnerChannelPort` injects it.
+    /// Absent means the agent cannot measure a deadline, so it does not claim
+    /// one: same treatment as an absent `pollDecision`.
+    std::function<std::int64_t()> nowMs;
+    /// Called between polls so waiting does not spin a core. Optional; a fake
+    /// clock leaves it empty and a real adapter sleeps a little.
+    std::function<void()> idle;
+
+    /// The deadline and the resend interval, as functions rather than plain
+    /// numbers, so a host can move them while the agent runs — `meta.configure`
+    /// does exactly that. Empty falls back to @ref kDefaultApprovalTimeoutMs and
+    /// @ref kDefaultApprovalResendMs.
+    std::function<std::int64_t()> timeoutMs;
+    std::function<std::int64_t()> resendIntervalMs;
 };
 
 /// `wallet.balance()` — optionally `{"account": "<id>"}` to read another one.
