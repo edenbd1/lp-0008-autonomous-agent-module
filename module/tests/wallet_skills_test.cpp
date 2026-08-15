@@ -439,6 +439,260 @@ int main()
               "an approval that cannot name one spend is refused: it could be replayed");
         check(spends == 0, "and still nothing was submitted");
     }
+
+    // -----------------------------------------------------------------------
+    // "The agent retries notification before timing out and reports the
+    // failure."
+    //
+    // Every case below is written so that a PASS means the spend did NOT
+    // execute. `spends == 0` is asserted in each one, and it is the assertion
+    // that matters: an implementation that submitted the payment would satisfy
+    // "it answered something" and fail here. The retry counts and the outcome
+    // strings are the second half — an agent that gives up after one attempt,
+    // or that never says it gave up, is what this suite is for.
+    //
+    // The clock is a fake that advances only when the agent calls `idle`, so
+    // these run in microseconds and a timeout is not a sleep. That is also the
+    // reason a fake `idle` is what moves it: an agent that waits without ever
+    // yielding would never advance this clock and would be caught by the stuck
+    // -clock case at the end rather than passing quietly.
+    // -----------------------------------------------------------------------
+    std::printf("\nwallet.send — the owner who does not answer\n");
+    {
+        // The headline case. An owner who is simply not there.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        std::int64_t clock = 0;
+        std::vector<std::string> sent;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{41}; };
+        owner.requestApproval = [&sent](const std::string &j) {
+            sent.push_back(j);
+            return true;
+        };
+        owner.pollDecision = [](const std::string &) { return std::string{}; };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{1000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+
+        check(spends == 0, "an owner who never answers does not get the spend made anyway");
+        check(notSubmitted(r) && !okOf(r), "the call fails, and says nothing was submitted");
+        check(strOf(r, "outcome") == "owner_unreachable",
+              "and reports it as the owner being unreachable");
+        check(int(sent.size()) >= 4 && parsed(r).value("attempts", 0) == int(sent.size()),
+              "the request is retried while waiting, and the reply says how many times");
+        check(parsed(r).value("attempts", 0) > 1,
+              "which is more than once: a single attempt is not a retry");
+        check(parsed(r).value("waited_ms", 0) >= 1000,
+              "it waited out the whole timeout before giving up");
+        check(mentions(errOf(r), "did not answer") && mentions(errOf(r), "not submitted"),
+              "and the failure is reported in words, not only in a field");
+
+        // One question asked again — not several different questions. An id or
+        // a nonce that moved between attempts would let the answer to attempt 1
+        // authorise the terms of attempt 4.
+        bool identical = !sent.empty();
+        for (const auto &one : sent) identical = identical && one == sent.front();
+        check(identical, "every retry carries the byte-identical request");
+        check(parsed(sent.front()).value("id", std::string{}) == "spend-41",
+              "which names this one spend by a correlation id derived from its nonce");
+    }
+    {
+        // The transport itself refusing every attempt. The old code stopped at
+        // the first refusal; the criterion asks for retries before timing out.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        std::int64_t clock = 0;
+        int attempts = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{42}; };
+        owner.requestApproval = [&attempts](const std::string &) {
+            ++attempts;
+            return false; // the channel will not carry it
+        };
+        owner.pollDecision = [](const std::string &) { return std::string{}; };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{1000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+
+        check(spends == 0, "a channel that carries nothing does not make the spend autonomous");
+        check(attempts > 1, "the refused notification is retried, not abandoned on the first no");
+        check(parsed(r).value("delivered", -1) == 0,
+              "and the reply separates attempts from attempts the channel accepted");
+        check(strOf(r, "outcome") == "owner_unreachable" && notSubmitted(r),
+              "the outcome is the terminal one");
+    }
+    {
+        // An owner who answers late — after the agent has already retried. The
+        // approval is honoured as an answer and still does not submit anything,
+        // because submitting an approved spend goes through the policy
+        // program's `spend_approved`, which this module does not wire.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        std::int64_t clock = 0;
+        int attempts = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{43}; };
+        owner.requestApproval = [&attempts](const std::string &) {
+            ++attempts;
+            return true;
+        };
+        owner.pollDecision = [&attempts](const std::string &id) {
+            return (attempts >= 3 && id == "spend-43") ? std::string("approved") : std::string{};
+        };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{10000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+
+        check(attempts >= 3, "a late answer is still heard, after the retries");
+        check(strOf(r, "outcome") == "approved" && parsed(r).value("approved", false),
+              "and an approval is reported as one");
+        check(spends == 0 && notSubmitted(r),
+              "and it is STILL not submitted: the approved-spend path is not wired here");
+        check(mentions(errOf(r), "spend_approved"),
+              "and the reply names the path that would have to carry it");
+    }
+    {
+        // A denial. The owner was reached and said no, which is not the same
+        // failure as not reaching them — and must not be reported as one.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{44}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &) { return std::string("denied"); };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{10000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(strOf(r, "outcome") == "denied", "a refusal by the owner is reported as a denial");
+        check(spends == 0 && notSubmitted(r), "and nothing is submitted");
+        check(parsed(r).value("waited_ms", -1) < 1000,
+              "and it does not sit out the whole timeout once the answer is in");
+    }
+    {
+        // An answer this agent cannot read is not a "no", and it is certainly
+        // not a "yes". It is counted and the wait goes on — which is what makes
+        // the outcome below a timeout rather than a denial.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{45}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &) { return std::string("APPROVED, obviously"); };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{1000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(spends == 0, "an answer that is not one of the two verdicts does not authorise a spend");
+        check(strOf(r, "outcome") == "owner_unreachable",
+              "it times out rather than reading an unparsed word as consent");
+        check(parsed(r).value("unusable_answers", 0) > 0,
+              "and the operator is told their owner app is answering with something unreadable");
+    }
+    {
+        // The answer must name *this* request. An approval for some other spend
+        // sitting in the same answer table must not settle this one.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{46}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &id) {
+            return id == "spend-999" ? std::string("approved") : std::string{};
+        };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{1000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(spends == 0 && strOf(r, "outcome") == "owner_unreachable",
+              "an approval belonging to another spend does not settle this one");
+    }
+    {
+        // No answer path at all. The agent does not pretend to wait for a reply
+        // that has no route to it, and it says so — but it still does not spend.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        int attempts = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{47}; };
+        owner.requestApproval = [&attempts](const std::string &) {
+            ++attempts;
+            return true;
+        };
+        // pollDecision and nowMs deliberately left unwired.
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(spends == 0, "an agent with no answer path still does not spend");
+        check(attempts == 1 && strOf(r, "outcome") == "awaiting_owner_approval",
+              "it notifies once instead of timing out against an owner it gave no way to reply");
+        check(parsed(r).value("answer_path", true) == false,
+              "and the reply says outright that no answer can reach this process");
+    }
+    {
+        // A clock that has stopped must not hang the module inside a skill call.
+        // A host sees that as the module having died, and it is exactly the
+        // failure mode `invoke()` drops its lock to avoid.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{48}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &) { return std::string{}; };
+        owner.nowMs = [] { return std::int64_t{7}; }; // never advances
+        owner.timeoutMs = [] { return std::int64_t{60000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+        // No idle: nothing will ever move this clock.
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(true, "a stopped clock terminates the wait rather than hanging the module");
+        check(parsed(r).value("clock_stalled", false),
+              "and it is reported as a stopped clock, not as a deadline that passed");
+        check(spends == 0 && notSubmitted(r) && strOf(r, "outcome") == "owner_unreachable",
+              "and the spend is still not submitted");
+    }
     {
         // The chain is the enforcer, so its refusal has to survive intact rather
         // than being reworded into something reassuring.
@@ -632,6 +886,13 @@ int main()
 //   send      skip the envelope and let the chain sort it out ........... 25
 //   send      submit anyway when the owner cannot be reached ............  3
 //   send      drop the approval-nonce requirement ............ (terminates)
+//   send      notify once instead of retrying while waiting ............  6
+//   send      submit anyway once the wait has timed out ................ 16
+//   send      read any answer at all as consent ........................  1
+//   send      report a timeout as still awaiting the owner ..............  5
+//   send      never bound the wait on a stopped clock ......... (hangs, and
+//             that hang IS the catch: the suite never returns, which is what
+//             the guard prevents inside a real skill call)
 //   send      accept a receipt with no transaction hash ................   4
 //   send      accept any amount at all ................................. 32
 //   send      accept a zero amount ......................................  7

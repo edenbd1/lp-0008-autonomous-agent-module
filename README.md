@@ -615,14 +615,74 @@ than ignored. A reply carrying `per_tx`, `per_period`, `period_blocks` or
 `policy` is refused outright — an approval names a payment, it cannot change a
 limit — and the only reason to send one is to try.
 
-Today that exchange is exercised in CI against a fake owner — one that can be
-made silent, late or hostile on demand, which a real one cannot — and not from
-a loaded Basecamp module: the module's delivery port is unwired in the plugin
-path (§8). The end-to-end sequencer job checks the other half, on chain: that a
-payment outside the envelope is refused when no owner approval account exists
-for it. Driving the owner channel from inside the loaded module is the next
-item on [`docs/basecamp.md`](docs/basecamp.md)'s open list, and it is listed
-there rather than described here as done.
+That exchange is exercised in CI against a fake owner — one that can be made
+silent, late or hostile on demand, which a real one cannot. It is **not**
+reachable from a loaded Basecamp module, and cannot be: `OwnerChannelPort` is a
+struct of `std::function`s and a plugin cannot be handed one (§8).
+
+### What a loaded module does about that
+
+The retry discipline is not left inside `OwnerChannel`, because then a loaded
+module would have none. It is on the `wallet.send` path, where the decision not
+to execute is made, and the owner channel a plugin actually has is built out of
+the runtime's own surface:
+
+| Direction | Carrier |
+|---|---|
+| agent → owner | the module event `ownerApprovalRequested(requestJson, attempt, timestamp)`, re-emitted byte-identically once per attempt |
+| owner → agent | the module method `approveSpend(requestId, verdict)`, `"approved"` or `"denied"` |
+
+Both are on Logos Core's own transport; neither needs an intermediary server.
+`meta.configure` sets `approval_timeout_ms` and `approval_resend_ms` on the
+running agent — the only two keys that skill reports as `effective`.
+
+Measured against the packaged module inside Basecamp 0.2.2's runtime
+(`module/tests/logos_core_load_test.cpp`, exit 0):
+
+```
+  ok    an above-threshold spend nobody approved is not submitted by the loaded module
+  ok    and the outcome is the terminal owner-unreachable one, not a fallback to acting alone
+  ok    the notification was retried before the timeout: 8 attempts
+  ok    approveSpend is reachable, and refuses a request nobody is waiting on
+```
+
+Two things this does **not** claim. It is not Logos Messaging, so "the owner can
+interact with the agent from a separate Logos app instance using Logos
+Messaging" is still open — that needs `OwnerChannel`'s Delivery port wired, and
+it stays on [`docs/basecamp.md`](docs/basecamp.md)'s list. And an *approved*
+above-threshold spend is still not submitted: submitting one goes through the
+policy program's `spend_approved`, which needs an approval account only the
+owner's own signature can create, and
+[`docs/limitations.md`](docs/limitations.md) records why no owner on testnet can
+create it today. The module reports `{"outcome":"approved","submitted":false}`
+and names the path, rather than claiming a payment that did not happen.
+
+The end-to-end sequencer job checks the other half, on chain: that a payment
+outside the envelope is refused when no owner approval account exists for it.
+
+## 8b. Surviving a restart
+
+Pending A2A task state is written to one file under the per-instance directory
+the host provisions, atomically — temp file, flush, rename, flush the parent —
+and read back on `start()`. Three outcomes, not two: loaded, absent, or *could
+not be read*. **The last one refuses the start.** Coming up with an empty task
+list on top of an unreadable snapshot is how a paid task gets paid twice, so the
+agent stops instead, naming the file.
+
+`meta.status` carries a `durability` block — the path, the recovery outcome, how
+many tasks came back, and how many payments the restart could not resolve — so
+"this agent writes nothing down" and "this agent had nothing to write" are
+distinguishable from outside. A module nobody gave a directory to reports
+`"durability": null` rather than implying it is durable.
+
+This is the part that was missing rather than the file format, which existed and
+was tested: `TaskPersistence` had 121 green assertions and no construction site
+in the plugin, so the shipped module persisted nothing. Measured before the fix
+— task opened, `meta.status` `{"total":1}`, persistence directory empty, module
+rebuilt, `{"total":0}`, no error anywhere.
+`module/tests/module_recovery_test.cpp` is the suite that would have caught it,
+and CI runs it with a negative control that puts the module back in that state
+and asserts the suite goes red.
 
 ## 10. Tests and CI
 

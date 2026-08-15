@@ -44,21 +44,27 @@ logos_module(
         src/task_persistence.cpp
 )
 
-# Two of the translation units above are compiled and linked but are not
-# constructed by anything inside the plugin: `owner_channel.cpp` and
-# `task_persistence.cpp`. That is deliberate and it is not the same as leaving
-# them out.
+# One of the translation units above is compiled and linked but is not
+# constructed by anything inside the plugin: `owner_channel.cpp`. That is
+# deliberate and it is not the same as leaving it out.
 #
-# Both are host-owned: an `OwnerChannel` needs a delivery transport and a
-# `TaskPersistence` needs a `TaskStorePort`, and both are `std::function`s,
-# which cannot cross a plugin boundary — the same reason the twenty-one skills
-# register with nothing wired (see `registerBuiltinSkills` in
-# src/agent_module_plugin.h). A host that *links* this module constructs them;
-# a host that *loads* it as a plugin cannot.
+# It is host-owned: an `OwnerChannel` needs a delivery transport, which is a
+# struct of `std::function`s, and those cannot cross a plugin boundary — the
+# same reason the twenty-one skills register with nothing wired (see
+# `registerBuiltinSkills` in src/agent_module_plugin.h). A host that *links*
+# this module constructs it; a host that *loads* it as a plugin cannot. What a
+# loaded plugin has instead is the owner channel built out of the runtime's own
+# surface: the `ownerApprovalRequested` event out and the `approveSpend` method
+# back, both wired in src/agent_module_plugin.cpp.
 #
-# Linking them anyway is what makes that distinction possible at all. Left out
-# of SOURCES, the code is absent from the shipped `agent.lgx` outright, so a
-# host that links the module cannot call it either, and the suites CI runs
-# against these files describe a property no artefact has. `task_persistence.cpp`
-# was in exactly that state: 121 assertions green in CI, and not one byte of the
-# code they cover in the downloadable package. Compiled in CI is not shipped.
+# Linking it anyway is what makes that distinction possible at all. Left out of
+# SOURCES, the code is absent from the shipped `agent.lgx` outright, so a host
+# that links the module cannot call it either, and the suite CI runs against
+# that file describes a property no artefact has.
+#
+# `task_persistence.cpp` used to be in this note and no longer belongs in it:
+# 121 assertions green in CI, and not one construction site in the plugin. It is
+# now constructed in `AgentModuleImpl::onContextReady` against the host's
+# per-instance directory, recovered from in `start()`, and checkpointed after
+# every `invoke()` that moved the task store. Compiled in CI is not shipped, and
+# shipped-but-never-constructed is not running.

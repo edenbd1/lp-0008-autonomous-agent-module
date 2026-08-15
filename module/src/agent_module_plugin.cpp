@@ -2,7 +2,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <exception>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -48,10 +50,43 @@ bool isPolicyHashHex(const std::string &s)
     return true;
 }
 
+/// The file the task snapshot lives in, inside the host's per-instance data
+/// directory. One name, so a restart of the same instance finds what the last
+/// run wrote — `instanceId()` is documented as stable across restarts for one
+/// on-disk persistence directory, and the directory is what makes this unique.
+constexpr const char *kTaskSnapshotFile = "/tasks.json";
+
+/// How long the built-in owner channel sleeps between polls while waiting for an
+/// approval. Short enough that an owner answering promptly is not left waiting
+/// on a poll interval, long enough that a two-minute wait is not a busy loop.
+constexpr int kApprovalPollSleepMs = 25;
+
 } // namespace
 
 AgentModuleImpl::AgentModuleImpl() = default;
 AgentModuleImpl::~AgentModuleImpl() = default;
+
+void AgentModuleImpl::onContextReady()
+{
+    // The host provisions this; a module loaded outside one (a unit test, the
+    // `lgpd` CLI) gets an empty string, and the getter's own documentation says
+    // to check it. Empty means nothing is written down, which is reported as
+    // such rather than quietly behaving like a durable agent.
+    const std::string dir = instancePersistencePath();
+    if (dir.empty()) {
+        return;
+    }
+
+    logos::agent::TaskStorePort port;
+    port.snapshot = [this] { return tasks_.snapshot(); };
+    port.restore = [this](const std::string &snapshotJson, std::string &err) {
+        return tasks_.restore(snapshotJson, err);
+    };
+
+    std::lock_guard<std::mutex> lock(durableMutex_);
+    durable_ = std::make_unique<logos::agent::TaskPersistence>(
+        std::move(port), dir + kTaskSnapshotFile, logos::agent::posixSnapshotFilePort());
+}
 
 StdLogosResult AgentModuleImpl::configure(const std::string &ownerAddress,
                                        const std::string &policyHashHex)
@@ -79,7 +114,6 @@ StdLogosResult AgentModuleImpl::configure(const std::string &ownerAddress,
 
 StdLogosResult AgentModuleImpl::start()
 {
-    bool wireBuiltins = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!configured_) {
@@ -89,6 +123,46 @@ StdLogosResult AgentModuleImpl::start()
             return StdLogosResult{false, {}, "already started"};
         }
         starting_ = true;
+    }
+
+    // ---- recovery, before anything can be invoked --------------------------
+    //
+    // Here rather than in `onContextReady` because this is the step that is
+    // allowed to refuse. A snapshot that cannot be read is not an empty task
+    // list: truncated, corrupt, oversized or from a schema this build does not
+    // know all mean "we do not know what was pending", and the one thing an
+    // agent holding a payment journal must not do is come up believing it owes
+    // nobody anything. `LoadReport::safeToStartEmpty()` is true for exactly one
+    // outcome — there is no file at all — so that the difference cannot be lost
+    // in a `if (!ok)`.
+    //
+    // Claimed *after* this, so a start refused here can be retried once the
+    // operator has dealt with the file, and still wires the built-ins.
+    std::string recoveryError;
+    {
+        std::lock_guard<std::mutex> durableLock(durableMutex_);
+        if (durable_) {
+            lastLoad_ = durable_->load();
+            loadRan_ = true;
+            if (!lastLoad_.ok() && !lastLoad_.safeToStartEmpty()) {
+                recoveryError = "pending task state could not be recovered from " +
+                                durable_->path() + ": " + lastLoad_.error +
+                                ". Refusing to start with an empty task list on top of a "
+                                "snapshot that could not be read";
+            } else {
+                lastSaved_ = tasks_.snapshot();
+            }
+        }
+    }
+    if (!recoveryError.empty()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        starting_ = false;
+        return StdLogosResult{false, {}, recoveryError};
+    }
+
+    bool wireBuiltins = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
         // Claim the built-ins here rather than after registering them: a caller
         // that wired ports has already claimed, and this is what keeps a start
         // from registering a second, unwired copy of every skill.
@@ -113,11 +187,109 @@ StdLogosResult AgentModuleImpl::start()
 
 StdLogosResult AgentModuleImpl::stop()
 {
+    // A last checkpoint, before the lock, on the way down. Every state change
+    // has already been written by `invoke`, so this normally writes nothing —
+    // it is here for the change that came from somewhere else, and because the
+    // orderly shutdown is the one restart we can actually prepare for.
+    checkpointTasks();
+
     // Deliberately tolerant of a stop that was never started: this runs on the
     // shutdown path, where refusing would turn a tidy exit into an error.
     std::lock_guard<std::mutex> lock(mutex_);
     started_ = false;
     return StdLogosResult{true, {}, {}};
+}
+
+void AgentModuleImpl::setOwnerNotifier(
+    std::function<bool(const std::string &requestJson, int attempt)> notify)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ownerNotify_ = std::move(notify);
+}
+
+StdLogosResult AgentModuleImpl::approveSpend(const std::string &requestId,
+                                             const std::string &verdict)
+{
+    if (requestId.empty()) {
+        return StdLogosResult{false, {}, "a request id is required: an answer that names no "
+                                         "request could settle any spend"};
+    }
+    // Two words, and no third. "yes", "ok", "" and a JSON document are all
+    // refused rather than guessed at, because the guess that costs money is the
+    // one that reads an unfamiliar answer as consent.
+    if (verdict != "approved" && verdict != "denied") {
+        return StdLogosResult{false, {}, "the verdict must be 'approved' or 'denied'"};
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pendingApprovals_.count(requestId) == 0) {
+        // Including the case where it was pending a moment ago and the wait has
+        // since timed out: that spend is over, and storing an answer for it
+        // would leave an approval lying about for whatever is minted next.
+        return StdLogosResult{false, {},
+                              "no spend is waiting on '" + requestId +
+                                  "': there is nothing here for this answer to release"};
+    }
+    approvalAnswers_[requestId] = verdict;
+    return StdLogosResult{true, {}, {}};
+}
+
+bool AgentModuleImpl::publishApprovalRequest(const std::string &requestJson)
+{
+    std::function<bool(const std::string &, int)> notify;
+    int attempt = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!ownerNotify_) {
+            return false;
+        }
+        notify = ownerNotify_;
+        // The request is registered on the first attempt and left registered
+        // for the retries, so `approveSpend` accepts an answer to any of them —
+        // they all carry the same correlation id, which is the whole point of
+        // re-sending the byte-identical request rather than a fresh one.
+        auto parsedRequest = json::parse(requestJson, nullptr, false);
+        std::string id;
+        if (parsedRequest.is_object() && parsedRequest.contains("id") &&
+            parsedRequest["id"].is_string()) {
+            id = parsedRequest["id"].get<std::string>();
+        }
+        if (id.empty()) {
+            // Nothing can answer a request that names no payment, so publishing
+            // it would only produce an approval nobody could match to a spend.
+            return false;
+        }
+        attempt = ++pendingApprovals_[id];
+    }
+    // Outside the lock: the notifier reaches the host, and a host that called
+    // back into the module from it would deadlock against a non-recursive
+    // mutex — the same rule the skill registry follows.
+    return notify(requestJson, attempt);
+}
+
+std::string AgentModuleImpl::approvalAnswerFor(const std::string &requestId) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = approvalAnswers_.find(requestId);
+    return it == approvalAnswers_.end() ? std::string{} : it->second;
+}
+
+std::int64_t AgentModuleImpl::settingMs(const char *key, std::int64_t fallback) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = settings_.find(key);
+    if (it == settings_.end() || it->second.empty()) {
+        return fallback;
+    }
+    // `meta.configure` has already checked it is decimal digits, but this reads
+    // a map anything holding a reference to the module could have written, and
+    // a `stoll` that throws here would take down a spend rather than a setting.
+    try {
+        const long long value = std::stoll(it->second);
+        return value < 0 ? fallback : static_cast<std::int64_t>(value);
+    } catch (...) {
+        return fallback;
+    }
 }
 
 StdLogosResult AgentModuleImpl::registerSkill(std::shared_ptr<logos::agent::ISkill> skill)
@@ -211,6 +383,9 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
             return policyHashHex_;
         };
     }
+    if (!ports.status.durability) {
+        ports.status.durability = [this] { return durabilityJson(); };
+    }
     // The card's skill list comes from the registry, so a published card cannot
     // name a skill this agent has not registered — and cannot omit one it has.
     if (!ports.card.skills) {
@@ -221,6 +396,103 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     // agent do", and the one a caller got would depend on which it asked.
     if (!ports.registry.listing) {
         ports.registry.listing = [this] { return skills(); };
+    }
+
+    // ---- runtime settings, for the two keys something actually reads ------
+    //
+    // `ConfigPort` was left unwired on purpose for years of this file's life,
+    // and the reason still stands for most keys: a setting nothing reads would
+    // let `meta.configure` answer `effective:true` for a value that changes
+    // nothing. It is wired now because two keys are read — the approval timeout
+    // and resend interval, below — and `meta.configure` still reports the
+    // anchored envelope keys as *not* effective, because they still are not.
+    if (!ports.config.set) {
+        ports.config.set = [this](const std::string &key, const std::string &value) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            settings_[key] = value;
+            return true;
+        };
+    }
+    if (!ports.config.get) {
+        ports.config.get = [this](const std::string &key) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto it = settings_.find(key);
+            return it == settings_.end() ? std::string{} : it->second;
+        };
+    }
+
+    // ---- the built-in owner channel ---------------------------------------
+    //
+    // Only when this module is hosted. `ownerNotify_` is installed by the Logos
+    // Core export, which is the only thing that can put an event on the
+    // runtime's transport; a module constructed directly — a unit test, a host
+    // that links it and wires its own channel — has none, and then every field
+    // below stays as the caller left it. That distinction is load-bearing:
+    // wiring an answer path that nothing can reach would turn today's immediate,
+    // honest "no owner channel to ask for approval" into a two-minute wait
+    // ending in a timeout blamed on an owner who was never asked.
+    //
+    // A host that wires its own `requestApproval` and nothing else still gets
+    // the answer path, because `approveSpend` really is a route by which an
+    // answer can arrive.
+    bool hosted = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        hosted = static_cast<bool>(ownerNotify_);
+    }
+    if (hosted) {
+        if (!ports.ownerApproval.requestApproval) {
+            ports.ownerApproval.requestApproval = [this](const std::string &requestJson) {
+                return publishApprovalRequest(requestJson);
+            };
+        }
+        if (!ports.ownerApproval.pollDecision) {
+            ports.ownerApproval.pollDecision = [this](const std::string &requestId) {
+                return approvalAnswerFor(requestId);
+            };
+        }
+        if (!ports.ownerApproval.nextNonce) {
+            // Milliseconds since the epoch, not a counter starting at one.
+            //
+            // A process-local counter is reset by exactly the restart this
+            // module now survives, so the agent would mint nonce 1 a second
+            // time — and a nonce is half of what binds an approval to one
+            // payment. The clock does not go back, so an approval the owner
+            // signed before the restart cannot be replayed against a spend
+            // minted after it.
+            ports.ownerApproval.nextNonce = [] {
+                return static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count());
+            };
+        }
+        if (!ports.ownerApproval.nowMs) {
+            // Steady, not system: a wall clock that is stepped backwards by NTP
+            // in the middle of a wait would extend the deadline by however far
+            // it moved.
+            ports.ownerApproval.nowMs = [] {
+                return static_cast<std::int64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count());
+            };
+        }
+        if (!ports.ownerApproval.idle) {
+            ports.ownerApproval.idle = [] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kApprovalPollSleepMs));
+            };
+        }
+        if (!ports.ownerApproval.timeoutMs) {
+            ports.ownerApproval.timeoutMs = [this] {
+                return settingMs("approval_timeout_ms", kDefaultApprovalTimeoutMs);
+            };
+        }
+        if (!ports.ownerApproval.resendIntervalMs) {
+            ports.ownerApproval.resendIntervalMs = [this] {
+                return settingMs("approval_resend_ms", kDefaultApprovalResendMs);
+            };
+        }
     }
 
     // ---- the envelope, in the two shapes the skills read it in ------------
@@ -392,10 +664,93 @@ std::string AgentModuleImpl::invoke(const std::string &name, const std::string &
     // Pass the skill's own answer through, but only once it is known to be JSON.
     // Prose returned from a skill would otherwise corrupt whatever document the
     // caller splices it into — the same defect as the schema, one layer up.
-    if (json::parse(result, nullptr, false).is_discarded()) {
+    const auto answer = json::parse(result, nullptr, false);
+    if (answer.is_discarded()) {
         return fail("skill '" + name + "' returned a result that is not JSON");
     }
+
+    // The spend that was waiting on an approval has finished waiting, whatever
+    // it decided, so retire its correlation id. Read off the answer rather than
+    // tracked here on purpose: `invoke` is called from several threads and the
+    // reply is the one thing that certainly belongs to *this* call. An id left
+    // behind would let a late "approved" sit in the table until something was
+    // minted with the same id — an approval waiting for a payment nobody has
+    // described yet.
+    if (answer.is_object() && answer.contains("request_id") && answer["request_id"].is_string()) {
+        const std::string requestId = answer["request_id"].get<std::string>();
+        std::lock_guard<std::mutex> lock(mutex_);
+        pendingApprovals_.erase(requestId);
+        approvalAnswers_.erase(requestId);
+    }
+
+    // Whatever the skill did to the task store, write it down before the answer
+    // leaves the module. A crash between the reply and the next checkpoint is
+    // the window this closes.
+    checkpointTasks();
     return result;
+}
+
+void AgentModuleImpl::checkpointTasks()
+{
+    std::lock_guard<std::mutex> lock(durableMutex_);
+    if (!durable_) {
+        return;
+    }
+    // The store's own rendering, compared against what was last written. Two
+    // calls that changed nothing — `meta.status`, a refused `agent.task` — cost
+    // a snapshot and no fsync.
+    std::string current = tasks_.snapshot();
+    if (current == lastSaved_) {
+        return;
+    }
+    std::string err;
+    if (!durable_->save(err)) {
+        // Not propagated to the caller: the skill's work happened, and what
+        // failed is the record of it. Reported through `meta.status`, which is
+        // where an operator looks after the restart that lost something.
+        lastSaveError_ = err;
+        return;
+    }
+    lastSaveError_.clear();
+    lastSaved_ = std::move(current);
+}
+
+std::string AgentModuleImpl::durabilityJson() const
+{
+    std::lock_guard<std::mutex> lock(durableMutex_);
+    if (!durable_) {
+        // Empty, not `{"durable":false}`: `meta.status` renders an unreported
+        // durability as null, and null is the honest answer for a module nobody
+        // gave a directory to.
+        return {};
+    }
+    json out{{"path", durable_->path()}, {"recovery_ran", loadRan_}};
+    if (loadRan_) {
+        switch (lastLoad_.outcome) {
+        case logos::agent::LoadOutcome::Loaded:
+            out["recovery"] = "loaded";
+            break;
+        case logos::agent::LoadOutcome::Absent:
+            out["recovery"] = "absent";
+            break;
+        case logos::agent::LoadOutcome::Failed:
+            out["recovery"] = "failed";
+            break;
+        }
+        out["recovered_tasks"] = lastLoad_.tasks;
+        out["recovered_active"] = lastLoad_.active;
+        out["settled_payments"] = lastLoad_.settledPayments;
+        // The number an operator has to act on: money that may or may not have
+        // moved, which no restart may decide on its own.
+        out["uncertain_payments"] = lastLoad_.uncertainPayments;
+        if (!lastLoad_.error.empty()) {
+            out["recovery_error"] = lastLoad_.error;
+        }
+    }
+    if (!lastSaveError_.empty()) {
+        out["last_save_error"] = lastSaveError_;
+    }
+    return dumpSafe(out);
 }
 
 std::string AgentModuleImpl::status() const

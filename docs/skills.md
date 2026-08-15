@@ -410,6 +410,8 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
 | Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
+| Meta | `meta.status` | answers in the loaded module, including its `durability` block — the task snapshot's path and what the last recovery found |
+| Meta | `meta.configure` | answers in the loaded module. `approval_timeout_ms` and `approval_resend_ms` are the only keys it reports as `effective`: `wallet.send`'s owner wait reads them back on the next above-threshold spend. Everything else it accepts is a local mirror of something anchored on chain, and it says so |
 | Example | `notary.digest` | **not part of the module.** A third-party skill in `examples/`, loaded at runtime; §4 |
 
 `meta.skills` is worth one paragraph of its own, because of how it was missing.

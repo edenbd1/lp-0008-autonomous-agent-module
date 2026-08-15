@@ -411,34 +411,187 @@ std::string WalletSendSkill::invoke(const std::string &paramsJson)
         if (!owner_.requestApproval) {
             json e = base;
             e["outcome"] = "owner_unreachable";
+            // Zero, and stated rather than left out: "we notified nobody" and
+            // "we notified and were not answered" are the two halves of this
+            // criterion and a caller has to be able to tell them apart.
+            e["attempts"] = 0;
+            e["delivered"] = 0;
             return fail("no owner channel to ask for approval, so the spend was not submitted", e);
         }
         if (!owner_.nextNonce) {
             json e = base;
             e["outcome"] = "owner_unreachable";
+            e["attempts"] = 0;
+            e["delivered"] = 0;
             return fail("no approval nonce source: an approval that does not name one specific "
                         "spend could be replayed for the next identical one",
                         e);
         }
         const std::uint64_t nonce = owner_.nextNonce();
+        // The correlation id names *these terms*. It is derived from the nonce
+        // rather than minted separately because the nonce is already what makes
+        // one spend distinct from an identical later one: two ids for one
+        // payment would let the answer to the first settle the second, which is
+        // the trap `OwnerChannel::asked_` exists to close.
+        const std::string requestId = "spend-" + std::to_string(nonce);
         const json request{{"kind", "spend-approval-request"},
+                           {"id", requestId},
                            {"recipient", qualified},
                            {"amount", amount},
                            {"nonce", nonce},
                            {"perTx", envelope_.perTx},
                            {"perPeriod", envelope_.perPeriod},
                            {"reason", held}};
-        if (!owner_.requestApproval(request.dump())) {
-            // Terminal, not a fallback. An above-threshold spend that fails to
-            // reach the owner must not execute.
-            json e = base;
-            e["outcome"] = "owner_unreachable";
-            return fail("the owner could not be reached, so the spend was not submitted", e);
+        const std::string requestJson = request.dump();
+
+        // A deployment with no way to hear an answer, or no clock to measure a
+        // deadline with, does not get a retry loop: it would be a wait for a
+        // reply that has no route here, ending in a timeout that blames an owner
+        // who was never given a way to answer. One attempt, and the reply says
+        // plainly that nothing can resolve it. Nothing is submitted either way.
+        if (!owner_.pollDecision || !owner_.nowMs) {
+            if (!owner_.requestApproval(requestJson)) {
+                json e = base;
+                e["outcome"] = "owner_unreachable";
+                e["request_id"] = requestId;
+                e["attempts"] = 1;
+                e["delivered"] = 0;
+                return fail("the owner could not be reached, so the spend was not submitted", e);
+            }
+            json out = base;
+            out["outcome"] = "awaiting_owner_approval";
+            out["nonce"] = nonce;
+            out["request_id"] = requestId;
+            out["attempts"] = 1;
+            out["delivered"] = 1;
+            out["answer_path"] = false;
+            out["note"] = "the request was delivered, and no answer can reach this process: "
+                          "nothing will be submitted for it here";
+            return done(out);
         }
-        json out = base;
-        out["outcome"] = "awaiting_owner_approval";
-        out["nonce"] = nonce;
-        return done(out);
+
+        // ---- the wait the prize describes ---------------------------------
+        //
+        // Retry the *notification* while waiting for the *answer*, and let the
+        // deadline end it. Every exit from this loop leaves the spend
+        // unsubmitted; the only thing that varies is what the operator is told.
+        std::int64_t timeout = owner_.timeoutMs ? owner_.timeoutMs() : kDefaultApprovalTimeoutMs;
+        std::int64_t resend =
+            owner_.resendIntervalMs ? owner_.resendIntervalMs() : kDefaultApprovalResendMs;
+        if (timeout < 0) timeout = 0;
+        // Clamped rather than accepted: a resend interval of zero against a
+        // clock that has not moved yet re-notifies on every single pass, which
+        // is a flood on the owner's channel and not a retry policy.
+        if (resend < 1) resend = 1;
+
+        const std::int64_t start = owner_.nowMs();
+        std::int64_t lastAttemptAt = start;
+        int attempts = 0;
+        int delivered = 0;
+        int unusable = 0;
+        std::int64_t lastClockReading = start;
+        int passesAtThatReading = 0;
+        bool clockStalled = false;
+        std::string verdict;
+
+        for (;;) {
+            const std::int64_t now = owner_.nowMs();
+            if (attempts == 0 || now - lastAttemptAt >= resend) {
+                lastAttemptAt = now;
+                ++attempts;
+                if (owner_.requestApproval(requestJson)) {
+                    ++delivered;
+                }
+            }
+
+            // Asked by id, so an answer to some other spend cannot settle this
+            // one. Anything that is neither verdict is counted and ignored
+            // rather than treated as a "no": a garbled answer is not a denial,
+            // and it is certainly not an approval.
+            const std::string answer = owner_.pollDecision(requestId);
+            if (answer == "approved" || answer == "denied") {
+                verdict = answer;
+                break;
+            }
+            if (!answer.empty()) {
+                ++unusable;
+            }
+
+            const std::int64_t afterPoll = owner_.nowMs();
+            if (afterPoll - start >= timeout) {
+                break;
+            }
+            if (afterPoll == lastClockReading) {
+                if (++passesAtThatReading >= kMaxApprovalPollsAtOneInstant) {
+                    clockStalled = true;
+                    break;
+                }
+            } else {
+                lastClockReading = afterPoll;
+                passesAtThatReading = 0;
+            }
+            if (owner_.idle) {
+                owner_.idle();
+            }
+        }
+
+        json e = base;
+        e["request_id"] = requestId;
+        e["nonce"] = nonce;
+        e["attempts"] = attempts;
+        e["delivered"] = delivered;
+        e["waited_ms"] = owner_.nowMs() - start;
+        e["answer_path"] = true;
+        if (unusable > 0) {
+            // Reported on every outcome, including an approval that arrived
+            // afterwards: an operator whose owner app is answering with
+            // something this agent cannot read needs to know that.
+            e["unusable_answers"] = unusable;
+        }
+
+        if (verdict == "denied") {
+            // `ok:false` because the *spend* did not happen, which is what this
+            // skill is reporting on. `ApprovalDecision::json()` in
+            // owner_channel.h deliberately does the opposite for the same event,
+            // because it reports on the *exchange*, and an exchange that ended
+            // in a clear "no" succeeded.
+            e["outcome"] = "denied";
+            return fail("the owner denied this spend, so it was not submitted", e);
+        }
+        if (verdict == "approved") {
+            // An approval unlocks the policy program's `spend_approved` path,
+            // which needs an approval account only the owner's own signature can
+            // create. This module does not wire that path — `WalletPort::spend`
+            // is the autonomous one, and putting an above-envelope amount
+            // through it would build a transaction the chain refuses while
+            // reporting it as an approved spend. So: say the approval arrived,
+            // hand back the terms it is bound to, and submit nothing.
+            // docs/limitations.md records why no owner on testnet can create
+            // that account today.
+            e["outcome"] = "approved";
+            e["approved"] = true;
+            return fail("the owner approved this spend; submitting it goes through the policy "
+                        "program's spend_approved path, which this module does not wire, so "
+                        "nothing was submitted",
+                        e);
+        }
+
+        // Terminal, not a fallback. An above-threshold spend that fails to reach
+        // the owner must not execute — so this returns without ever touching
+        // `port_.spend`, and says how hard it tried.
+        e["outcome"] = "owner_unreachable";
+        if (clockStalled) {
+            e["clock_stalled"] = true;
+            return fail("the approval wait gave up because the clock did not advance across " +
+                            std::to_string(kMaxApprovalPollsAtOneInstant) +
+                            " passes; the owner did not answer and the spend was not submitted",
+                        e);
+        }
+        return fail("the owner did not answer within " + std::to_string(timeout) + "ms: " +
+                        std::to_string(attempts) + " notification attempt(s), " +
+                        std::to_string(delivered) +
+                        " of which the channel accepted; the spend was not submitted",
+                    e);
     }
 
     if (!port_.spend) {

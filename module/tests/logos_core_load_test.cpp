@@ -86,6 +86,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <utility>
+
 static int failures = 0;
 
 static void check(bool ok, const QString &what)
@@ -448,6 +450,116 @@ int main(int argc, char **argv)
               : QStringLiteral("invoke() reached no skill for %1 name(s): %2")
                     .arg(undispatched.size())
                     .arg(undispatched.join(QStringLiteral(", "))));
+
+    // ---- Reliability, in the module the runtime loaded --------------------
+    //
+    // Two of the prize's three Reliability criteria are about what this module
+    // does when something goes wrong, and both were previously demonstrable
+    // only against classes the shipped plugin never constructed. These check
+    // them here, across the transport, in the module Logos Core is running.
+
+    // R1. "The agent module recovers from transient failures … without losing
+    // pending task state." The whole mechanism hangs off the host handing over
+    // a per-instance data directory, so the first thing worth asserting is that
+    // it really does, and that the module opened its snapshot under it.
+    //
+    // What cannot be shown from here is a task surviving a restart: opening a
+    // task needs a Delivery transport, and a plugin cannot be handed one (see
+    // the note above about `std::function` ports). That half is proven in
+    // module/tests/module_recovery_test.cpp against the same code. What is
+    // proven here is the half that was actually missing — that the wiring is
+    // live in the shipped artefact rather than in a class nothing constructs.
+    const QString statusJson = client
+                                   ->invokeRemoteMethod(target, QStringLiteral("invoke"),
+                                                        QVariant(QStringLiteral("meta.status")),
+                                                        QVariant(QStringLiteral("{}")))
+                                   .toString();
+    const QJsonObject status = QJsonDocument::fromJson(statusJson.toUtf8()).object();
+    const QJsonValue durability = status.value(QStringLiteral("durability"));
+    note(QStringLiteral("meta.status durability: %1")
+             .arg(durability.isObject()
+                      ? QString::fromUtf8(QJsonDocument(durability.toObject()).toJson(
+                            QJsonDocument::Compact))
+                      : QStringLiteral("null")));
+    check(durability.isObject(),
+          "the loaded module reports a durability record, not null: it was given a "
+          "persistence directory and opened a task snapshot in it");
+    const QJsonObject durable = durability.toObject();
+    const QString snapshotPath = durable.value(QStringLiteral("path")).toString();
+    check(snapshotPath.startsWith(QString::fromUtf8(persistence)),
+          QStringLiteral("and the snapshot lives under the persistence base the host set (%1)")
+              .arg(snapshotPath.isEmpty() ? QStringLiteral("(none)") : snapshotPath));
+    const QString recovery = durable.value(QStringLiteral("recovery")).toString();
+    check(durable.value(QStringLiteral("recovery_ran")).toBool()
+              && (recovery == QLatin1String("absent") || recovery == QLatin1String("loaded")),
+          QStringLiteral("recovery ran before the agent started serving, and reported '%1'")
+              .arg(recovery.isEmpty() ? QStringLiteral("(nothing)") : recovery));
+
+    // R2. "Above-threshold transactions that fail to reach the owner for
+    // approval are not executed — the agent retries notification before timing
+    // out and reports the failure."
+    //
+    // No port is wired here, so the module cannot know its anchored envelope,
+    // and an unknown envelope holds *every* spend for the owner — which is what
+    // makes this reachable across the transport at all. The owner channel a
+    // loaded plugin has is the module's own: `ownerApprovalRequested` out,
+    // `approveSpend` back. Nothing is listening in this harness, so the request
+    // is published, retried, and never answered — the exact failure the
+    // criterion is about.
+    //
+    // The wait is shortened first, through the module's own `meta.configure`,
+    // because the default is two minutes and the transport gives up at twenty
+    // seconds.
+    for (const auto &setting : {std::make_pair("approval_timeout_ms", "1500"),
+                                std::make_pair("approval_resend_ms", "200")}) {
+        const QString reply =
+            client
+                ->invokeRemoteMethod(
+                    target, QStringLiteral("invoke"), QVariant(QStringLiteral("meta.configure")),
+                    QVariant(QStringLiteral("{\"key\":\"%1\",\"value\":\"%2\"}")
+                                 .arg(QString::fromUtf8(setting.first),
+                                      QString::fromUtf8(setting.second))))
+                .toString();
+        const QJsonObject set = QJsonDocument::fromJson(reply.toUtf8()).object();
+        check(set.value(QStringLiteral("ok")).toBool()
+                  && set.value(QStringLiteral("effective")).toBool(),
+              QStringLiteral("%1 is settable on the running module, and effective: %2")
+                  .arg(QString::fromUtf8(setting.first), reply.left(120)));
+    }
+
+    const QString sendJson =
+        client
+            ->invokeRemoteMethod(
+                target, QStringLiteral("invoke"), QVariant(QStringLiteral("wallet.send")),
+                QVariant(QStringLiteral(
+                    "{\"recipient\":\"9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb72Ntu8bT\","
+                    "\"amount\":\"100\"}")))
+            .toString();
+    const QJsonObject send = QJsonDocument::fromJson(sendJson.toUtf8()).object();
+    note(QStringLiteral("wallet.send above threshold: %1").arg(sendJson.left(300)));
+    check(send.value(QStringLiteral("submitted")).toBool() == false,
+          "an above-threshold spend nobody approved is not submitted by the loaded module");
+    check(send.value(QStringLiteral("outcome")).toString() == QLatin1String("owner_unreachable"),
+          "and the outcome is the terminal owner-unreachable one, not a fallback to acting alone");
+    const int attempts = send.value(QStringLiteral("attempts")).toInt();
+    check(attempts > 1,
+          QStringLiteral("the notification was retried before the timeout: %1 attempts")
+              .arg(attempts));
+    check(!send.value(QStringLiteral("request_id")).toString().isEmpty(),
+          "and the failure is reported against the correlation id the owner was asked under");
+
+    // The answer path exists and is reachable over the same transport. Asked
+    // about a request nobody made, so this cannot accidentally authorise
+    // anything: a *refusal* here is the pass, and it proves `approveSpend` is
+    // dispatched rather than swallowed.
+    QString approveWhy;
+    const QVariant approved = client->invokeRemoteMethod(
+        target, QStringLiteral("approveSpend"), QVariant(QStringLiteral("spend-nobody-asked")),
+        QVariant(QStringLiteral("approved")));
+    check(!resultOk(approved, &approveWhy),
+          QStringLiteral("approveSpend is reachable, and refuses a request nobody is waiting "
+                         "on: %1")
+              .arg(approveWhy));
 
     // The control. Without it, "dispatched" would only mean "answered
     // something", and a module that answered everything the same way would

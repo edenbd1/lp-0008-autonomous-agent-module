@@ -75,6 +75,16 @@ public:
     /// Call a registered skill by name with a JSON parameter object.
     std::string invoke(const std::string &name, const std::string &paramsJson);
 
+    /// Answer an approval request the agent published — `"approved"` or
+    /// `"denied"`, naming the request by the `id` the event carried.
+    ///
+    /// This is the other half of @ref ownerApprovalRequested, and the reason
+    /// both are here: a module loaded as a plugin cannot be handed a
+    /// `std::function`, so the only owner channel it can have is one built out
+    /// of the runtime's own surface — an event out, a method back. Refused for
+    /// a request nothing is waiting on.
+    StdLogosResult approveSpend(const std::string &requestId, const std::string &verdict);
+
 logos_events:
     /// Emitted after every @ref start, successful or not. The host learns the
     /// outcome from the event rather than only from the return value, which is
@@ -84,6 +94,43 @@ logos_events:
 
     /// Emitted after every @ref stop.
     void moduleStopped(bool success, const std::string &message, int64_t timestamp);
+
+    /// Emitted every time the agent asks its owner to approve an above-threshold
+    /// spend — including every retry, which is why `attempt` is on it.
+    ///
+    /// `requestJson` is the whole request: `id`, `recipient`, `amount`, `nonce`,
+    /// the anchored limits and the reason the spend fell outside them. It is
+    /// re-emitted byte-identically while the agent waits, so an owner app that
+    /// missed the first one has more than one chance to see it, and an owner app
+    /// that saw all of them still has exactly one payment to answer for.
+    ///
+    /// Emitting is not delivering. This says the request left the module on the
+    /// runtime's event channel; whether anyone was listening is not knowable
+    /// from here, which is why the wait ends in "the owner did not answer"
+    /// rather than in any claim about what the owner saw.
+    ///
+    /// On one line, like every declaration in this class: the generator's parser
+    /// reads one-line prototypes and skips a wrapped one **without a warning**.
+    /// This event was wrapped in its first draft, and the generated `agent.lidl`
+    /// came back with the method and no event at all — the module would have
+    /// shipped an owner channel that could be answered and never asked.
+    void ownerApprovalRequested(const std::string &requestJson, int64_t attempt, int64_t timestamp);
+
+protected:
+    /// The host has handed over the module context. Two things happen here and
+    /// both need a host to exist:
+    ///
+    /// 1. The context is forwarded to the impl. The framework sets it on *this*
+    ///    class, not on `AgentModuleImpl`, so without this line the impl's
+    ///    `instancePersistencePath()` is empty inside a running Basecamp and the
+    ///    agent writes its pending tasks nowhere — while every unit test that
+    ///    sets the context on the impl directly passes.
+    /// 2. The impl is given its owner-notification path, which is this class's
+    ///    event emitter. It reports false until the context is ready, because
+    ///    `emitEventImpl_` is a silent no-op before the provider installs the
+    ///    sink, and a notification that went nowhere must not be counted as
+    ///    delivered.
+    void onContextReady() override;
 
 private:
     AgentModuleImpl impl_;
@@ -148,4 +195,23 @@ inline std::string AgentModuleExport::invoke(const std::string &name,
                                              const std::string &paramsJson)
 {
     return impl_.invoke(name, paramsJson);
+}
+
+inline StdLogosResult AgentModuleExport::approveSpend(const std::string &requestId,
+                                                      const std::string &verdict)
+{
+    return impl_.approveSpend(requestId, verdict);
+}
+
+inline void AgentModuleExport::onContextReady()
+{
+    impl_._logosCoreSetContext_(modulePath(), instanceId(), instancePersistencePath());
+    impl_.setOwnerNotifier([this](const std::string &requestJson, int attempt) {
+        if (!isContextReady()) {
+            return false;
+        }
+        ownerApprovalRequested(requestJson, static_cast<std::int64_t>(attempt),
+                               logos::agent::detail::nowNs());
+        return true;
+    });
 }

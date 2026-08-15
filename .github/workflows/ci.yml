@@ -238,6 +238,7 @@ jobs:
             module/src/program_skills.cpp \
             module/src/agent_skills.cpp \
             module/src/owner_channel.cpp \
+            module/src/task_persistence.cpp \
             -o skills_test
           ./skills_test | tee skills_test.out
           # The suite's exit code cannot distinguish "the module half passed"
@@ -247,6 +248,62 @@ jobs:
             echo "the module half did not compile in: the SDK headers were not reached"
             exit 1
           fi
+
+      # The two Reliability criteria that are about the *module* rather than
+      # about a class beside it. `task_persistence_test` and
+      # `owner_channel_test` below both passed for months against code the
+      # shipped plugin never constructed — 121 and 85 green assertions
+      # describing behaviour no artefact had. This suite drives
+      # `AgentModuleImpl` itself: configure, start, open tasks, destroy it,
+      # build it again over the same directory, and check what came back. Same
+      # for the owner channel a loaded plugin actually has, which is a module
+      # event out and `approveSpend` back.
+      - name: A restart, and an owner who does not answer
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -Wall -Wextra \
+            -I_external/logos-cpp-sdk/cpp \
+            module/tests/module_recovery_test.cpp \
+            module/src/agent_module_plugin.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/task_persistence.cpp \
+            -o module_recovery_test
+          ./module_recovery_test
+
+      # Negative control, in the shape the storage-node job below uses: put the
+      # module back in the state it was in before that suite existed — the
+      # snapshot never constructed — and assert the suite goes red. Without
+      # this, "a restart keeps pending task state" is a claim nobody has
+      # watched fail, and this repository has twice shipped an assertion that
+      # could not.
+      - name: Negative control — the recovery suite is falsifiable
+        run: |
+          set -euo pipefail
+          sed 's|    if (dir.empty()) {|    if (true) {|' \
+            module/src/agent_module_plugin.cpp > broken_plugin.cpp
+          ! diff -q module/src/agent_module_plugin.cpp broken_plugin.cpp > /dev/null
+          clang++ -std=c++17 -w \
+            -I_external/logos-cpp-sdk/cpp -Imodule/src \
+            module/tests/module_recovery_test.cpp \
+            broken_plugin.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/task_persistence.cpp \
+            -o broken_recovery_test
+          set +e
+          ./broken_recovery_test > broken_recovery.out 2>&1; rc=$?
+          set -e
+          echo "exit=$rc  failures=$(grep -c '^  FAIL' broken_recovery.out || true)"
+          [ "$rc" -ne 0 ] || { echo "a module that persists nothing passed the recovery suite"; exit 1; }
 
       # Same argument for inference. No model here and none needed: what has to
       # hold is that a backend which is down, slow, incoherent or actively
@@ -313,7 +370,7 @@ jobs:
           ./task_persistence_test
 
       # ---------------------------------------------------------------------
-      # Everything under module/tests/ is accounted for. Six suites run above.
+      # Everything under module/tests/ is accounted for. Seven suites run above.
       # The four that do not run here are named, with what they need, because a
       # suite silently absent from CI is indistinguishable from one that was
       # never written — and this repository's own standard is that a step CI

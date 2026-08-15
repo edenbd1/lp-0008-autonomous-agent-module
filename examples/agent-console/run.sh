@@ -91,8 +91,13 @@ echo "  ok    libnotary_digest.$SO built from one header: agent_module_interface
 # ---------------------------------------------------------------------------
 # 2. The console, linking the agent module exactly as it is shipped.
 #
-# The source list is the one in module/CMakeLists.txt minus task_persistence.cpp,
-# which the console does not construct — same as the plugin.
+# The source list is the one in module/CMakeLists.txt, whole. It used to be that
+# list minus task_persistence.cpp, "which the console does not construct — same
+# as the plugin", and both halves of that sentence stopped being true when
+# AgentModuleImpl started opening a task snapshot in onContextReady: the link
+# failed on posixSnapshotFilePort and the TaskPersistence constructor. Keeping
+# the list identical to the module's is what makes this example prove anything
+# about the module.
 # ---------------------------------------------------------------------------
 echo "[2/5] compile agent-console, linking the agent module unmodified"
 "$CXX" -std=c++17 -Wall -Wextra -O1 \
@@ -106,6 +111,7 @@ echo "[2/5] compile agent-console, linking the agent module unmodified"
     "$repo/module/src/program_skills.cpp" \
     "$repo/module/src/agent_skills.cpp" \
     "$repo/module/src/owner_channel.cpp" \
+    "$repo/module/src/task_persistence.cpp" \
     -o "$OUT/agent-console"
 echo "  ok    $OUT/agent-console"
 
