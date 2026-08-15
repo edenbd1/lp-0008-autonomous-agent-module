@@ -192,21 +192,35 @@ else
   bad "$PRICE is above the anchored limit of $CLIENT_PER_TX — this task needs an approval"
 fi
 
-rule "4. the A2A task lifecycle states, printed"
-# Printed, and that word is doing work. This is a `for` loop over three strings:
-# it does NOT drive `TaskStore`, and no transition is being demonstrated here.
-# The state machine that refuses illegal transitions is covered by unit tests,
-# not by this testnet run.
+rule "4. the A2A task lifecycle, driven"
+# "Driven", and that word is doing the work the word "printed" used to do here.
 #
-# docs/a2a-binding.md §7.1 says the same thing and says it first — "this
-# document will not describe a printed line as a transition" — and this script
-# must not claim more than the document discloses. What the chain and the
-# network can actually be asked about is the card and the settlement, which is
-# what every other section here checks.
-TASK_ID=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-echo "  task $TASK_ID"
-for state in submitted working completed; do printf '  state -> %s (printed, not a TaskStore transition)\n' "$state"; done
-note "see docs/a2a-binding.md 7.1: the lifecycle is unit-tested, not shown here"
+# Two versions of this section were both honest and both obsolete. First it was
+#     for state in submitted working completed; do printf '  state -> %s\n' ...
+# which claimed a lifecycle it did not run. Then it was the same loop relabelled
+# "(printed, not a TaskStore transition)", which stopped claiming it — the right
+# fix for a script that could not do better, and a standard docs/a2a-binding.md
+# §7.1 set first: "this document will not describe a printed line as a
+# transition".
+#
+# It can do better now. `a2a_lifecycle` builds module/tests/a2a_drive.cpp and
+# runs the real `TaskStore`, so every line below is a transition the store
+# accepted or REFUSED — including `input-required`, which the printed loop never
+# had, and the refusal that matters most: a completed task cannot be reopened.
+# The task is opened against the card discovered in step 1, so this runs against
+# the agent this demo actually found.
+#
+# The driver needs a compiler and nlohmann/json, and nothing else — no node, no
+# chain, no key. Where they are missing this reports that the lifecycle was not
+# driven and prints no states at all, which is the same standard as before: what
+# is not demonstrated is not described.
+if a2a_lifecycle "$ROOT" "$CARD"; then
+  ok "the lifecycle ran through TaskStore, ending terminal, with reopen refused"
+else
+  note "the lifecycle was not driven in this run — see the reason above."
+  note "It is covered by module/tests/agent_skills_test.cpp, which CI runs."
+  note "Nothing above claims a transition that did not happen."
+fi
 
 if [ "$SETTLE" = "1" ]; then
   rule "5. settle a fresh task, on chain"
