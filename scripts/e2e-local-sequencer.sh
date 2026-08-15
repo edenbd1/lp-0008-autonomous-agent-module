@@ -324,6 +324,20 @@ window_start() {
 }
 
 spend_at() { # amount
+  # Resync the agent first, every time. A private account's on-chain state moves
+  # whenever it signs — and this one has just signed `claim_agent` — while the
+  # proof is built against the wallet's LOCAL view. Prove against a stale one
+  # and the proof still builds, spel still prints a `tx_hash`, and the sequencer
+  # simply never lands the transaction, with nothing reported anywhere.
+  #
+  # This is not hypothetical: it is how this script failed once the two-signature
+  # anchoring was added. Preflight 31900267734 printed
+  #   50 (inside the envelope) -> 713dd5cb2ccfa1d6b00a00acbb80e0771e68822d286…
+  # and the recipient went 0 -> 0. The hash was real and meant nothing. The
+  # balance assertion below is the only reason that was caught rather than
+  # shipped as a green run, which is also why that assertion exists.
+  LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+    wallet_run account sync-private </dev/null >/dev/null 2>&1
   LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   spel --idl "$IDL" --program "$PROGRAM" --bin-auth-transfer "$AUTH_TRANSFER" \
     -- spend --agent "Private/$AGENT" --recipient "Public/$RECIP" \
