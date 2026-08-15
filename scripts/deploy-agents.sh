@@ -216,7 +216,16 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
     -- create_policy --owner "Public/$signer" \
     --policy-hash "$policy_hash" --owner-id "$OWNER_HEX" --agent-id "$agent_hex" \
     --per-tx "$per_tx" --per-period "$per_period" --period-blocks "$period" 2>&1)
+  local rc=$?
   local tx; tx=$(echo "$out" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
+  # spel already tells us when an anchor failed — it prints
+  # "Transaction NOT confirmed" and exits 1. Grepping only for tx_hash threw
+  # that line away and turned a reported failure into a silent one, which is
+  # most of why this took so long to find.
+  if [ $rc -ne 0 ] || echo "$out" | grep -q "NOT confirmed"; then
+    echo "  spel reported the anchor failed:" >&2
+    echo "$out" | grep -E "NOT confirmed|error|Error" | head -3 | sed 's/^/    /' >&2
+  fi
   if [ -z "$tx" ]; then
     # Before calling this a failure, ask whether this exact policy is already
     # anchored from an earlier run. If it is, that refusal is init doing its job.
