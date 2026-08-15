@@ -2,6 +2,37 @@
 
 What does not work, stated before anyone has to discover it.
 
+## The owner can never approve a spend after anchoring a policy
+
+The most serious open defect, and it is structural rather than a bug.
+
+The constraint measured on chain is **one program transaction per public signer
+account**, not one policy. Proven with a second instruction: `approve_spend`,
+against a policy that genuinely exists and is program-owned, with a fresh marker
+seed, also fails to land as its signer's second transaction.
+
+`approve_spend` requires the owner as signer, and the policy hash commits
+`owner_id = sha256(owner account id)` — so the approval must come from the same
+account that anchored the policy. That account has already spent its one
+transaction on `create_policy`.
+
+So the above-threshold path cannot work as designed: the owner who anchored a
+policy is, by construction, unable to approve anything under it. The
+below-threshold autonomous path is unaffected.
+
+Ways out, none yet tried: make the owner account program-owned before anchoring
+(a funded account is exempt from the rule — `DumJ4LCB…` holds two landed
+anchors), or stop committing the signer's identity into `owner_id` so the
+approval can come from a different account than the anchor.
+
+Also recorded because it was asserted here and is false: the
+`account get --account-id "Public/$signer"` refresh added to
+`scripts/deploy-agents.sh`, with a comment claiming it "is what makes the next
+anchor provable", does nothing. A second anchor was run with exactly that
+refresh in place, against freshly fetched chain state, and still did not land.
+Re-importing the signer into a completely fresh wallet home does not help
+either. The gate reads the signer's on-chain state, not the wallet's.
+
 Two things that used to be at the top of this file are gone from it, because
 they were fixed rather than reworded: `spend` moved no balance at all, and a
 second `create_policy` from one signer was silently dropped. What replaced them
