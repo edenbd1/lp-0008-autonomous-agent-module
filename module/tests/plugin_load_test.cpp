@@ -18,16 +18,33 @@
 //      stub: a malformed policy hash is refused, a well-formed one is accepted,
 //      a second bind is refused, and an unregistered skill fails without
 //      taking the module down.
+//   4. The loaded module offers the skills it documents. This step used to
+//      assert the opposite — that a freshly loaded module honestly reports no
+//      skills — which was true and was the whole problem: thirteen skills were
+//      implemented, tested and merged while nothing registered them with the
+//      module, so the binary that loaded in Basecamp answered `skills()` with
+//      an empty array and `invoke()` with "no skill named …" for every one of
+//      them. An empty card is a valid Agent Card, so that state is
+//      indistinguishable from a working agent that happens to do nothing.
+//      What is asserted now is that every documented skill is listed with a
+//      parameter schema and that `invoke()` dispatches to it — including the
+//      skills whose ports nobody wired, which must answer as themselves
+//      ("no sequencer connection is wired") rather than as the registry
+//      ("no skill named …"). Those two are the difference between a skill that
+//      is missing and one that is unconfigured.
 //
 // Build and run: see docs/basecamp.md. Every step is an assertion and the exit
 // code is the result.
 
 #include <QCoreApplication>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QPluginLoader>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 
 #include <cstdio>
@@ -59,6 +76,19 @@ bool contains(const QVariant &value, const char *needle)
 {
     return value.toString().contains(QString::fromUtf8(needle));
 }
+
+/// Every skill this module ships with, spelled out rather than counted, so a
+/// skill that stops being registered fails this harness *by name*.
+const char *const kSkills[] = {
+    "messaging.send",      "messaging.join",   "messaging.create_group",
+    "storage.upload",      "storage.download", "storage.list",
+    "storage.share",       "wallet.balance",   "wallet.send",
+    "wallet.history",      "program.query",    "program.call",
+    "program.deploy",      "agent.card",       "agent.discover",
+    "agent.task",          "agent.subscribe",  "agent.cancel",
+    "meta.status",         "meta.configure",   "agent.evaluate_task",
+};
+constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 
 } // namespace
 
@@ -163,6 +193,13 @@ int main(int argc, char **argv)
     check(!rebind.value<LogosResult>().success,
           "a second configure is refused — the binding is the agent's identity");
 
+    // Before start, deliberately an error object and not `[]`: an empty array is
+    // a valid Agent Card and a caller cannot tell it from an agent that has no
+    // skills.
+    QVariant early = provider->callMethod(QStringLiteral("skills"), {});
+    check(contains(early, "\"error\"") && !contains(early, "["),
+          "before start, skills() is an error rather than an empty card");
+
     QVariant started = provider->callMethod(QStringLiteral("start"), {});
     check(started.value<LogosResult>().success, "start succeeds once configured");
 
@@ -170,18 +207,90 @@ int main(int argc, char **argv)
     note("status(): " + status.toString());
     check(contains(status, "\"started\":true"), "status reflects the running agent");
 
-    // No skills are linked into the module yet, so the honest answer to both of
-    // these is an error — not an empty success. An empty skill list would be
-    // published as a valid, empty Agent Card.
+    // ---- 4. the skills the loaded module actually offers -------------------
+    //
+    // Parsed here rather than substring-matched, because the assertion is about
+    // the document's shape: one entry per skill, each with a schema another
+    // agent can call it from.
     QVariant skills = provider->callMethod(QStringLiteral("skills"), {});
-    note("skills(): " + skills.toString());
+    QJsonParseError parseError{};
+    const QJsonDocument card = QJsonDocument::fromJson(skills.toString().toUtf8(), &parseError);
+    check(parseError.error == QJsonParseError::NoError && card.isArray(),
+          "after start, skills() is a JSON array: " + parseError.errorString());
 
-    QVariant missing = provider->callMethod(QStringLiteral("invoke"),
+    const QJsonArray entries = card.array();
+    QSet<QString> listed;
+    QStringList schemaless;
+    for (const QJsonValue &entry : entries) {
+        const QJsonObject object = entry.toObject();
+        const QString name = object.value("name").toString();
+        listed.insert(name);
+        if (!object.value("parameters").isObject()) {
+            schemaless << (name + ": " + object.value("error").toString());
+        }
+    }
+    note(QStringLiteral("skills(): %1 entries: ").arg(entries.size())
+         + QStringList(listed.values()).join(", "));
+
+    QStringList missing;
+    for (const char *skill : kSkills) {
+        if (!listed.contains(QString::fromUtf8(skill))) {
+            missing << QString::fromUtf8(skill);
+        }
+    }
+    check(missing.isEmpty(), "every skill the module ships with is listed: missing "
+                                 + (missing.isEmpty() ? QStringLiteral("none")
+                                                      : missing.join(", ")));
+    check(entries.size() == kSkillCount,
+          QStringLiteral("the card has exactly %1 entries, and %2 distinct names")
+              .arg(kSkillCount)
+              .arg(listed.size()));
+    check(schemaless.isEmpty(),
+          "each carries a parameter schema: " + (schemaless.isEmpty()
+                                                     ? QStringLiteral("all present")
+                                                     : schemaless.join("; ")));
+
+    // Dispatch, across the plugin boundary. A skill nobody wired must refuse as
+    // itself — the registry's "no skill named" would mean it is not there at
+    // all, which is the state this step exists to tell apart.
+    QStringList undispatched;
+    for (const char *skill : kSkills) {
+        const QVariant answer = provider->callMethod(
+            QStringLiteral("invoke"), {QString::fromUtf8(skill), QStringLiteral("{}")});
+        if (!answer.toString().startsWith(QLatin1Char('{'))
+            || contains(answer, "no skill named")) {
+            undispatched << QString::fromUtf8(skill);
+        }
+    }
+    check(undispatched.isEmpty(),
+          "invoke() dispatches to every one of them: undispatched "
+              + (undispatched.isEmpty() ? QStringLiteral("none") : undispatched.join(", ")));
+
+    // The one skill that answers without any port wired: what the module knows
+    // about itself. It is also how an operator sees the binding from outside.
+    QVariant metaStatus = provider->callMethod(QStringLiteral("invoke"),
+                                               {QStringLiteral("meta.status"),
+                                                QStringLiteral("{}")});
+    note("invoke(meta.status): " + metaStatus.toString());
+    check(contains(metaStatus, "\"ok\":true") && contains(metaStatus, "\"started\":true")
+              && metaStatus.toString().contains(policy),
+          "meta.status answers over the boundary with what the agent is bound to");
+
+    // A skill whose transport nobody wired: refused, and refused with the port
+    // it is missing rather than with a claim that it worked.
+    QVariant unwired = provider->callMethod(QStringLiteral("invoke"),
                                             {QStringLiteral("wallet.balance"),
                                              QStringLiteral("{}")});
-    note("invoke(wallet.balance): " + missing.toString());
-    check(contains(missing, "\"ok\":false"),
-          "invoking an unregistered skill fails rather than crashing the module");
+    note("invoke(wallet.balance): " + unwired.toString());
+    check(contains(unwired, "\"ok\":false") && !contains(unwired, "no skill named"),
+          "an unwired skill refuses as itself, not as a name nobody registered");
+
+    QVariant missingName = provider->callMethod(QStringLiteral("invoke"),
+                                                {QStringLiteral("no.such.skill"),
+                                                 QStringLiteral("{}")});
+    note("invoke(no.such.skill): " + missingName.toString());
+    check(contains(missingName, "\"ok\":false") && contains(missingName, "no skill named"),
+          "and a name that is not registered is refused as that, without taking the module down");
 
     QVariant stopped = provider->callMethod(QStringLiteral("stop"), {});
     check(stopped.value<LogosResult>().success, "stop succeeds");
