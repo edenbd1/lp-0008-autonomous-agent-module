@@ -36,14 +36,18 @@ MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
 # a record of what was already anchored, that correct refusal looks identical to
 # a failure and wipes the entry out of the manifest.
 LEDGER="${LEDGER:-artifacts/anchored.tsv}"
-[ -f "$LEDGER" ] || printf 'policy_hash\tcreate_tx\n' > "$LEDGER"
-anchored_tx() { awk -F'\t' -v h="$1" 'NR>1 && $1==h {print $2; exit}' "$LEDGER"; }
+[ -f "$LEDGER" ] || printf 'program\tpolicy_hash\tcreate_tx\n' > "$LEDGER"
+# Keyed by (program, policy_hash), not by policy_hash alone. A policy account is
+# a PDA of the *program*, so redeploying the program moves every policy to a new
+# address that has never been initialised. A ledger keyed on the hash alone would
+# report those as already anchored and skip the anchoring the new program needs.
+anchored_tx() { awk -F'\t' -v p="$1" -v h="$2" 'NR>1 && $1==p && $2==h {print $3; exit}' "$LEDGER"; }
 # Each agent is funded so it can pay for real; spend moves balance, not just proof.
 FUND_AMOUNT="${FUND_AMOUNT:-40}"
 
 mkdir -p artifacts
 : > "$MANIFEST"
-printf 'category\tagent_id\tpolicy_hash\tper_tx\tper_period\tperiod_blocks\tcreate_tx\n' >> "$MANIFEST"
+printf 'category\tagent_id\tpay_account\tpolicy_hash\tper_tx\tper_period\tperiod_blocks\tcreate_tx\n' >> "$MANIFEST"
 
 confirmed() {
   curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
@@ -163,14 +167,57 @@ fund_agent() { # category seed_account amount
   return 1
 }
 
+# The account another agent pays into.
+#
+# `spel` can only address a private account whose keys the *sending* wallet
+# holds, so one shielded agent cannot name another one's private account as a
+# recipient: it fails with `KeyNotFoundError` before anything is built. Each
+# agent therefore also keeps a public receiving account, which is what its Agent
+# Card advertises as its payment address.
+#
+# It has to be initialised under the transfer program before anyone pays it.
+# Crediting an account that still has the default owner makes the transfer
+# program claim it, and a claim on a public account the payer did not sign for is
+# rejected (`ClaimedUnauthorizedAccount`). `auth-transfer init` is the agent
+# signing for its own account, once, so every later payment is an ordinary
+# credit. It is also what makes the balance readable with `getAccount`: private
+# notes are commitments and the RPC returns the default account for them, so a
+# payment into a shielded account cannot be checked from outside.
+pay_account() { # category -> public account id on stdout
+  local home="$AGENT_HOMES/$1" id
+  id=$(LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+         "$WALLET" account list </dev/null 2>/dev/null \
+       | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||' | head -n1)
+  if [ -z "$id" ]; then
+    LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+      "$WALLET" account new public </dev/null >/dev/null 2>&1
+    id=$(LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+           "$WALLET" account list </dev/null 2>/dev/null \
+         | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||' | head -n1)
+  fi
+  [ -n "$id" ] || return 1
+  # Already claimed? Then init would fail on "Account must be uninitialized".
+  local owner; owner=$(curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$id\"]}")
+  if ! echo "$owner" | grep -q '"program_owner":\[0,0,0,0,0,0,0,0\]'; then
+    echo "$id"; return 0
+  fi
+  LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+    "$WALLET" auth-transfer init --account-id "Public/$id" </dev/null >/dev/null 2>&1
+  echo "$id"
+}
+
 deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   local cat="$1" per_tx="$2" per_period="$3" period="$4" fund="${5:-$FUND_AMOUNT}"
-  # A signer anchors exactly one policy: its first create_policy lands and no
-  # later one does, per account rather than per run, with a fresh and correctly
-  # formed account behaving no differently. So each agent gets its own owner.
-  # Nothing requires the three to share one — owner_id is simply committed into
-  # each policy hash — and an agent per principal is arguably the more honest
-  # shape anyway.
+  # Whether one signer can anchor all three depends on the signer, and the rule
+  # is narrow. A signer that still has the DEFAULT program owner anchors exactly
+  # once: on its second anchor its nonce is no longer zero, the SPEL macro drops
+  # its post-state to dodge rule 7, and the state machine then rejects the
+  # transaction with `DeclaredAccountMissingFromOutput`. A signer already owned
+  # by a program — anything that has ever received a transfer — is exempt from
+  # both and can anchor repeatedly (`DumJ4LCB…`, nonces 29 and 30, blocks 8050
+  # and 8051). Fresh signers are passed below because they are unambiguous;
+  # `SIGNER` may be reused if it is program-owned.
   local signer="${6:-$SIGNER}"
   local OWNER_HEX; OWNER_HEX=$(python3 -c "
 import hashlib,sys
@@ -185,6 +232,10 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$signer")
   if [ -z "$agent" ]; then echo "  FAILED to fund the agent" >&2; return 1; fi
   echo "  agent $agent  (holds at least $fund)"
   echo "  keys  $AGENT_HOMES/$cat  (outside the repository, never committed)"
+
+  local pay; pay=$(pay_account "$cat")
+  if [ -z "$pay" ]; then echo "  FAILED to open a receiving account" >&2; return 1; fi
+  echo "  pays into Public/$pay  (advertised in its Agent Card)"
 
   local agent_hex; agent_hex=$(python3 -c "
 import hashlib,sys
@@ -229,11 +280,11 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   if [ -z "$tx" ]; then
     # Before calling this a failure, ask whether this exact policy is already
     # anchored from an earlier run. If it is, that refusal is init doing its job.
-    local prior; prior=$(anchored_tx "$policy_hash")
+    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$policy_hash")
     if [ -n "$prior" ] && confirmed "$prior"; then
       echo "  create_policy $prior  already anchored (init refused a second one)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
       echo
       return 0
     fi
@@ -246,34 +297,34 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   for _ in $(seq 1 24); do sleep 30; confirmed "$tx" && break; done
   if confirmed "$tx"; then
     echo "  create_policy $tx  landed"
-    printf '%s\t%s\n' "$policy_hash" "$tx" >> "$LEDGER"
+    printf '%s\t%s\t%s\n' "$DEPLOY_TX" "$policy_hash" "$tx" >> "$LEDGER"
   else
     # A policy that is already anchored does not make spel fail: init refuses
     # inside the program, so the transaction is built, submitted, given a hash,
     # and then simply never lands — the same shape as every other failure on
     # this chain. So the ledger has to be consulted here, on the unconfirmed
     # path, and not only when spel submitted nothing.
-    local prior; prior=$(anchored_tx "$policy_hash")
+    local prior; prior=$(anchored_tx "$DEPLOY_TX" "$policy_hash")
     if [ -n "$prior" ] && confirmed "$prior"; then
       echo "  create_policy $prior  already anchored (init refused a second one)"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$cat" "$agent" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
       echo
       return 0
     fi
     echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$cat" "$agent" "$policy_hash" "$per_tx" "$per_period" "$period" "$tx" >> "$MANIFEST"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$cat" "$agent" "$pay" "$policy_hash" "$per_tx" "$per_period" "$period" "$tx" >> "$MANIFEST"
   echo
 }
 
 # One per default skill category, with envelopes sized to what each does: a
 # storage agent pays small and often, a blockchain agent moves more per call.
-deploy_agent storage    50   500  1000  10  12tm7eC5xjKqRKTRdXHDqCkAmr1MuXsavt22AMAaxS9v
-deploy_agent messaging  25   250  1000  10  CWLkf996jdXB6Zs4TX74G47f15yREgNVzwo883wJX8j4
-deploy_agent blockchain 200 1000  1000  30  Saavr9yrD9AipzK4kKFG9N3LF3zdA4Sc6PucX7oKMwN
+deploy_agent storage    50   500  1000  10  74X2qWYq9ibq9BZgNrYc9ar2VrjvZEGjknrx21ypmXMi
+deploy_agent messaging  25   250  1000  10  AX5t22nfuWV5hWroReYjP885SmdJRuUuM7h8vD1msEHH
+deploy_agent blockchain 200 1000  1000  30  CD7UznmriALT8khbr2vCe46vN1YQyeMrAqZHy7Sfq7ct
 
 echo "manifest: $MANIFEST"
 column -t -s$'\t' "$MANIFEST" 2>/dev/null || cat "$MANIFEST"

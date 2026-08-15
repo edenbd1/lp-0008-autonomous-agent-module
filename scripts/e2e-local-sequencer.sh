@@ -165,11 +165,40 @@ AGENT_HOME="$WORK/agent"; mkdir -p "$AGENT_HOME"
 cp "$WALLET_HOME/wallet_config.json" "$AGENT_HOME/"
 LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   wallet_run account new private </dev/null >/dev/null 2>&1
-AGENT=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+SEED=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   wallet_run account list </dev/null 2>/dev/null \
   | grep -oE 'Private/[1-9A-HJ-NP-Za-km-z]+' | sed 's|Private/||' | tail -n1)
-[ -n "$AGENT" ] || die "could not create the agent account"
-echo "  agent $AGENT"
+[ -n "$SEED" ] || die "could not create the agent account"
+
+# Fund it BEFORE anchoring, and anchor on whatever account ends up holding the
+# money. A shielded transfer does not credit an existing account, it creates a
+# new note with its own id under the same keys — so anchoring first would commit
+# the policy to an empty account, and `spend` now fails on a balance it cannot
+# move rather than passing a check and moving nothing.
+LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+  wallet_run account show-keys --account-id "Private/$SEED" </dev/null 2>/dev/null \
+  | grep -E "^[0-9a-f]{64,}$" > "$WORK/agent.keys"
+[ -s "$WORK/agent.keys" ] || die "could not export the agent's keys"
+wallet_run auth-transfer send --from "Public/$TEST_SIGNER" \
+  --to-keys "$WORK/agent.keys" --amount 1000 </dev/null >/dev/null 2>&1 \
+  || die "could not fund the agent"
+AGENT=""
+for _ in $(seq 1 30); do
+  LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+    wallet_run account sync-private </dev/null >/dev/null 2>&1
+  for a in $(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+               wallet_run account list </dev/null 2>/dev/null \
+             | grep -oE 'Private/[1-9A-HJ-NP-Za-km-z]+'); do
+    b=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+          wallet_run account get --account-id "$a" </dev/null 2>/dev/null \
+        | grep -o '"balance":[0-9]*' | cut -d: -f2 | head -1)
+    [ "${b:-0}" -ge 1000 ] 2>/dev/null && { AGENT="${a#Private/}"; break; }
+  done
+  [ -n "$AGENT" ] && break
+  sleep 2
+done
+[ -n "$AGENT" ] || die "the agent never received the funding"
+echo "  agent $AGENT  (holds 1000)"
 
 PER_TX=100; PER_PERIOD=500; PERIOD=1000
 OWNER_HEX=$(python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$TEST_SIGNER")
@@ -185,34 +214,81 @@ spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SI
   || die "create_policy failed"
 echo "  policy anchored"
 
-say "[5/5] the agent spends inside its envelope, and is refused outside it"
-RECIP=$(python3 -c "print('ab'*32)")
-spend_at() { # amount nonce
-  local marker; marker=$(cd "$ROOT" && cargo run --quiet --release -p agent-policy-core --example spend-marker -- \
-    "$POLICY" "$RECIP" "$1" "$2")
+say "[5/5] the agent pays inside its envelope, and is refused outside it"
+# A second party, with its own wallet home, so the payer holds no key for the
+# account it pays. Public, because a private account's state cannot be built
+# without its viewing key and its balance cannot be read back with `getAccount`.
+# It is initialised under the transfer program first: crediting a default-owned
+# public account makes the transfer program claim it, and a claim nobody signed
+# for is rejected.
+SERVER_HOME="$WORK/server"; mkdir -p "$SERVER_HOME"
+cp "$WALLET_HOME/wallet_config.json" "$SERVER_HOME/"
+LEE_WALLET_HOME_DIR="$SERVER_HOME" NSSA_WALLET_HOME_DIR="$SERVER_HOME" \
+  wallet_run account new public </dev/null >/dev/null 2>&1
+RECIP=$(LEE_WALLET_HOME_DIR="$SERVER_HOME" NSSA_WALLET_HOME_DIR="$SERVER_HOME" \
+  wallet_run account list </dev/null 2>/dev/null \
+  | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||' | head -n1)
+[ -n "$RECIP" ] || die "could not create the recipient account"
+LEE_WALLET_HOME_DIR="$SERVER_HOME" NSSA_WALLET_HOME_DIR="$SERVER_HOME" \
+  wallet_run auth-transfer init --account-id "Public/$RECIP" </dev/null >/dev/null 2>&1 \
+  || die "could not initialise the recipient account"
+echo "  recipient Public/$RECIP  (separate wallet home; the payer has no key for it)"
+
+balance_of() {
+  curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["'"$1"'"]}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result",{}).get("balance",0))'
+}
+BEFORE=$(balance_of "$RECIP")
+
+# `--bin-auth-transfer` is not cosmetic. `spend` moves no balance itself — LEZ
+# rule 5 forbids a program from debiting an account it does not own — so it
+# chains a call into the transfer program that does own the agent's account, and
+# the privacy circuit has to be handed that program's ELF to prove the inner
+# call.
+AUTH_TRANSFER="$ROOT/artifacts/programs/authenticated_transfer.bin"
+[ -f "$AUTH_TRANSFER" ] || die "no transfer program at $AUTH_TRANSFER"
+spend_at() { # amount
   LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
-  spel --idl "$IDL" --program "$PROGRAM" -- spend --agent "Private/$AGENT" \
+  spel --idl "$IDL" --program "$PROGRAM" --bin-auth-transfer "$AUTH_TRANSFER" \
+    -- spend --agent "Private/$AGENT" --recipient "Public/$RECIP" \
     --policy-hash "$POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
     --per-tx "$PER_TX" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" \
-    --recipient "$RECIP" --amount "$1" --nonce "$2" \
-    --spent-this-period 0 --marker-seed "$marker" 2>&1
+    --amount "$1" --spent-this-period 0 2>&1
 }
 
-OUT=$(spend_at 50 1)
+OUT=$(spend_at 50)
 TX=$(echo "$OUT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
 [ -n "$TX" ] || { echo "$OUT" | tail -8; die "the autonomous spend produced no transaction"; }
 echo "  50 (inside the envelope) -> $TX"
 
+# A transaction hash is not a payment. An earlier version of this instruction
+# produced confirmed, on-chain proofs that a policy PERMITTED an amount and
+# moved nothing at all, so the assertion is on the balance.
+AFTER=0
+for _ in $(seq 1 30); do
+  AFTER=$(balance_of "$RECIP")
+  [ "$((AFTER - BEFORE))" -eq 50 ] && break
+  sleep 2
+done
+[ "$((AFTER - BEFORE))" -eq 50 ] \
+  || die "the recipient went $BEFORE -> $AFTER: the spend did not transfer 50"
+echo "  recipient balance $BEFORE -> $AFTER  (+50, read back from the chain)"
+
 # The negative half. A spend over the per-transaction limit must fail without an
 # owner approval — a run where both halves pass is not evidence of a threshold.
-OUT=$(spend_at 5000 2)
+OUT=$(spend_at 5000)
 if echo "$OUT" | grep -q 'tx_hash: [0-9a-f]\{64\}'; then
   echo "$OUT" | tail -6
   die "5000 was ACCEPTED without an owner approval — the threshold is not enforced"
 fi
 echo "  5000 (outside it) -> refused, as it must be"
+END=$(balance_of "$RECIP")
+[ "$END" -eq "$AFTER" ] || die "the refused spend still moved balance: $AFTER -> $END"
+echo "  recipient balance unchanged at $END after the refusal"
 
 say "VERIFIED"
 echo "A real sequencer, RISC0_DEV_MODE=0 throughout. The policy was anchored by"
-echo "address, a spend inside the envelope went through unattended, and a spend"
-echo "outside it was refused with no owner approval present."
+echo "address, a payment inside the envelope moved balance between two parties"
+echo "unattended, and a payment outside it was refused with no owner approval"
+echo "present and no balance moved."
