@@ -582,6 +582,14 @@ jobs:
       # many rows the manifest actually holds — because the failure being closed
       # is a script that exits 0 having checked nothing.
 
+      # spel depends on pcsc-sys, which links the smartcard daemon's library --
+      # hardware-wallet support we never touch, but a build dependency all the
+      # same. ubuntu-latest does not ship it, and its absence fails the build
+      # with a pkg-config error rather than anything about spel, which is why
+      # this is worth a comment rather than a bare apt line.
+      - name: The system library spel's smartcard dependency links against
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkgconf libpcsclite-dev
+
       - uses: actions/cache@v4
         with:
           path: |
