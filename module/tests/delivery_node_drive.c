@@ -58,17 +58,33 @@ static void on_scalar(int ret, char *msg, size_t len, void *ud) {
   if (strcmp(op, "stop_node")  == 0) stopped = ok;
 }
 
+// The payload is NOT NUL-terminated — liblogosdelivery.h says so, and the
+// bytes come from reused slot buffers, so whatever sits past `len` is the tail
+// of some earlier, longer event. strstr() would run into that residue: a stale
+// "message_error" turns a healthy send into a reported failure, and a stale
+// "message_sent" is worse, because it is a false pass. Search within `len`.
+static int contains(const char *hay, size_t len, const char *needle) {
+  size_t n = strlen(needle);
+  if (n > len) return 0;
+  for (size_t i = 0; i + n <= len; i++)
+    if (memcmp(hay + i, needle, n) == 0) return 1;
+  return 0;
+}
+
 static void on_event(int ret, const char *eventJson, size_t len, void *ud) {
-  (void)ret; (void)ud;
-  if (!eventJson) return;
+  (void)ud;
+  if (!eventJson || len == 0) return;
   printf("  event %.*s\n", (int)(len > 160 ? 160 : len), eventJson);
+  // An error dispatch carries a message string, not event JSON; scanning it
+  // for event names would be reading the wrong thing entirely.
+  if (ret != RET_OK) { send_err = 1; return; }
   // The name you register with is not the name that comes back: you subscribe
   // to "onMessageSent" and the payload carries "eventType":"message_sent".
   // Matching the registration name silently never fires, which reads exactly
   // like a message that never left.
-  if (strstr(eventJson, "\"message_sent\"") ||
-      strstr(eventJson, "\"message_propagated\"")) sent_ok = 1;
-  if (strstr(eventJson, "\"message_error\""))      send_err = 1;
+  if (contains(eventJson, len, "\"message_sent\"") ||
+      contains(eventJson, len, "\"message_propagated\"")) sent_ok = 1;
+  if (contains(eventJson, len, "\"message_error\""))      send_err = 1;
 }
 
 // Poll a flag rather than sleeping a fixed amount: a fixed sleep either wastes
@@ -107,10 +123,14 @@ int main(void) {
   }
 
   printf("\n2. listen for message events before anything is sent\n");
-  logosdelivery_add_event_listener(ctx, "onMessageSent",       on_event, NULL);
-  logosdelivery_add_event_listener(ctx, "onMessagePropagated", on_event, NULL);
-  logosdelivery_add_event_listener(ctx, "onMessageError",      on_event, NULL);
-  printf("  ok    three listeners registered\n");
+  // add_event_listener returns a listener id, and 0 means it did not register.
+  // Printing "ok" without looking turns a failed registration into a confusing
+  // sixty-second timeout at step 5 — and into a line that exercise-nodes.sh
+  // scrapes into the evidence transcript as a step that passed.
+  uint64_t l1 = logosdelivery_add_event_listener(ctx, "onMessageSent",       on_event, NULL);
+  uint64_t l2 = logosdelivery_add_event_listener(ctx, "onMessagePropagated", on_event, NULL);
+  uint64_t l3 = logosdelivery_add_event_listener(ctx, "onMessageError",      on_event, NULL);
+  CHECK(l1 && l2 && l3, "three listeners registered");
 
   printf("\n3. start it, and wait for the node to say so\n");
   // start_node returns once dispatched; the scalar callback is the real answer.
@@ -138,8 +158,16 @@ int main(void) {
   LogosdeliverySendReq send = { .messageJson = msg };
   logosdelivery_send(ctx, on_reply, (void *)"send", &send);
 
-  for (int i = 0; i < 600 && !sent_ok && !send_err; i++) usleep(100000);
-  CHECK(sent_ok && !send_err, "the message reached the network");
+  // Do NOT stop at the first success event. `message_propagated` means the
+  // message reached the network but has not been validated yet, and the
+  // documented failure flow is sent -> error: the node gives up after its
+  // cache window and emits `message_error` a minute later. Breaking on the
+  // first good news and then asserting `!send_err` makes that assertion
+  // unfalsifiable — the driver would already have exited 0.
+  //
+  // So wait out the window even after success, and let a later error win.
+  for (int i = 0; i < 900 && !send_err; i++) usleep(100000);
+  CHECK(sent_ok && !send_err, "the message reached the network, and stayed sent");
 
   printf("\n6. shut down\n");
   logosdelivery_stop_node(ctx, on_scalar, (void *)"stop_node");
