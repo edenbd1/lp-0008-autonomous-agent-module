@@ -80,39 +80,41 @@ jobs:
 
       # The guest is content-addressed and committed under artifacts/programs/.
       # Rebuilding it needs the risc0 docker toolchain and is done locally;
-      # docs/DEPLOYMENT.md records the reproduction. This asserts the committed
-      # binary still hashes to the deployed transaction, so a tampered binary
-      # fails CI without a full guest rebuild.
-      - name: Deploy hash matches the live transaction
+      # docs/DEPLOYMENT.md records the reproduction.
+      #
+      # Two steps used to live here, and between them they hardcoded the deploy
+      # hash TWICE — once as `want=` and once in a curl payload. That is the
+      # same literal-that-must-be-hand-edited-on-every-redeploy pattern that put
+      # three superseded transactions in SUBMISSION-DRAFT.md, and it was wrong
+      # three times today under different names: a content-addressed chain moves
+      # that hash on every deploy, so a copy of it in a workflow is a copy that
+      # has to be remembered.
+      #
+      # verify-deployment.sh derives it instead — SHA256(u32_le(len)||bytecode)
+      # of the committed bytes — and then asks the sequencer, which is strictly
+      # stronger than the literal was: the literal proved only that the binary
+      # had not changed, this proves the binary is the program on chain. It also
+      # runs the cannot-exist control, checks each policy account's limits
+      # against the chain, and attributes every settlement to the program that
+      # owns the ledger it charged, so a row orphaned by a redeploy is labelled
+      # rather than counted.
+      - name: The committed program is the program on chain
         run: |
           set -e
-          got=$(python3 -c "
-          import hashlib,struct
-          b=open('artifacts/programs/agent_verifier.bin','rb').read()
-          print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
-          want=697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf
-          if [ "$got" != "$want" ]; then
-            echo "deploy hash drifted: got $got, expected $want"; exit 1
+          ./scripts/verify-deployment.sh 2>&1 | tee verify.out
+          # The exit code is the assertion; the banner proves it got that far.
+          # No step may go green by skipping.
+          grep -q "agrees with artifacts/ and with the chain" verify.out \
+            || { echo "verify-deployment.sh exited 0 without reporting a full pass"; exit 1; }
+          if grep -q SKIPPED verify.out; then
+            echo "verify-deployment.sh reported SKIPPED"; exit 1
           fi
-          echo "OK $got"
-
-      # The deployed program is only evidence while it is actually on chain, so
-      # ask the sequencer rather than trusting the hash alone. A cannot-exist
-      # hash is the control: if the RPC answered non-null to everything, the
-      # check above it would be meaningless.
-      - name: The program is live on the public testnet
-        run: |
-          set -e
-          q() {
-            curl -s -m 30 -X POST https://testnet.lez.logos.co \
-              -H 'Content-Type: application/json' \
-              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"
-          }
-          real=$(q 697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf)
-          ctrl=$(q dededededededededededededededededededededededededededededededede)
-          echo "$real" | grep -q '"result":\[' || { echo "deploy not on chain: $real"; exit 1; }
-          echo "$ctrl" | grep -q '"result":null' || { echo "control did not return null: $ctrl"; exit 1; }
-          echo "OK deploy present, control null"
+          # It must have derived a hash and reached the chain, not short-circuited.
+          grep -q "committed binary hashes to" verify.out \
+            || { echo "no deploy hash was derived"; exit 1; }
+          grep -q "control hash returns null" verify.out \
+            || { echo "the cannot-exist control did not run"; exit 1; }
+          rm -f verify.out
 
       # SUBMISSION-DRAFT.md's evidence sections are generated from the chain and
       # from the committed binary by scripts/submission-evidence.py. --check
