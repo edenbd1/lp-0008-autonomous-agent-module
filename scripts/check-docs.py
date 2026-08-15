@@ -5,7 +5,7 @@
     ./scripts/check-docs.py            # report and exit non-zero on any failure
     ./scripts/check-docs.py --list     # also print what passed
 
-Three classes of rot, all of which this repository has shipped:
+Five classes of rot, all of which this repository has shipped:
 
   1. A dangling path. `docs/use-cases.md` credited `scripts/use-cases/policy-hash.py`
      with self-checking every row of a manifest, for several commits after the
@@ -28,7 +28,18 @@ Three classes of rot, all of which this repository has shipped:
      the four documents that asserted a superseded program as current came to
      do so. So the promise is checked.
 
-  4. A symbol citation naming something that does not exist. Line numbers into
+  4. A markdown link whose target does not exist. This one was found by a
+     falsification attempt against this script sailing through: class 1 only
+     matches paths in BACKTICKS, so `[`docs/limitations.md`](docs/gone.md)`
+     passed, because the half that resolves is the half nobody clicks. Every
+     cross-reference between these documents is written that way. Link targets
+     are resolved relative to the document's own directory, the way a reader's
+     browser resolves them — not through the repo-root and docs/ fallbacks used
+     for a path quoted in prose, which would make the check answer yes too
+     often. `EXPECTED_OUTSIDE_REPO` holds the one target that is correct
+     BECAUSE it does not resolve, and that entry fails if it ever starts to.
+
+  5. A symbol citation naming something that does not exist. Line numbers into
      `module/src/agent_skills.cpp` drifted by between +87 and +324 lines over one
      refactor — a fixed correction would have fixed the middle third and broken
      the rest — so citations into module sources name a *symbol* instead.
@@ -99,6 +110,24 @@ EXPECTED_ABSENT = {
 
 # A repo-relative path in backticks: `scripts/use-cases/lib.sh`, `module/src/x.h`.
 PATH_RE = re.compile(r"`([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+\.[A-Za-z0-9]+)`")
+# The target of a markdown link: [text](docs/limitations.md), anchor stripped.
+#
+# This was a hole, and it was found the way holes should be: a falsification
+# attempt against this very script sailed through. PATH_RE only matches paths
+# inside BACKTICKS, so `[`docs/limitations.md`](docs/does-not-exist.md)` passed
+# — the backticked half resolves and the half a reader actually clicks was
+# never looked at. Every cross-reference between these documents is written in
+# that form, and two of them now cite this script as their guarantee.
+LINK_RE = re.compile(r"\]\(([^)#\s]+?)(?:#[^)\s]*)?\)")
+LINK_SCHEMES = ("http://", "https://", "mailto:")
+
+# Link targets that are correct precisely because they do not resolve here.
+EXPECTED_OUTSIDE_REPO = {
+    "../TERMS.md":
+        "SUBMISSION-DRAFT.md is submitted into the prize repository, where it "
+        "sits one level below TERMS.md. It does not resolve in this repository "
+        "and must not: the link is right for where the document is read.",
+}
 # `file.ext:12` or `file.ext:12-34`, possibly a bare `:56` continuation.
 CITE_RE = re.compile(r"`([A-Za-z0-9_.\-/]+\.(?:cpp|h|rs|py|sh|json|toml|yml)):(\d+)(?:-(\d+))?`")
 # The stable form this repository now prefers, and only that form:
@@ -111,7 +140,7 @@ SYMBOL_RE = re.compile(
     r"(?:,| in) `((?:module/src/)?[A-Za-z0-9_]+\.(?:cpp|h))`")
 
 failures = []
-checked = {"path": 0, "line": 0, "symbol": 0, "promise": 0}
+checked = {"path": 0, "link": 0, "line": 0, "symbol": 0, "promise": 0}
 
 
 def note_ok(kind, what):
@@ -158,6 +187,34 @@ for doc in DOCS:
             failures.append("%s:%d  path does not exist: %s" % (doc, line, path))
         else:
             note_ok("path", "%s -> %s" % (doc, path))
+
+    # Markdown link targets, resolved the way a reader's browser resolves them:
+    # relative to the directory the document is in, and nothing else. resolve()
+    # is deliberately not used here — its repo-root and docs/ fallbacks are
+    # right for a path quoted in prose and wrong for a link, which either works
+    # when clicked or does not.
+    for m in LINK_RE.finditer(text):
+        target = m.group(1)
+        if target.startswith(LINK_SCHEMES):
+            continue
+        line = text[: m.start()].count("\n") + 1
+        if target in EXPECTED_OUTSIDE_REPO:
+            if os.path.exists(os.path.normpath(
+                    os.path.join(ROOT, os.path.dirname(doc), target))):
+                failures.append(
+                    "%s:%d  %s is allowlisted as resolving outside this "
+                    "repository but now exists inside it — the exemption is "
+                    "stale" % (doc, line, target))
+            else:
+                note_ok("link", "%s -> %s (outside the repo, as intended: %s)"
+                        % (doc, target, EXPECTED_OUTSIDE_REPO[target]))
+            continue
+        if not os.path.exists(os.path.normpath(
+                os.path.join(ROOT, os.path.dirname(doc), target))):
+            failures.append(
+                "%s:%d  link target does not exist: %s" % (doc, line, target))
+        else:
+            note_ok("link", "%s -> %s" % (doc, target))
 
     for m in CITE_RE.finditer(text):
         path, start, end = m.group(1), int(m.group(2)), m.group(3)
@@ -221,14 +278,14 @@ for doc, promise in HASH_FREE.items():
                 % (doc, lineno, token[:12], promise))
         checked["promise"] += 1
 
-print("checked %d paths, %d line citations, %d symbol citations, "
-      "%d lines of two hash-free documents, across %d documents"
-      % (checked["path"], checked["line"], checked["symbol"], checked["promise"],
-         len(DOCS)))
+print("checked %d paths, %d link targets, %d line citations, %d symbol "
+      "citations, %d lines of two hash-free documents, across %d documents"
+      % (checked["path"], checked["link"], checked["line"], checked["symbol"],
+         checked["promise"], len(DOCS)))
 if failures:
     print("\n%d documentation reference(s) point at something that is not there:\n"
           % len(failures))
     for f in failures:
         print("  " + f)
     sys.exit(1)
-print("every path, line citation and symbol citation resolves")
+print("every path, link target, line citation and symbol citation resolves")
