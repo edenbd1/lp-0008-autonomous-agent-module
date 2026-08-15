@@ -97,7 +97,7 @@ else
   # and fails silently.
   LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
     "$WALLET" deploy-program "$PROGRAM" </dev/null >/dev/null 2>&1
-  for _ in $(seq 1 25); do sleep 6; confirmed "$DEPLOY_TX" && break; done
+  for _ in $(seq 1 24); do sleep 30; confirmed "$DEPLOY_TX" && break; done
   confirmed "$DEPLOY_TX" || { echo "  the program did not deploy" >&2; exit 1; }
   echo "         landed"
 fi
@@ -241,7 +241,9 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
     echo "$out" | tail -8 >&2
     return 1
   fi
-  for _ in $(seq 1 25); do sleep 6; confirmed "$tx" && break; done
+  # Blocks are exactly 60 seconds apart, so 150s gave a transaction two or
+  # three chances to be included and then called it dead. Wait twelve blocks.
+  for _ in $(seq 1 24); do sleep 30; confirmed "$tx" && break; done
   if confirmed "$tx"; then
     echo "  create_policy $tx  landed"
     printf '%s\t%s\n' "$policy_hash" "$tx" >> "$LEDGER"
