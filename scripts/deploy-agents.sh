@@ -225,7 +225,22 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   if confirmed "$tx"; then
     echo "  create_policy $tx  landed"
     printf '%s\t%s\n' "$policy_hash" "$tx" >> "$LEDGER"
-  else echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1; fi
+  else
+    # A policy that is already anchored does not make spel fail: init refuses
+    # inside the program, so the transaction is built, submitted, given a hash,
+    # and then simply never lands — the same shape as every other failure on
+    # this chain. So the ledger has to be consulted here, on the unconfirmed
+    # path, and not only when spel submitted nothing.
+    local prior; prior=$(anchored_tx "$policy_hash")
+    if [ -n "$prior" ] && confirmed "$prior"; then
+      echo "  create_policy $prior  already anchored (init refused a second one)"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$cat" "$agent" "$policy_hash" "$per_tx" "$per_period" "$period" "$prior" >> "$MANIFEST"
+      echo
+      return 0
+    fi
+    echo "  create_policy $tx  NOT CONFIRMED" >&2; return 1
+  fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$cat" "$agent" "$policy_hash" "$per_tx" "$per_period" "$period" "$tx" >> "$MANIFEST"
