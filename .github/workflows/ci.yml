@@ -226,6 +226,20 @@ jobs:
             -o owner_channel_test
           ./owner_channel_test
 
+      # The dangerous window is not the crash, it is between the wallet
+      # returning a hash and the task recording it: the money moved, and a
+      # snapshot taken there reloads as unpaid. These cases cover the payment
+      # intent written before the wallet is called, and every way a snapshot can
+      # be unreadable — truncated, malformed, from a future schema — because the
+      # one outcome that must never happen is a corrupt file loading as an empty
+      # task list and a paid task being paid a second time.
+      - name: Exercise task-state persistence
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/task_persistence_test.cpp \
+            module/src/task_persistence.cpp \
+            -o task_persistence_test
+          ./task_persistence_test
+
       # ---------------------------------------------------------------------
       # Everything under module/tests/ is accounted for. Six suites run above.
       # The four that do not run here are named, with what they need, because a
