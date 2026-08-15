@@ -266,12 +266,126 @@ jobs:
       #     this is the packaged-artifact check and it stays manual.
       #     docs/basecamp.md carries the invocation and the recorded output.
       #
-      #   module/tests/delivery_node_drive.c
       #   module/tests/storage_node_drive.c
-      #     Need a real Logos Delivery / Storage node library built from
-      #     source — a Nim build plus a cargo build of librln — which is tens
-      #     of minutes and not what this job is for. Driven by
-      #     scripts/exercise-nodes.sh, which owns the paths. Their whole point
-      #     is a live node, so a runner without one could only run them as the
-      #     stub the fake ports above already cover better.
+      #     Runs here now — see the `storage-node` job below. The earlier note
+      #     in this block said it needed a from-source Nim build. That was
+      #     wrong: logos-storage-nim's own release workflow builds
+      #     libstorage.so on ubuntu-24.04 and publishes it as a release asset,
+      #     so the runner downloads what upstream built instead of building it.
+      #
+      #   module/tests/delivery_node_drive.c
+      #     Still not here, and the reason is specific rather than "it is
+      #     slow". There is no prebuilt liblogosdelivery for Linux anywhere
+      #     public to download:
+      #       - logos-messaging/logos-delivery publishes no library asset on
+      #         any release from v0.21.1 to v0.38.1. The one shared library it
+      #         ever shipped is libwaku-v0.36.0-linux-x86_64.so, from before
+      #         the rename, and it exports waku_* — none of the
+      #         logosdelivery_* symbols this driver links against.
+      #       - Its release-assets.yml would build a .deb on ubuntu-22.04, but
+      #         every run of that workflow since v0.38.0 ended in
+      #         failure/cancelled with zero artifacts produced.
+      #       - Its ci.yml does build build/liblogosdelivery.so on ubuntu-22.04
+      #         and upload it, but with retention-days: 1, into another
+      #         repository's artifact store, which this repo's GITHUB_TOKEN
+      #         cannot read.
+      #     So the only route is building it on the runner. That is Nim 2.2.4 +
+      #     nimble 0.22.3 + recursive submodules; librln is *not* the cargo
+      #     build claimed here before, since scripts/build_rln.sh downloads
+      #     zerokit v2.0.2's x86_64-unknown-linux-gnu-stateless-rln.tar.gz and
+      #     only falls back to cargo when no asset matches the host triple. The
+      #     cost is the Nim compile: upstream's own ubuntu-22.04 build step
+      #     took 26m27s *with* a warm nimble-deps cache. That is affordable
+      #     with caching and it is a real option, not an impossibility — it is
+      #     simply not claimed here until it has been run and seen green.
+      #     Driven meanwhile by scripts/exercise-nodes.sh, which owns the paths.
       # ---------------------------------------------------------------------
+
+  # A real Storage node, on the runner, doing the thing the skill claims.
+  #
+  # The fake-port suites above prove the skills behave when the node misbehaves.
+  # They cannot prove a file was stored, because nothing stores it. This job
+  # starts an actual Logos Storage node, hands it a file, and asserts on what
+  # comes back — and then deliberately breaks the same driver twice and asserts
+  # it goes red, because an assertion never observed failing is not evidence.
+  storage-node:
+    name: A real Storage node takes a file and returns its address
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the exact tag scripts/exercise-nodes.sh builds locally, and
+      # checksummed: a release asset is mutable, and "we downloaded something"
+      # is not the same claim as "we downloaded this". The zip carries
+      # libstorage.so and the libstorage.h the driver compiles against, so the
+      # header and the binary cannot drift apart.
+      - name: The Storage library, as upstream built and published it
+        env:
+          STORAGE_VERSION: v0.4.4
+          STORAGE_SHA256: d2f8e0207e4688c58a89adfb2bbb9b2ae0688879815427372e467bdbc4f05102
+        run: |
+          set -euo pipefail
+          curl -fsSL -o libstorage.zip \
+            "https://github.com/logos-storage/logos-storage-nim/releases/download/${STORAGE_VERSION}/libstorage-linux-amd64-${STORAGE_VERSION}.zip"
+          echo "${STORAGE_SHA256}  libstorage.zip" | sha256sum -c -
+          mkdir -p _external/logos-storage-nim/build _external/logos-storage-nim/library
+          unzip -o -q libstorage.zip -d unpacked
+          mv unpacked/libstorage.so _external/logos-storage-nim/build/
+          mv unpacked/libstorage.h  _external/logos-storage-nim/library/
+          ls -l _external/logos-storage-nim/build/libstorage.so
+
+      - name: Build the driver against it
+        run: |
+          set -euo pipefail
+          cc -Wall -Wextra -o storage_node_drive module/tests/storage_node_drive.c \
+            -I_external/logos-storage-nim/library \
+            -L_external/logos-storage-nim/build -lstorage
+
+      # The driver writes a repo and an upload into the working directory, so
+      # give it one of its own. Every step in it is an assertion and the exit
+      # code is the result, so a node that silently failed to start cannot
+      # produce a passing transcript.
+      - name: Drive the node
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$PWD/_external/logos-storage-nim/build"
+          mkdir -p run-ok
+          ( cd run-ok && "$GITHUB_WORKSPACE/storage_node_drive" )
+
+      # Negative control 1, with the shipped source unmodified: block the path
+      # the node needs for its repo with a regular file. The node cannot start,
+      # and the driver must go red. If this step passes, every assertion above
+      # it is decoration.
+      - name: Negative control — the driver goes red when the node cannot start
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$PWD/_external/logos-storage-nim/build"
+          mkdir -p run-blocked && printf 'not a directory' > run-blocked/lp0008-storage
+          set +e
+          ( cd run-blocked && "$GITHUB_WORKSPACE/storage_node_drive" ); rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "the driver passed against a node that never started"; exit 1; }
+
+      # Negative control 2: one character of the assertion changed, so it looks
+      # for a filename that was never uploaded. The node still starts, still
+      # stores the file, still returns a manifest — only the claim is false.
+      # This is what proves the manifest check is load-bearing rather than a
+      # non-empty-string test that any reply would satisfy.
+      - name: Negative control — the manifest assertion is falsifiable
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$PWD/_external/logos-storage-nim/build"
+          sed 's/lp0008-upload\.txt"),/lp0008-NEVER-uploaded.txt"),/' \
+            module/tests/storage_node_drive.c > broken_drive.c
+          ! diff -q module/tests/storage_node_drive.c broken_drive.c > /dev/null
+          cc -Wall -Wextra -o broken_drive broken_drive.c \
+            -I_external/logos-storage-nim/library \
+            -L_external/logos-storage-nim/build -lstorage
+          mkdir -p run-broken
+          set +e
+          ( cd run-broken && "$GITHUB_WORKSPACE/broken_drive" ); rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "the manifest assertion cannot fail"; exit 1; }
