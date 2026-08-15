@@ -65,6 +65,38 @@ else
   bad "$DOC does not mention $DEPLOY_TX — it documents a different deployment"
 fi
 
+# docs/benchmarks/cu-budget.md measures one specific binary, so it names one —
+# and it has now drifted three program generations without anything going red.
+# Not because the check is hard: because this script only ever looked at $DOC,
+# while that document told its readers "the pointer is checkable: run the script,
+# and it fails if the binary, the document and the chain stop agreeing". It did
+# not. A promised guard that does not exist is worse than no guard, because it
+# is why nobody looked.
+#
+# NOT a bare grep for the hash anywhere in the file. That document deliberately
+# names superseded programs — its settlement-size comparison spans three
+# generations — so matching one of those would go green while the cycle counts
+# described something else entirely. What has to agree is the one row that says
+# which binary produced the numbers.
+#
+# Hashes are elided there (`697746f5…cb5370bf`), so match head and tail rather
+# than a middle the reader cannot see anyway.
+CU=docs/benchmarks/cu-budget.md
+if [ ! -f "$CU" ]; then
+  bad "$CU is missing"
+else
+  CU_TX=$(awk -F'|' '/^\| *Deploy tx *\|/ { print $3; exit }' "$CU" | tr -d ' `')
+  CU_HEAD=${CU_TX%%…*}
+  CU_TAIL=${CU_TX##*…}
+  if [ -z "$CU_TX" ]; then
+    bad "$CU has no '| Deploy tx |' row: nothing in it states which program its cycle counts were measured against"
+  elif [ "${DEPLOY_TX#"$CU_HEAD"}" != "$DEPLOY_TX" ] && [ "${DEPLOY_TX%"$CU_TAIL"}" != "$DEPLOY_TX" ]; then
+    ok "$CU measures this program"
+  else
+    bad "$CU measures $CU_TX, not $DEPLOY_TX — its cycle counts describe a binary this repository no longer ships"
+  fi
+fi
+
 # The control. A hash that cannot exist must answer null, otherwise "not found"
 # proves nothing about the refusals this document relies on.
 if [ "$(rpc getTransaction '["dededededededededededededededededededededededededededededededede"]' \
