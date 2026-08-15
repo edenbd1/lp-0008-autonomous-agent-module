@@ -141,12 +141,15 @@ AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
 export LEE_WALLET_HOME_DIR="$AGENT_HOMES/$CLIENT_CAT"
 export NSSA_WALLET_HOME_DIR="$AGENT_HOMES/$CLIENT_CAT"
 echo "  signing from $LEE_WALLET_HOME_DIR"
+# `spend` is the autonomous instruction and takes two accounts, policy and
+# agent. It deliberately does not take an approval account: declaring one it
+# never reads is what made every settlement after the first fail to build.
+# An above-threshold payment calls `spend_approved` instead, with the marker.
 OUT_TXT=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
   -- spend --agent "Private/$CLIENT_ID" \
   --policy-hash "$CLIENT_POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
   --per-tx "$CLIENT_PER_TX" --per-period "$CLIENT_PER_PERIOD" --period-blocks "$CLIENT_PERIOD" \
-  --recipient "$RECIP_HEX" --amount "$PRICE" --nonce "$NONCE" \
-  --spent-this-period 0 --marker-seed "$MARKER" 2>&1)
+  --amount "$PRICE" --spent-this-period 0 2>&1)
 TX=$(echo "$OUT_TXT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
 if [ -z "$TX" ]; then
   echo "  NO TRANSACTION — the settlement did not submit:" >&2
