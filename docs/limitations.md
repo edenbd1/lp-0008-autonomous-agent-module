@@ -2,34 +2,61 @@
 
 What does not work, stated before anyone has to discover it.
 
-## Two of the three agents never anchor, and I do not know why
+## Why a second create_policy from one signer is always dropped
 
-Corrected twice, so the record is what was measured rather than what was
-inferred. Only `storage` (`7o9PT8uE…`) is anchored. `messaging` (`25LLt4Zx…`)
-and `blockchain` (`9KdQSJ2t…`) have never anchored under the current program,
-and every attempt is submitted, given a hash, and dropped.
+Found in the sequencer source rather than guessed. `validate_execution` rule 7,
+`lee/state_machine/core/src/program/mod.rs:730-738`:
 
-Hypotheses tested and **rejected**:
+```rust
+if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
+    return Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { .. })
+}
+```
 
-- *Stale nonce.* The signer's on-chain nonce advances correctly.
-- *Empty `chain_index`.* The first signer had `"chain_index": []` where a fresh
-  account has `[1]`. That looked decisive; a brand-new, correctly formed signer
-  behaves identically.
-- *One anchor per signer.* Three distinct, unused signers in one run: only the
-  first anchor lands.
-- *One anchor per process.* Three separate runs, one signer each: still only
-  `storage`, and that via the ledger rather than a new anchor.
+`create_policy` returns `owner` with no claim, so its post-state keeps the
+default program owner. Every signed public transaction bumps its signer's nonce
+(`lee/state_machine/src/state/mod.rs:217-221`), so after the first anchor the
+signer's pre-state is no longer `Account::default()` and rule 7 rejects every
+later one — permanently, for that account.
 
-So it is neither the account nor the process. What is left is something
-specific to those two agents. Both were funded through `--to-keys` like
-`storage` was, and both were used in `spend` attempts that failed at submit —
-that is the most obvious difference and the first thing to check: whether a
-private account left in some state by a rejected privacy transaction can still
-be named in a later one.
+Nothing reports it because the sequencer drops a failing transaction at
+block-build time and moves on (`lez/sequencer/core/src/lib.rs:680-688`); the
+only trace is an `error!` line in the sequencer's own log, and `getTransaction`
+cannot distinguish "dropped" from "not yet processed".
 
-The honest summary is that criterion 1 stands at one of three, with four
-plausible explanations eliminated by experiment. That is worth more than a
-fifth guess.
+That is the whole explanation for the four hypotheses eliminated above. It is a
+chain rule, not a wallet problem: a correctly built second transaction fails
+just the same.
+
+**Fix**: stop declaring `owner` at all. Signers come from the witness set
+rather than `message.account_ids`
+(`lee/state_machine/src/validated_state_diff/mod.rs:498`, `63`), and a
+`Claim::Pda` needs no authorisation, so `create_policy` never actually reads
+the account it declares. Declaring it buys nothing and costs the signer its
+future.
+
+## Why `spend` cannot move balance the way it does now
+
+The same investigation found the criterion-2 blocker, and it is rule 5,
+`UnauthorizedBalanceDecrease` (`program/mod.rs:707-716`): **a program may not
+decrease the balance of an account it does not own.**
+
+Our agents are owned by the authenticated transfer program — measured, not
+assumed:
+
+```
+Private/9KdQSJ2t…  {"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB"}
+```
+
+So `spend` debiting the agent directly can never be accepted, however the
+accounts are declared. The mechanism that exists for this is the second
+argument of `SpelOutput::execute` — the `Vec<ChainedCall>` we have passed empty
+throughout. The policy program should gate the spend and then **chain a call to
+the authenticated transfer program**, which does own the accounts and is
+allowed to move their balances.
+
+That also disposes of the `KeyNotFoundError` above: reaching a shielded
+recipient is auth-transfer's problem, and it already solves it.
 
 ## Funding from the owner account breaks anchoring from the same account
 
