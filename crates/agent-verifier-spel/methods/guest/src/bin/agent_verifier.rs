@@ -114,17 +114,24 @@ mod agent_verifier {
     /// - `owner` (signer): the human deploying the agent. The instruction body
     ///   never reads it — signers reach the state machine through the witness
     ///   set, not through `message.account_ids`
-    ///   (`lee/state_machine/src/validated_state_diff/mod.rs:498`) — but
-    ///   declaring it is what makes `spel` sign at all, and anchoring has to be
-    ///   authenticated: any policy account that exists is spendable against, so
-    ///   permissionless anchoring would let an agent publish its own ceiling.
+    ///   (`lee/state_machine/src/validated_state_diff/mod.rs:498`). It is
+    ///   declared anyway, because declaring it is the only thing that makes
+    ///   `spel` sign at all, and anchoring has to be authenticated: `spend`
+    ///   accepts any policy account that exists, and `owner_id` is a caller-
+    ///   supplied 32 bytes, so an agent that could anchor a policy could anchor
+    ///   itself an unlimited one and the ceiling would mean nothing.
     ///
-    ///   Returning a signer's post-state unclaimed would trip rule 7
-    ///   (`program/mod.rs:730-738`) once its nonce left zero. It does not,
-    ///   because `#[lez_program]` drops post-states for accounts this program
-    ///   neither owns nor claims before writing the output, so one signer can
-    ///   anchor any number of policies. Measured, not assumed:
-    ///   `DumJ4LCB…` anchored `28930c0a…` at nonce 29 and `1075e47d…` at
+    ///   **The signer must be an account some program already owns** — in
+    ///   practice, one that has received a transfer. A signer still holding the
+    ///   default program owner works exactly once: on its second anchor its
+    ///   nonce is no longer zero, `#[lez_program]` drops its post-state to dodge
+    ///   rule 7 (`program/mod.rs:730-738`), and the state machine then rejects
+    ///   the transaction for the account being declared and missing
+    ///   (`validated_state_diff/mod.rs:311-319`,
+    ///   `DeclaredAccountMissingFromOutput`). A program-owned signer is exempt
+    ///   from both: it is never filtered, and rule 7 only fires on a *default*
+    ///   post-state owner. Measured, not assumed — `DumJ4LCB…`, owned by the
+    ///   transfer program, anchored `28930c0a…` at nonce 29 and `1075e47d…` at
     ///   nonce 30, in consecutive blocks.
     #[instruction]
     pub fn create_policy(

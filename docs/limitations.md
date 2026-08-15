@@ -40,6 +40,19 @@ underneath it.
 `:63`), so the instruction never reads the account it declares — declaring it
 buys nothing and is the sole cause of both rejections.
 
+There is also a one-line operational workaround that needs no rebuild: **give
+each signer a small transfer before it anchors**. An account owned by the
+authenticated transfer program is exempt from the rule entirely, and every
+landed anchor confirms the pattern — six default-owned signers appear exactly
+once each, while the funded `DumJ4LCB…` anchored twice, at nonces 29 and 30 in
+consecutive blocks.
+
+Controlled decisively: the `messaging` agent, believed for hours to be somehow
+poisoned, anchored on the first attempt the moment it was given a fresh signer.
+`create_policy` touches exactly two accounts — the policy PDA and the signer —
+and the agent is never referenced in the transaction at all, so its history
+could not have mattered.
+
 ## Why `spend` cannot move balance the way it does now
 
 The same investigation found the criterion-2 blocker, and it is rule 5,
