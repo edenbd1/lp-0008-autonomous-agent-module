@@ -29,7 +29,11 @@ PROGRAM=artifacts/programs/agent_verifier.bin
 # the sequencer runs: ImageID 22c496fe… = the `authenticated_transfer` id the
 # chain reports from `getProgramIds`.
 AUTH_TRANSFER=artifacts/programs/authenticated_transfer.bin
-AGENTS=artifacts/agents.tsv
+# Overridable because `deploy-agents.sh` truncates this file at the start of a
+# run and fills it in over the following minutes. A settlement that reads it
+# mid-run sees a header and no agents, and reports that the server has no
+# receiving account — which is true of the file and false of the chain.
+AGENTS="${A2A_AGENTS:-artifacts/agents.tsv}"
 CARDS=artifacts/agent-cards
 OUT="${A2A_MANIFEST:-artifacts/a2a-task.tsv}"
 
