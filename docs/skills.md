@@ -1,13 +1,389 @@
-# The skill interface, and what is wired
+# The skill interface
 
 The prize asks for "a documented skill interface (module/SDK) that can be used
-to add new skills without modifying the core agent module". `ISkill` in
-`module/src/agent_module_interface.h` is that: a name, a JSON Schema for the
-parameters — which is what an A2A Agent Card publishes — and an `invoke` the
-plugin wraps, because a failing skill must not take the module down.
+to add new skills without modifying the core agent module". This document is
+that interface: the contract, how a skill is registered, the loader convention,
+a worked example that is compiled and run on every invocation of
+`examples/agent-console/run.sh`, the boundary the interface does **not** cross,
+and a reference for every skill the module ships with.
 
-`registerSkill` refuses a duplicate name rather than overwriting. One plugin
-shadowing another's `wallet.send` is not a hypothetical.
+It is also the honest account of which of those skills are wired to a running
+node and which are only compiled. That half is further down, under
+[Status, honestly](#status-honestly), and it has not been softened.
+
+## 1. The contract
+
+One class, three methods, in
+[`module/src/agent_module_interface.h`](../module/src/agent_module_interface.h).
+It is the only header a skill needs — not the plugin header, not the Logos SDK,
+not Qt, and not a JSON library.
+
+```cpp
+namespace logos::agent {
+
+class ISkill {
+public:
+    virtual ~ISkill() = default;
+
+    /// Stable identifier, e.g. `storage.upload`.
+    virtual std::string name() const = 0;
+
+    /// JSON Schema of the parameters, as a JSON *object*.
+    virtual std::string parameterSchema() const = 0;
+
+    /// Perform the skill. Returns a JSON result.
+    virtual std::string invoke(const std::string &paramsJson) = 0;
+};
+
+} // namespace logos::agent
+```
+
+Everything crossing that boundary is a `std::string`. That is a deliberate
+narrowing rather than an oversight: it means a skill and the module need not
+agree on a JSON library, or link one at all, and it means a skill can be
+compiled by a different toolchain revision than the module was. The worked
+example below relies on exactly that — it parses and emits JSON by hand, so the
+claim is tested rather than asserted.
+
+### What the module guarantees to a skill
+
+Each of these is a property of `AgentModuleImpl`, and each is exercised by
+`module/tests/skills_test.cpp`:
+
+| Guarantee | Why it is there |
+|---|---|
+| All three methods are called inside a `try`/`catch`. A skill that throws costs its own entry and nothing else. | The prize requires skill failures to be isolated. Trusting implementers not to throw is not isolation. |
+| No method is called while the module holds its own lock. A skill may call `skills()`, `invoke()` or `registerSkill()` back from inside any of them. | A non-recursive mutex plus a re-entrant skill is a deadlock, and the deadlock would appear only in the deployment that had such a skill. |
+| `name()` is called **once**, at registration, and the registered name is published from then on. | A name that changed between calls would advertise a skill `invoke()` cannot dispatch. |
+| A `parameterSchema()` that throws, or does not parse as a JSON object, becomes `{"name":…,"error":…}` in the card. The other skills are unaffected. | The schema used to be spliced into the Agent Card as raw text, where one malformed schema broke discovery for every other skill too. |
+| An `invoke()` answer that is not JSON is refused rather than passed on. | It would corrupt whatever document the caller puts it in. |
+
+### What a skill must do in return
+
+- `name()` must be non-empty and stable. Dotted `category.verb` matches the
+  built-ins; nothing enforces it.
+- `parameterSchema()` must parse as a JSON **object**. `{"type":"object"}` is a
+  valid minimum. It is published in the agent's A2A Agent Card, so another agent
+  can call the skill without out-of-band knowledge.
+- `invoke()` must return parseable JSON. The convention the built-ins follow —
+  and which the console's checks rely on — is `{"ok":true,…}` or
+  `{"ok":false,"error":"…"}`. It is a convention, not a validation: the module
+  checks that the answer is JSON, not what is in it.
+- `invoke()` should not throw. It may; the module catches. But an exception
+  costs the caller a generic message instead of the skill's own, so a refusal
+  that explains itself is strictly better.
+
+## 2. Registration
+
+```cpp
+StdLogosResult AgentModuleImpl::registerSkill(std::shared_ptr<logos::agent::ISkill>);
+```
+
+Three rules, all enforced rather than documented:
+
+- **Before `start()`.** `skills()` refuses until the module is started, because
+  an empty array is indistinguishable from an agent that genuinely has no skills
+  and would be published as a valid — and empty — Agent Card. A skill registered
+  after `start()` is missing from a card that has already been answered.
+- **A name is claimed once.** `registerSkill` refuses a duplicate rather than
+  overwriting it. One library shadowing another's `wallet.send` is not a
+  hypothetical, and silent replacement is how it would happen.
+- **A third party wins a contested name.** If a third-party skill registers
+  `wallet.send` first, `registerBuiltinSkills` skips that built-in, reports a
+  failure naming it, and registers the other twenty. The registry keeps exactly
+  one skill per name, so the card cannot advertise anything `invoke()` will not
+  dispatch. Whichever skill holds the name answers for it.
+
+The module's own twenty-one arrive the same way, through
+`registerBuiltinSkills(SkillPorts)`, which is a convenience over `registerSkill`
+and not a privileged path.
+
+## 3. The loader convention
+
+`ISkill` says nothing about how a skill reaches the process; a C++ object
+compiled into the same binary satisfies it. For a skill shipped as a **separate
+binary**, the convention this repository uses — and which
+`examples/agent-console` implements — is two C symbols:
+
+```cpp
+extern "C" int logos_agent_skill_abi_version(void);       // returns 1
+extern "C" logos::agent::ISkill *logos_agent_skill_create(void);
+```
+
+- `extern "C"` because a C symbol name is the only thing `dlsym` can portably be
+  asked for.
+- The version is checked **before** `create` is called, so a library built
+  against a later generation of the interface is a named refusal rather than a
+  jump into a vtable whose layout moved.
+- A raw pointer, so the host chooses its ownership. The host wraps it in a
+  `std::shared_ptr<ISkill>` whose deleter runs the virtual destructor, which
+  lands back in the library that allocated the object.
+- The host must not `dlclose` the library while the module still holds the
+  skill: the vtable lives in that library, and unloading it first is a crash in
+  the next destructor.
+
+## 4. A worked example, compiled and run
+
+[`examples/skills/notary-digest/notary_digest_skill.cpp`](../examples/skills/notary-digest/notary_digest_skill.cpp)
+is a complete third-party skill: `notary.digest`, a SHA-256 commitment over a
+UTF-8 string — the primitive under the prize's "privacy-preserving notary" use
+case. It is not in `module/src`, it is not in `module/CMakeLists.txt`, and the
+agent module was built, packaged and shipped before it existed.
+
+```sh
+examples/agent-console/run.sh
+```
+
+The script compiles the skill with **one** include path — `-I module/src`, for
+`agent_module_interface.h`, with `-Werror` — into its own shared library, with
+no module object on the link line. It then builds
+[`examples/agent-console`](../examples/agent-console/console.cpp), which links
+the agent module's sources unmodified, `dlopen`s the library, registers the
+skill through `registerSkill`, and calls it back through the module's own
+`invoke()`. Recorded output:
+
+```
+[1/4] a library the agent module was never compiled against
+  ok    dlopen'd …/libnotary_digest.dylib -> 'notary.digest'
+
+[2/4] registered through the module's public registerSkill()
+  ok    skills() advertises notary.digest alongside the built-ins
+  ok    a second skill of the same name is refused: a skill named 'notary.digest' is already registered
+
+[3/4] invoked by name through the module's own dispatcher
+  ->    {"content":"LP-0008: a skill the agent module was never built with."}
+  <-    {"ok":true,"skill":"notary.digest","algorithm":"sha256",
+         "digest":"c5c66d5cd8cd6ce4d812cbdeba05114ff5c48f699cb55b546f0170b0b3b98ef2",
+         "bytes":55,"source":"examples/skills/notary-digest/notary_digest_skill.cpp"}
+  ok    the skill answered through the module
+
+[4/4] a failing call costs the call, not the module
+  <-    {"ok":false,"error":"parameters must be a JSON object"}
+  ok    malformed parameters are refused
+  <-    {"ok":false,"error":"notary.digest requires a 'content' string"}
+  ok    a missing 'content' is refused
+  ok    and the same call afterwards returns the same answer
+  <-    {"error":"storage node is not started","ok":false}
+  ok    an unwired built-in refuses and names what it is missing
+```
+
+Four things make that a demonstration rather than a transcript, and all four are
+the script's own exit conditions:
+
+1. **The digest is checked against `shasum -a 256`** of the same input. A skill
+   that had been registered but never ran cannot pass this, and neither can a
+   printed string.
+2. **A control:** the same digest must *not* match the digest of altered input.
+   Without it, step 1 would also pass if both sides computed nothing.
+3. **`git status --porcelain module/` must be unchanged by the run.** Editing any
+   file the agent module ships — a source, a header, `CMakeLists.txt`, or the
+   packaged `agent.lgx` — fails the script. That is the criterion's own words,
+   checked rather than asserted.
+4. **The compile line is the assertion.** If the skill ever needed more than
+   `agent_module_interface.h`, step 1 stops compiling.
+
+The last block is worth reading twice. `notary.digest` answers while
+`storage.upload` refuses, in the same registry, in the same process — because
+the console wires no storage transport and the third-party skill needs none. A
+reviewer can tell the added skill from the built-ins by which one works.
+
+## 5. Reaching the module from a shell
+
+`examples/agent-console` is also the answer to "interacting with the agent via
+CLI". It links the module and wires the ports a command-line tool can honestly
+supply, which is the read side of the chain:
+
+```sh
+OUT=${TMPDIR:-/tmp}/lp0008-console        # examples/agent-console/run.sh builds this
+
+# every registered skill and its parameter schema, as JSON
+$OUT/agent-console skills
+
+# is the program this checkout deploys actually on chain?
+PROG=$(python3 -c "
+import hashlib,struct
+b=open('artifacts/programs/agent_verifier.bin','rb').read()
+print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
+$OUT/agent-console invoke program.query "{\"program_id\":\"$PROG\",\"method\":\"getTransaction\"}"
+
+# an agent's public receiving account, read from the sequencer
+$OUT/agent-console --account "Public/$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++)if($i=="pay_account")c=i;next} $1=="storage"{print $c}' artifacts/agents.tsv)" \
+    invoke wallet.balance '{}'
+```
+
+Recorded answers, against `https://testnet.lez.logos.co`:
+
+```
+program.query   {"found":true,"included":true,"method":"getTransaction","ok":true,
+                 "program_id":"a780003b…","result":["AkReBgBSMEJG…", 8720]}
+wallet.balance  {"account":"5Sa13Ny…","balance":45,"ok":true,"shielded":false,
+                 "source":"sequencer.getAccount"}
+```
+
+The program identifier above is *derived from the committed binary by the
+command itself*, never typed. `artifacts/anchored.tsv` and
+`artifacts/agents.tsv` are the manifests, and `scripts/verify-deployment.sh`
+checks them against the chain; this document quotes neither as a standing fact.
+
+Two refusals matter more than the answers:
+
+```
+$OUT/agent-console invoke wallet.send '{"recipient":"Public/…","amount":1}'
+{"ok":false,"submitted":false,"outcome":"owner_unreachable",
+ "error":"no owner channel to ask for approval, so the spend was not submitted"}
+
+$OUT/agent-console --offline invoke program.query '{"program_id":"…","method":"getLastBlockId"}'
+{"ok":false,"error":"no sequencer to query"}
+```
+
+**The console cannot move money, and that is by construction.** Its
+`WalletPort::spend` is null, so `wallet.send` refuses rather than submitting.
+Spending goes through the anchored policy program and the CLIs that hold keys —
+`scripts/deploy-agents.sh` and `scripts/a2a-task.sh`. A console that could sign
+would be a second, unaudited spending path around the mechanism this submission
+is about.
+
+## 6. What this interface does not reach
+
+Stated plainly, because it is the first thing a reviewer will try.
+
+**A skill cannot be added to an already-installed `agent.lgx`.** Dropping
+`libnotary_digest.dylib` next to an installed module does nothing. The reason is
+structural and is documented at the point it bites,
+[`module/agent_module_plugin_export.h:30-48`](../module/agent_module_plugin_export.h):
+`registerSkill` takes a `std::shared_ptr<ISkill>`, and there is no honest
+`QVariant` for one. Logos Core reaches a core module over a Qt Remote Objects
+transport, in a separate process, so every remoteable method's arguments must
+have a wire format. A C++ object does not. The generated RPC surface is
+therefore `configure` / `start` / `stop` / `skills` / `status` / `invoke`, and
+registration is not on it.
+
+So "without modifying the core agent module" is satisfied in the sense the
+criterion states — no file the module ships is edited, and the script checks
+that — and a skill is added by a host that **links** the module. `agent-console`
+is such a host; so is anything else that includes `agent_module_plugin.h`.
+
+What would change it, honestly, since one of these will be somebody's next
+question:
+
+| Approach | What it would cost | What it would cost you |
+|---|---|---|
+| The module scans a directory at `start()` and `dlopen`s what it finds | ~40 lines in `agent_module_plugin.cpp`, and a rebuild + repackage of `agent.lgx` | An arbitrary-code-loading path into a process that holds an agent's signing keys. It would have to be opt-in, off by default, and probably path-restricted. It has not been done, and this table is not a plan. |
+| A static self-registration registry a skill's translation unit appends to | ~15 lines, no dlopen | Only helps somebody building their own package from these sources — which is relinking, the same as today |
+| Make registration remoteable | A wire format for a skill, i.e. an out-of-process skill protocol | A different design, and a large one |
+
+Two further boundaries, for completeness:
+
+- **The twenty-one built-in skills have no ports wired inside a loaded plugin**,
+  for the same `std::function` reason. Loaded by Basecamp, they register and
+  each refuses naming the port it is missing. `docs/basecamp.md` records that
+  run, and it is the opposite of the failure worth hiding: a module that loads,
+  answers `skills()` with `[]`, and looks like it works.
+- **`meta.skills` is not registered as a skill.** The prize's default list names
+  it; this module exposes the same capability as the module-level method
+  `skills()` — which is what `agent-console skills` calls and what the Logos
+  Core transport exposes — but `invoke("meta.skills", …)` answers
+  `{"ok":false,"error":"no skill named 'meta.skills' is registered"}`. That is a
+  gap against the prize's list, it is not a documentation shortcut, and it is
+  recorded here rather than in a place a reviewer would have to find.
+
+## 7. Reference: the registered skills
+
+The module registers **21** skills; each `--skill` library adds one more. This
+table is a snapshot. **The module is the authority**, and it prints itself:
+
+```sh
+$OUT/agent-console skills | python3 -m json.tool
+```
+
+`examples/agent-console/run.sh` compares the names below against that output and
+fails if they diverge, so a skill added, renamed or removed cannot leave this
+table quietly wrong.
+
+Notation: **bold** parameters are required.
+
+### Storage — over Logos Storage
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `storage.upload` | **`path`** string, `label` string | content address |
+| `storage.download` | **`address`** string, **`path`** string | local path written |
+| `storage.list` | — | stored items with labels and addresses |
+| `storage.share` | **`address`** string, **`recipient`** string | which half failed, if either — sharing a content address is a messaging act |
+
+### Messaging — over Logos Delivery
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `messaging.send` | **`recipient`** string (Logos account id), **`message`** string | dispatch result |
+| `messaging.join` | **`group_id`** string | join result |
+| `messaging.create_group` | **`group_id`** string, **`members`** array of string | a reliable channel, not a bare topic |
+
+`messaging.create_group` requires a `group_id`; the prize's signature is
+`create_group(members)`. The extra parameter is a divergence from the prize's
+list and is named here rather than papered over: the Delivery API needs a
+channel identifier and inventing one inside the skill would make two calls with
+the same members produce two different groups.
+
+### Blockchain — the wallet, the sequencer, and LEZ programs
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `wallet.balance` | `account` string — qualified `Public/<b58>` or `Private/<b58>`; defaults to the agent's own | balance, and whether the read was shielded |
+| `wallet.send` | **`recipient`** string, **`amount`** integer or decimal string (amounts are `u128`; no JSON number holds one) | a receipt whose `submitted` is false unless a transaction really went out |
+| `wallet.history` | `limit` integer 1–1000 | the agent's own journal — the chain has no history endpoint |
+| `program.query` | **`program_id`** string, **`method`** one of `getTransaction`, `getBlock`, `getAccount`, `getLastBlockId`, `params` array | the sequencer's answer, plus `found`/`included` |
+| `program.call` | **`program_id`** string, **`instruction`** string, `params` object | subject to the spending threshold |
+| `program.deploy` | **`binary_path`** string | the program id, computable offline as `SHA256(u32_le(len)‖bytes)` |
+
+`program.query` requires `method`; the prize's signature is
+`query(program_id, params)`. LEZ's JSON-RPC has no single read method, so a skill
+that took only `params` would have to guess which of four to call. `program.query`
+also refuses `sendTransaction` by name and says why — a caller who wanted to
+submit is sent to `program.call`, which goes through the anchored policy, rather
+than quietly refused.
+
+### Agent coordination — A2A over Logos Messaging
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `agent.card` | — | this agent's signed A2A Agent Card. Its skill list is wired to the registry, so it cannot advertise a skill the agent has not registered |
+| `agent.discover` | **`topic`** string, `require_signed` boolean | other agents' cards from a discovery topic |
+| `agent.task` | **`agent_address`** string, `skill`, `params`, `price`, `max_price`, `pay_account`, `card`, `task_id`, `context_id`, `message` | an A2A task, following the lifecycle |
+| `agent.subscribe` | **`agent_address`** string, **`task_id`** string | streaming status updates |
+| `agent.cancel` | **`agent_address`** string, **`task_id`** string | cancellation, and any applicable refund |
+
+`agent.task`'s `message` is for supplying input to a task in `input-required`.
+What of that lifecycle is reachable in shipped code, and what is not, is in
+[`a2a-binding.md`](a2a-binding.md); it is not summarised here, because two
+accounts of one mechanism is how they come to disagree.
+
+### Meta
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `meta.status` | — | balance, storage usage, active tasks, and what the module is bound to |
+| `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks` — **`value`** string | whether the setting took effect |
+
+`meta.configure` reports `"effective":false` when no config port is wired,
+rather than storing a value nothing reads. Note what it cannot do: writing
+`per_tx` here changes what this process bothers asking the owner about and
+nothing about what the chain accepts. The ceiling is the policy account's data,
+which only the policy program may write. See
+[`security-model.md`](security-model.md).
+
+### Not one of the prize's default skills
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `agent.evaluate_task` | **`task_id`**, **`skill`**, **`price`** strings, `peer`, `spent_this_period` | accept or decline an A2A task at its advertised price |
+
+It is registered because the module ships a pluggable inference seam and this is
+what sits behind it — see [Pluggable inference](#pluggable-inference). It is
+*not* the demonstration that the skill interface works: it is built by
+`installBuiltinSkills` in `agent_module_plugin.cpp` like the other twenty, so it
+is a built-in that happens not to be on the prize's list. §4 above is the
+demonstration, and it is external, separately compiled, and self-checking.
 
 ## Status, honestly
 
@@ -15,17 +391,21 @@ shadowing another's `wallet.send` is not a hypothetical.
 |---|---|---|
 | Blockchain | `wallet.send` | **on chain** — `spend`, enforced by the anchored envelope |
 | Blockchain | `program.call` | **on chain** — same path, same threshold |
-| Blockchain | `wallet.balance`, `wallet.history` | reads over JSON-RPC |
+| Blockchain | `wallet.balance`, `wallet.history`, `program.query` | reads over JSON-RPC, and reachable from `agent-console` — §5 has the recorded answers |
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet |
 | Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
 | Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
+| Example | `notary.digest` | **not part of the module.** A third-party skill in `examples/`, loaded at runtime; §4 |
 
-The last two rows are the honest part. The messaging skills are written against
-Delivery's real signatures — `send(contentTopic, payload)`, `subscribe`,
-`channelCreate` — and they compile, but "compiles" is not "works": nothing here
-claims they deliver a message until one has been sent and seen. Both ABIs have now been read off their
-module headers rather than guessed.
+The messaging and storage rows are the honest part. Those skills are written
+against the real signatures — `send(contentTopic, payload)`, `subscribe`,
+`channelCreate` for Delivery — and they compile, but "compiles" is not "works":
+nothing here claims they deliver a message or store a file until one has been
+sent and seen. Both ABIs have been read off their module headers rather than
+guessed. Separately, `scripts/exercise-nodes.sh` drives real Delivery and
+Storage nodes through the C drivers in `module/tests/` — that is the node half
+proven, and it is not the same as the *skills* having been run against a node.
 
 Two things the messaging code does that a stub would not. It **refuses** when the
 node is not started rather than returning success, because `start` returns as
@@ -44,6 +424,7 @@ unknown instead of as a download that failed for unstated reasons.
 
 The `DeliveryPort` and `StoragePort` indirections are there so the skills can be
 exercised against a fake, and so the agent module does not link either directly.
+
 
 ## Pluggable inference
 
@@ -148,10 +529,21 @@ return still refused the payment. Two independent checks, plus the chain behind
 both.
 
 `agent.evaluate_task` is not one of the prize's default skills. It is here
-because it is the cheapest honest demonstration that the documented skill
-interface works: a capability needing a backend the core module has never heard
-of, registered through `ISkill` without a line changing in
-`agent_module_plugin.cpp`.
+because the module ships a pluggable inference seam and this is the capability
+that sits behind it.
+
+**A retraction.** This paragraph used to claim `agent.evaluate_task` was "the
+cheapest honest demonstration that the documented skill interface works … a
+capability needing a backend the core module has never heard of, registered
+through `ISkill` without a line changing in `agent_module_plugin.cpp`". The last
+clause was false. `installBuiltinSkills` constructs it —
+`std::make_shared<EvaluateTaskSkill>(ports.inference, limits)` — in the same
+vector as the other twenty, in `agent_module_plugin.cpp`. It is a built-in that
+happens not to be on the prize's list, and it demonstrated nothing about
+third-party extensibility. §4 of this document is that demonstration instead: a
+skill outside `module/src`, separately compiled against one header, `dlopen`ed,
+and run — with `git status --porcelain module/` as the check that no core file
+moved.
 
 ### What this does not demonstrate
 
