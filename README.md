@@ -488,7 +488,7 @@ dropped approval request looks exactly like a refusal — at
 ```
 
 and sends a `spend_approval_request` carrying the protocol id, a correlation
-id, the agent, the policy hash, the recipient, the amount as decimal digits
+id, the agent, its policy account, the recipient, the amount as decimal digits
 (the chain's amounts are `u128`, which no JSON number holds), the nonce, the
 approval marker seed, and an expiry. It re-sends every 15 s and, after 120 s
 with no answer, returns `Unreachable` — terminal, never a quiet fallback to

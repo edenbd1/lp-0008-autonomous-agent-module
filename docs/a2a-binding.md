@@ -117,7 +117,7 @@ there. `agent.subscribe` subscribes to exactly the same string
 Two consequences a third party must understand before deploying this:
 
 - **A task topic is a public, cleartext string containing the peer's account id
-  and the task id.** Anyone on the network sees that agent `7o9PT8uE…` is running
+  and the task id.** Anyone on the network sees that agent `9Xpkkvos…` is running
   task `a1b2…` — and, from the card, what that agent charges. The *contents* are
   protected by whatever Delivery's entry layer provides; the *existence, timing
   and counterparty* of every task are not. This binding does not fix that, and
@@ -165,7 +165,7 @@ The card `agent.card` builds (`agent_skills.cpp:639-721`), and the one
   "protocolVersion": "0.3.0",
   "name": "logos-storage-agent",
   "description": "Encrypts and stores a file on Logos Storage, returns its content address",
-  "url": "logos-messaging://7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+  "url": "logos-messaging://9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
   "preferredTransport": "logos-messaging",
   "version": "0.1.0",
   "provider": {
@@ -191,7 +191,7 @@ The card `agent.card` builds (`agent_skills.cpp:639-721`), and the one
     }
   ],
   "x-logos": {
-    "lezAccount": "7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+    "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
     "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
     "pricePerTask": 25,
     "settlement": "lez-chained-authenticated-transfer"

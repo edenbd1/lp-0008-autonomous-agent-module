@@ -51,10 +51,13 @@ export SPEL_BIN=$PWD/vendor/spel/target/release/spel   # or any spel on PATH
 ./scripts/use-cases/01-file-vault.sh
 ```
 
-Each one reads `artifacts/agents.tsv` **by column name**, never by position.
-That file has gained columns twice, and a script that says `$4` keeps running
-after a column moves — it just starts reading the per-transaction limit out of
-the policy hash.
+Each one reads `artifacts/agents.tsv` and `artifacts/a2a-task.tsv` **by column
+name**, never by position. Both files have gained columns more than once, and a
+script that says `$4` keeps running after a column moves — it just starts reading
+the per-transaction limit out of the wrong field. That is not hypothetical: when
+`a2a-task.tsv` gained a leading `program` column, the one loop in these scripts
+still destructuring a row positionally reported a price of "skill" as being over
+the ceiling and a transaction hash of "70" as missing from the chain.
 
 ---
 
@@ -320,49 +323,66 @@ true of the chain rather than of the agent's source code: the agent holds its ow
 keys on a remote node, so whoever takes the process takes the spending, and an
 `if (amount > limit)` in the agent is worth nothing against them.
 
-So the ceiling is not a number stored anywhere. It is an **address**. The policy
-account is the program-derived address of `sha256(owner, agent, per-tx,
-per-period, period)` — raising a limit does not edit an account, it names a
-different account, one that `create_policy` never initialised.
+So the ceiling is not a number stored anywhere the agent can reach. It is the
+**data of an account whose address the agent cannot choose**: `PDA(program,
+["agent-policy/v1", agent_id])`, one per agent. And writing that account takes
+two signatures — the agent's, on `claim_agent`, naming the one account allowed
+to anchor over it, and then that account's, on `create_policy`. A stranger who
+knows the agent's public id holds neither.
 
 Real output:
 
 ```
-== 1. the envelope is a hash, and this script recomputes every one of them
-  ok   storage     610135ad0af56840c3ca91093b13d5aa299737f41181905f39933e3e86047ac3
-  ok   messaging   2a1e29408d3c866e8974a88e9616326c5e718544a86a6afa21469e95815d3a60
-  ok   blockchain  1a317aae885143298b3b033539273a02ff9c0c4f55e586f979a22b15c6e7c356
-  OK   the derivation reproduces every anchored policy in artifacts/agents.tsv
-  owner  FF8HZ8d38chXGDoZ1VV1pKBkoFx4QqyLwDsRjzEbngy9
-         = d3a1fc6686a01570add47b72a98659d1e2a88e832123c0f13521ab8bd387f4bc
-  agent  9KdQSJ2tB9CGDWKZYFLEuZ28enPhzb2erPwTYVVXicNe
-         = 7ba31cb85ba5a21fa5f6b3854f28076c75d4982a1b96332afcbb05f34d11a11b
-  sha256(prefix, owner, agent, 200, 1000, 1000)
-         = 1a317aae885143298b3b033539273a02ff9c0c4f55e586f979a22b15c6e7c356
-  OK   matches the policy hash in artifacts/agents.tsv
+== 1. the envelope is account data, and this script decodes it
+  owner  G64pMjF9MR2vZjjwCyCFsC7DvG4uUPJC7quJiih9uvCc
+         = e02b85f5940df6d695ca88e19468adeb57a07273e3e3f3d53d3b2ba1e6423c75
+  agent  A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu
+         = 8761681eb6bdf2cc7bb2341a58b9c3213f3a0112c2195aa634db12c780c0fa90
+  policy 2RK4dPwzDTAdgjUGpGsCkok962StYpPV14QpW3Wusvc9
+  owner          e02b85f5940df6d695ca88e19468adeb57a07273e3e3f3d53d3b2ba1e6423c75
+  OK     matches artifacts/agents.tsv
+  per_tx         200
+  OK     matches artifacts/agents.tsv
+  per_period     1000
+  OK     matches artifacts/agents.tsv
+  period_blocks  1000
+  OK     matches artifacts/agents.tsv
+  spent          0 in period 0
+  OK   the anchored envelope is what this repository says it is
 
 == 2. the program that owns the ceiling is the program in this repository
   ProgramId(artifacts/programs/agent_verifier.bin)
-         = 2148920614,3576134543,3415609557,259224239,1770396588,3252552076,3201387284,3192958219
-  deploy tx = sha256(len || bytecode) = 8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe
+         = 1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647
+  deploy tx = sha256(len || bytecode) = 697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf
   OK   the chain holds that deploy transaction
   OK   control: a hash that cannot exist returns null
 
-== 3. the anchored envelope exists on chain, at its own address
-  policy account for 200/1000 per 1000 blocks:
-         BLHNchq8haEZ8w1UPk68Qr6sGLzYZB6haBrZLZ4GhpsS
-  getAccount(...).program_owner = 2148920614,3576134543,3415609557,259224239,...
+== 3. the anchored envelope exists on chain, at the agent's own address
+  PDA(program, ["agent-policy/v1", A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu])
+         2RK4dPwzDTAdgjUGpGsCkok962StYpPV14QpW3Wusvc9
+  OK   the same account the manifest records — derived, not copied
+  getAccount(...).program_owner = 1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647
   OK   owned by exactly the program above — the owner anchored this envelope
 
-== 4. a bigger ceiling is a different address, and nobody created it
-  per-tx 2000                  F5tEquWHzoB1q7nSF3oh2hP3rK7bQ5dR2gZpQeoqcPBr
-  OK     program_owner is all zeros: never initialised
-  per-period 10000             9xyojyLDK9QRNtjkGHjas6QxbtFNx6LMYZ4RvEur2WuZ
-  OK     program_owner is all zeros: never initialised
-  period 100 blocks            FueG4Qd8Qz5A1EWFAszPDgnraadXCbrBvpUs4TvPgvZ6
-  OK     program_owner is all zeros: never initialised
-  control policy hash          BHDMUhjkd4o1oCnoq6B5bXezefpxdscVX1jx6TUhHj2G
-  OK     program_owner is all zeros
+== 4. there is only one such address, so a bigger ceiling has nowhere to go
+  the IDL's seeds for the policy account:
+         const    agent-policy/v1
+         arg      agent_id
+  OK     one agent, one policy account — no limit is a seed of the address
+  an agent nobody anchored     2qttGYZ6dKzNJNejZqmZxDnynbH8AW7S8zk98QE9q1mt
+  OK     program_owner is all zeros: never initialised, so init would accept it
+       the superseded program accepted the agent's own public pay account anchors an unlimited policy over it
+         e530e0ba9a49c4ebacbfeaeac8fff3376f8bece24b71cb8f985b70c5399d462d
+       the superseded program accepted the agent then moves its entire 65 LEZ in one transaction, against an owner-anchored ceiling of 25
+         7fc6c9af06e590c7553af9d3090384e88a2780e38995117ca4e091f49a022228
+       the superseded program accepted the same anchor against the storage agent
+         d7498d65a77e9e0d550bf89ae16127d5bb328d42643c6eacd3e74a611fbdd09b
+       the superseded program accepted the storage agent then moves its entire balance under it
+         0a9ac12ce1442cd6d33c7eac02df8a120f13e558273e6a91a4289f4f15b0e170
+       the superseded program accepted a STRANGER anchors an unlimited policy over an agent whose key it does not hold
+         eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7
+  the identical call, same agent, same limits, to the program deployed today
+  OK     60de3fc607f98d15474fd288d366fa578d01de57c3fd20ba4191779337309040: submitted, never included
 
 == 5. below the ceiling: accepted, unattended, and already on chain
   25 LEZ  c45d3f2441cf1d19d69ae4cc70cfd50308fc2f0ed89ec40310c5ea2a94cf7275
@@ -377,22 +397,18 @@ Real output:
   OK     the recipient went 50 -> 75, exactly the price
   5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ holds 75 LEZ now, by getAccount
 
-== 6. above the ceiling: refused, three ways, before a transaction exists
+== 6. above the ceiling: refused, before a transaction exists
   asking for 201 LEZ, which is 1 above the ceiling of 200
   (and above the agent's balance, so nothing here can move money either way)
-  block 8685, so the current period starts at 8000
+  block 8907, so the current period starts at 8000
 
   the agent simply asks for more than its envelope allows
          Program error 6005: the spend needs an owner approval: use spend_approved
   OK     refused with 6005: no transaction was built, so there is nothing to submit
 
-  the agent presents the anchored account but claims a bigger ceiling
-         Program error 6001: policy_hash does not commit to these limits
-  OK     refused with 6001: no transaction was built, so there is nothing to submit
-
-  the agent names the bigger envelope's own account instead
-         Program error 6002: no policy is committed for these limits
-  OK     refused with 6002: no transaction was built, so there is nothing to submit
+  the agent slides its period forward a block to reset the total
+         Program error 6014: the period named does not start on a multiple of period_blocks
+  OK     refused with 6014: no transaction was built, so there is nothing to submit
 ```
 
 The refusals are the whole point, and they are what is left of the moves

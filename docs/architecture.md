@@ -154,11 +154,16 @@ content hash and reads its ProgramId back off the chain rather than asserting it
 
 ## One derivation, two consumers
 
-`crates/agent-policy-core` is small and it is load-bearing. It holds the three
-derivations — policy hash, spend reference, approval marker — each under its own
+`crates/agent-policy-core` is small and it is load-bearing. It holds the two
+hash derivations — spend reference and approval marker — each under its own
 domain separator, so a digest computed for one role can never be valid in
-another (`lib.rs:69-71`, and the test that asserts the three prefixes differ at
-`:541-542`).
+another, and the two PDA prefixes, `agent-policy/v1` and `agent-owner/v1`, which
+are what keep an agent's policy account and its owner claim at different
+addresses. A test asserts all four are distinct, and asserts that neither hash
+agrees with the same material hashed bare or under the other's separator —
+because a constant differing is necessary and nowhere near sufficient. It also
+holds the three record layouts (`PolicyRecord`, `OwnerClaim`, `ApprovalRecord`),
+each with its own version byte, so none of them can decode another's bytes.
 
 It also holds the spend decision itself. That used to be a pure comparison
 called `is_autonomous`; it is now `SpendPolicy::authorize`
