@@ -25,9 +25,16 @@
  *
  * 1. **The card is signed or it is not produced.** The prize calls the card "a
  *    signed JSON document" and A2A carries the signature as a detached-payload
- *    JWS. `scripts/a2a-task.sh` publishes an unsigned card, which any reader
- *    can forge. `agent.card` refuses when it cannot sign rather than emitting
+ *    JWS. An unsigned card is one any reader can forge — the payment account
+ *    included — so `agent.card` refuses when it cannot sign rather than emitting
  *    something that reads like a signed card and is not one.
+ *
+ *    The header this produces is `alg: "secp256k1-bip340"` over the **payment**
+ *    account, which is what `scripts/sign-agent-card.py` writes and what
+ *    `scripts/use-cases/verify-agent-card.py` will accept. The two used to
+ *    disagree — this defaulted to `EdDSA` over the shielded `lezAccount` — and
+ *    the result was that the repository's own verifier rejected the module's own
+ *    card. If you change either default, change both.
  *
  * 2. **Local state is never a claim about the remote agent.** `agent.task`
  *    leaves a submitted task in `submitted`. It has posted a request; it has

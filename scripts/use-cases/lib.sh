@@ -204,6 +204,60 @@ policy_account_of() {
     | tr -d '[:space:]'
 }
 
+# Run the A2A task lifecycle through the module's real `TaskStore`, or say
+# plainly that it was not run. Never print a state that did not happen.
+#
+# This replaces the loop both demos used to carry:
+#
+#     for state in submitted working completed; do printf '  state -> %s\n' ...
+#
+# which printed three strings, drove nothing, and skipped `input-required`, the
+# failure paths and the terminal rule entirely. `docs/a2a-binding.md` §7.1 says
+# of it, in its own words, "this document will not describe a printed line as a
+# transition" — so neither does this.
+#
+# The driver needs a C++ compiler and nlohmann/json and nothing else: no node,
+# no chain, no key. When they are absent the honest answer is that the lifecycle
+# was not exercised here, plus where it *is* exercised — not a prettier printf.
+a2a_lifecycle() {           # a2a_lifecycle <repo-root> [card-file]
+  local root="$1" card="${2:-}" src bin cxx inc
+  src="$root/module/tests/a2a_drive.cpp"
+  bin="${TMPDIR:-/tmp}/a2a_drive.$$"
+  [ -f "$src" ] || { note "the lifecycle driver $src is missing; nothing was run"; return 1; }
+
+  cxx=$(command -v c++ || command -v clang++ || command -v g++) || true
+  if [ -z "$cxx" ]; then
+    note "no C++ compiler here, so the task lifecycle was NOT driven in this run."
+    note "It is covered by module/tests/agent_skills_test.cpp ('task lifecycle'),"
+    note "which CI runs. No state is printed above, because none was taken."
+    return 1
+  fi
+  # nlohmann/json is a header; find it rather than assume a system install.
+  inc=""
+  for d in /usr/include /usr/local/include /opt/homebrew/include "$root/_external/include"; do
+    [ -f "$d/nlohmann/json.hpp" ] && { inc="-I$d"; break; }
+  done
+  if [ -z "$inc" ] && ! echo '#include <nlohmann/json.hpp>' | "$cxx" -std=c++17 -fsyntax-only -x c++ - 2>/dev/null; then
+    note "nlohmann/json is not installed here, so the task lifecycle was NOT driven"
+    note "in this run. It is covered by module/tests/agent_skills_test.cpp, which CI"
+    note "runs. No state is printed above, because none was taken."
+    return 1
+  fi
+  if ! "$cxx" -std=c++17 $inc "$src" "$root/module/src/agent_skills.cpp" -o "$bin" 2>/dev/null; then
+    note "the lifecycle driver did not build here, so no state was driven."
+    note "It is covered by module/tests/agent_skills_test.cpp, which CI runs."
+    return 1
+  fi
+  local rc=0
+  if [ -n "$card" ] && [ -f "$card" ]; then
+    "$bin" lifecycle --card "$card" || rc=$?
+  else
+    "$bin" lifecycle || rc=$?
+  fi
+  rm -f "$bin"
+  return $rc
+}
+
 finish() {
   echo
   if [ "$FAILED" -eq 0 ]; then

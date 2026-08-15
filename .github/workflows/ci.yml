@@ -383,6 +383,34 @@ jobs:
             -o agent_skills_test
           ./agent_skills_test
 
+      # The lifecycle driver the two demo scripts invoke. It is built and run
+      # here for the same reason as everything else: the demos degrade to "the
+      # lifecycle was not driven in this run" when the toolchain is missing, and
+      # a driver that only ever degrades is a driver nobody would notice was
+      # broken. Its exit code is meaningful — it walks
+      # submitted -> working -> input-required -> working -> completed through
+      # the real TaskStore and fails if the terminal reopen is *not* refused.
+      - name: Drive the A2A task lifecycle
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/a2a_drive.cpp \
+            module/src/agent_skills.cpp \
+            -o a2a_drive
+          ./a2a_drive lifecycle
+          # And the mode the demos use to prove the module signs a card its own
+          # verifier accepts. No wallet in CI, so the signer is a stub: what is
+          # checked here is that the module still emits the agreed JWS header,
+          # which is the pair that silently disagreed before.
+          ./a2a_drive card --account TESTACCOUNT --pay TESTPAY \
+            --signer 'printf %s c2lnbmF0dXJl' > /tmp/ci-card.json
+          python3 - <<'PY'
+          import base64, json, sys
+          card = json.load(open("/tmp/ci-card.json"))
+          h = json.loads(base64.urlsafe_b64decode(card["signatures"][0]["protected"] + "=="))
+          if h != {"alg": "secp256k1-bip340", "kid": "TESTPAY"}:
+              sys.exit(f"the module's JWS header drifted from the binding: {h}")
+          print("JWS header is alg=secp256k1-bip340 over the payment account")
+          PY
+
       # No Logos node again, and again on purpose. What decides whether money
       # moves is not that a message crosses the network: it is that a channel
       # which will not open is reported rather than pretended, that an answer to
@@ -412,7 +440,10 @@ jobs:
           ./task_persistence_test
 
       # ---------------------------------------------------------------------
-      # Everything under module/tests/ is accounted for. Seven suites run above.
+      # Everything under module/tests/ is accounted for. Eight suites run above,
+      # counting the A2A lifecycle driver, which is not a unit test but is run
+      # here anyway: the demo scripts degrade gracefully when it cannot be built,
+      # so nothing else would notice it breaking.
       # The four that do not run here are named, with what they need, because a
       # suite silently absent from CI is indistinguishable from one that was
       # never written — and this repository's own standard is that a step CI

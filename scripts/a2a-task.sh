@@ -244,11 +244,38 @@ else
 fi
 
 rule "3. A2A task lifecycle"
+# Driven through the module's real TaskStore. This was a `for` loop printing
+# `submitted`, `working`, `completed` as three strings — it drove nothing, and
+# docs/a2a-binding.md §7.1 called it out by name: "this document will not
+# describe a printed line as a transition". Neither does this script now.
+#
+# `lib.sh` is deliberately NOT sourced here: it defines a `field` of its own with
+# a different signature, and silently replacing this script's manifest reader is
+# exactly the class of fault that has produced false results in this repository.
+# The dozen lines below are that duplication, on purpose.
+#
+# The driver needs a compiler and nlohmann/json — no node, no chain, no key. When
+# they are missing the lifecycle is reported as not run, rather than printed.
 TASK_ID=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-echo "  task $TASK_ID"
-for state in submitted working completed; do
-  printf '  state -> %s\n' "$state"
-done
+DRIVER=module/tests/a2a_drive.cpp
+CXX=$(command -v c++ || command -v clang++ || command -v g++ || true)
+LIFECYCLE_RAN=0
+if [ -n "$CXX" ] && [ -f "$DRIVER" ]; then
+  INC=""
+  for d in /usr/include /usr/local/include /opt/homebrew/include; do
+    [ -f "$d/nlohmann/json.hpp" ] && { INC="-I$d"; break; }
+  done
+  BIN="${TMPDIR:-/tmp}/a2a_drive.$$"
+  if "$CXX" -std=c++17 $INC "$DRIVER" module/src/agent_skills.cpp -o "$BIN" 2>/dev/null; then
+    if "$BIN" lifecycle --card "$CARDS/$SERVER_CAT.json"; then LIFECYCLE_RAN=1; fi
+    rm -f "$BIN"
+  fi
+fi
+if [ "$LIFECYCLE_RAN" -eq 0 ]; then
+  echo "  the lifecycle was NOT driven in this run: no C++ compiler or no"
+  echo "  nlohmann/json here. It is covered by module/tests/agent_skills_test.cpp,"
+  echo "  which CI runs. No state is printed, because none was taken."
+fi
 
 rule "4. resync the client agent before proving"
 # Not optional, and the reason is worth writing down. A private account's state

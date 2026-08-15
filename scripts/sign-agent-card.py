@@ -209,9 +209,31 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--wallet-home", required=True)
     ap.add_argument("--account", required=True, help="the public account id, base58")
+    ap.add_argument(
+        "--sign-input",
+        action="store_true",
+        help="read a JWS signing input (`<protected>.<payload>`) on stdin and write "
+        "the base64url signature — the operation the module's CardPort.sign "
+        "expects a host to provide, so the module can assemble and sign a real "
+        "card without a second copy of the curve arithmetic living anywhere",
+    )
     args = ap.parse_args()
 
     selftest()
+
+    if args.sign_input:
+        # The module has already built the protected header and the payload; all
+        # that is delegated here is the key operation, which is the whole point
+        # of `CardPort.sign` being an injected function.
+        signing_input = sys.stdin.read().strip().encode()
+        secret, public = account_secret(args.wallet_home, args.account)
+        digest = hashlib.sha256(signing_input).digest()
+        signature = schnorr_sign(digest, secret)
+        if not schnorr_verify(digest, public, signature):
+            raise SystemExit("the signature this script just produced does not verify")
+        sys.stdout.write(b64url(signature))
+        return
+
     card = json.load(sys.stdin)
     card.pop("signatures", None)
     secret, public = account_secret(args.wallet_home, args.account)
@@ -230,7 +252,15 @@ def main():
     if not schnorr_verify(digest, public, signature):
         raise SystemExit("the signature this script just produced does not verify")
 
-    card["signatures"] = [{"protected": protected, "signature": signature.hex()}]
+    # base64url, NOT hex. RFC 7515 §2 defines the JWS `signature` member as
+    # BASE64URL(JWS Signature), and the A2A `AgentCardSignature` schema repeats
+    # it in as many words: "The computed signature, Base64url-encoded." This
+    # script emitted `signature.hex()` for its whole life and nothing caught it,
+    # because the schema only types the member as `string` — a 128-character hex
+    # run is a perfectly good string and a signature no RFC 7515 verifier can
+    # read. The wire encoding is the only thing that changes here; the bytes
+    # signed, the digest and the curve are untouched.
+    card["signatures"] = [{"protected": protected, "signature": b64url(signature)}]
     json.dump(card, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
