@@ -72,6 +72,49 @@ def b64url_decode(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+# A BIP-340 signature is 64 bytes, which is 86 unpadded base64url characters and
+# 128 hex ones. The two are not ambiguous, and this repository published the
+# wrong one: `sign-agent-card.py` emitted `signature.hex()`, so every card it
+# ever wrote carried 128 hex characters where RFC 7515 §2 and the A2A
+# `AgentCardSignature` schema both require BASE64URL(JWS Signature).
+#
+# Nothing caught it. The A2A JSON Schema types the member as `string`, and hex
+# is a string; a mechanical validation of the card against the published schema
+# passes with the signature in the wrong alphabet. So the check has to live
+# here, in the verifier, because this is the only place that claims to know what
+# the member means.
+B64URL_ALPHABET = set(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
+
+
+def decode_signature(s):
+    """The 64 signature bytes, or SystemExit naming the encoding that was used.
+
+    Deliberately strict about the *encoding* and not merely about the length: a
+    128-character hex string decodes to 96 bytes as base64url without raising,
+    so a lenient decoder turns a wrong-alphabet signature into a wrong-length
+    one and reports a puzzle instead of the fault.
+    """
+    if len(s) == 128 and all(c in "0123456789abcdefABCDEF" for c in s):
+        raise SystemExit(
+            "the signature is 128 hex characters; RFC 7515 §2 and the A2A "
+            "AgentCardSignature schema both require base64url "
+            "(86 unpadded characters for a 64-byte BIP-340 signature). "
+            "Re-sign the card with scripts/sign-agent-card.py."
+        )
+    if s.rstrip("=") != s:
+        raise SystemExit("the signature carries base64 padding; RFC 7515 §2 forbids it")
+    if not s or any(c not in B64URL_ALPHABET for c in s):
+        raise SystemExit("the signature is not base64url")
+    raw = b64url_decode(s)
+    if len(raw) != 64:
+        raise SystemExit(
+            f"the signature decodes to {len(raw)} bytes, not the 64 a BIP-340 signature is"
+        )
+    return raw
+
+
 def public_key_for(wallet_home, account):
     """The 32-byte x-only public key the wallet stores for a public account."""
     with open(f"{wallet_home}/storage.json") as f:
@@ -129,7 +172,12 @@ def main():
                 raise SystemExit("--public-key is not 32 bytes")
         else:
             pk = public_key_for(args.wallet_home, kid)
-        if not schnorr_verify(digest, pk, bytes.fromhex(sig["signature"])):
+        # The key comes from either source; the SIGNATURE is decoded the one way
+        # RFC 7515 allows. Note the asymmetry, because it is deliberate: a public
+        # key is carried as hex here (it is not a JWS member and nothing
+        # specifies its encoding), while `signature` IS a JWS member and is
+        # base64url or it is not a signature this verifier will read.
+        if not schnorr_verify(digest, pk, decode_signature(sig["signature"])):
             print(f"the signature by {kid} does not verify", file=sys.stderr)
             return 1
         # The card is only worth anything if the key that signed it is the key
