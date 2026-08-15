@@ -13,8 +13,12 @@
           "pda": {
             "seeds": [
               {
+                "kind": "const",
+                "value": "agent-policy/v1"
+              },
+              {
                 "kind": "arg",
-                "path": "policy_hash"
+                "path": "agent_id"
               }
             ]
           }
@@ -27,24 +31,6 @@
         }
       ],
       "args": [
-        {
-          "name": "policy_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "owner_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
         {
           "name": "agent_id",
           "type": {
@@ -93,8 +79,12 @@
           "pda": {
             "seeds": [
               {
+                "kind": "const",
+                "value": "agent-policy/v1"
+              },
+              {
                 "kind": "arg",
-                "path": "policy_hash"
+                "path": "agent_id"
               }
             ]
           }
@@ -117,24 +107,6 @@
           }
         },
         {
-          "name": "policy_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "owner_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
           "name": "agent_id",
           "type": {
             "array": [
@@ -142,18 +114,6 @@
               32
             ]
           }
-        },
-        {
-          "name": "per_tx",
-          "type": "u128"
-        },
-        {
-          "name": "per_period",
-          "type": "u128"
-        },
-        {
-          "name": "period_blocks",
-          "type": "u64"
         },
         {
           "name": "recipient",
@@ -185,8 +145,12 @@
           "pda": {
             "seeds": [
               {
-                "kind": "arg",
-                "path": "policy_hash"
+                "kind": "const",
+                "value": "agent-policy/v1"
+              },
+              {
+                "kind": "account",
+                "path": "agent"
               }
             ]
           }
@@ -205,45 +169,6 @@
         }
       ],
       "args": [
-        {
-          "name": "policy_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "owner_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "agent_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "per_tx",
-          "type": "u128"
-        },
-        {
-          "name": "per_period",
-          "type": "u128"
-        },
-        {
-          "name": "period_blocks",
-          "type": "u64"
-        },
         {
           "name": "amount",
           "type": "u128"
@@ -265,8 +190,12 @@
           "pda": {
             "seeds": [
               {
-                "kind": "arg",
-                "path": "policy_hash"
+                "kind": "const",
+                "value": "agent-policy/v1"
+              },
+              {
+                "kind": "account",
+                "path": "agent"
               }
             ]
           }
@@ -299,45 +228,6 @@
         }
       ],
       "args": [
-        {
-          "name": "policy_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "owner_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "agent_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "per_tx",
-          "type": "u128"
-        },
-        {
-          "name": "per_period",
-          "type": "u128"
-        },
-        {
-          "name": "period_blocks",
-          "type": "u64"
-        },
         {
           "name": "recipient_id",
           "type": {
