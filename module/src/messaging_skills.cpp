@@ -140,14 +140,27 @@ std::string CreateGroupSkill::invoke(const std::string &paramsJson)
 
     // Each member is invited on their own owner topic, which is the only address
     // an agent can derive from an Agent Card.
-    std::size_t invited = 0;
+    //
+    // Count what was asked for as well as what succeeded. Reporting only the
+    // successes made every failure look like an empty guest list: a group whose
+    // invitations were all refused, and one created with no members, both came
+    // back ok:true with invited:0. A member that is not a string is a malformed
+    // request, not something to skip quietly.
+    std::size_t invited = 0, asked = 0;
     for (const auto &m : p["members"]) {
-        if (!m.is_string()) continue;
+        if (!m.is_string()) {
+            return fail("every member must be a string account id");
+        }
+        ++asked;
         const std::string note = json{{"invite", group}}.dump();
         if (port_.send && port_.send(ownerTopic(m.get<std::string>()),
                                      std::vector<std::uint8_t>(note.begin(), note.end()))) {
             ++invited;
         }
+    }
+    if (invited != asked) {
+        return fail("the channel opened but " + std::to_string(asked - invited) +
+                    " of " + std::to_string(asked) + " invitations could not be delivered");
     }
     return done(json{{"channel", group}, {"invited", invited}});
 }
