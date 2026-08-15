@@ -159,6 +159,32 @@ start, which means it stops being a pure address commitment and starts being
 mutable state. That is a design change with a real trade in it, so it is named
 here rather than half-made.
 
+## No model has been run against the inference port
+
+The prize requires "pluggable inference (local or API-based)" and puts the model
+itself out of scope. The port exists (`module/src/inference.h`) and both
+backends are tested, but the word *inference* is doing no work in either of
+them yet:
+
+- `StubLocalBackend` is **a stub, and not a model**. No weights, no tokenizer,
+  no inference: it reads two fields out of a JSON context and compares them. It
+  is a rule table with an honest name, and it is the "local" half only in the
+  sense that it satisfies the port offline.
+- `OpenAiCompatibleBackend` builds a real chat-completions request and parses a
+  real reply, but its transport is injected and the only transport it has ever
+  been given is a fake. **No request has left this repository**, to a hosted
+  endpoint or to a local runtime.
+
+So what is demonstrated is the seam and its failure behaviour — that a backend
+which is unreachable, slow, incoherent, or actively obeying an injected offer
+cannot move money — and not that a model can usefully drive the agent. The
+second claim needs a model, and no model has been run.
+
+One further gap worth naming: the decision is not in the demo path.
+`scripts/a2a-task.sh` still decides whether to accept a task price with a shell
+`if`, and that `if` is what runs on testnet today. `decideTaskAcceptance` is
+exercised by CI, not by the demo.
+
 ## `create_policy` needs a signer some program already owns
 
 Reproduced against a local sequencer with `RISC0_DEV_MODE=0`, so this is the
