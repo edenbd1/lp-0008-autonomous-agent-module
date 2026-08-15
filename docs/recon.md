@@ -109,7 +109,7 @@ mounts.
 
 ## CI status
 
-Green on the default branch, which the prize requires explicitly. Two jobs, both
+Green on the default branch, which the prize requires explicitly. Three jobs, all
 carrying evidence rather than just compiling:
 
 - the policy primitive and its adversarial tests;
