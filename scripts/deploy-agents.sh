@@ -173,7 +173,14 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   if [ -z "$policy_hash" ]; then echo "  FAILED to compute the policy hash" >&2; return 1; fi
   echo "  policy $policy_hash  (per-tx $per_tx, per-period $per_period, window $period blocks)"
 
+  # Resync the owner before proving. Funding this agent just changed the
+  # owner's account on chain, and create_policy is proved against the wallet's
+  # local view: prove against the state from before the transfer and the proof
+  # builds, spel returns a hash, and the sequencer never lands it. Nothing
+  # reports an error — which is what made three anchors fail at once after the
+  # funding step was introduced, while the same script had worked before it.
   export LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME"
+  "$WALLET" account sync-private </dev/null >/dev/null 2>&1
   local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
     -- create_policy --owner "Public/$SIGNER" \
     --policy-hash "$policy_hash" --owner-id "$OWNER_HEX" --agent-id "$agent_hex" \
