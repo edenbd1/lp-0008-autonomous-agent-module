@@ -198,10 +198,19 @@ halts with:
 | spending under a policy anchored for a different agent | 6013 |
 | a spend that would carry the period total past the per-period limit | 6006 |
 | a period that does not start on a multiple of `period_blocks` | 6014 |
+| an agent signing its own owner approval | 6012 |
+| an above-threshold spend on an approval account anyone could have funded | 6007 |
+| presenting an approval a second time, after it was stamped | 6018 |
 
 Each is paired with the honest call it differs from in one field, because a
 check that only ever refuses says nothing about what is accepted. `demo.sh`
 runs the whole thing.
+
+The last three are also the only execution the above-threshold path gets
+anywhere: `scripts/a2a-task.sh` settles inside the envelope and
+`scripts/e2e-local-sequencer.sh` exercises `spend`. The instruction whose job is
+to let an agent spend *more* than its ceiling is the last one that should go
+unexercised.
 
 Three bindings were needed, not one. Fixing `create_policy` alone would have
 changed nothing: an attacker who cannot invent an owner id can anchor a policy

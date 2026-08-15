@@ -21,7 +21,9 @@
 
 use std::path::PathBuf;
 
-use agent_policy_core::{compute_policy_hash, SpendLedger, SpendPolicy};
+use agent_policy_core::{
+    compute_approval_marker, compute_policy_hash, compute_spend_ref, SpendLedger, SpendPolicy,
+};
 use anyhow::{bail, Context, Result};
 use nssa_core::{
     account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
@@ -201,6 +203,42 @@ fn main() -> Result<()> {
         amount,
         window_start,
     };
+    // One approved payment, above the per-transaction ceiling, named exactly:
+    // this policy, this recipient, this amount, this nonce.
+    let approved_amount = 500u128;
+    let approved_nonce = 7u64;
+    let marker_seed = compute_approval_marker(&compute_spend_ref(
+        &real_hash,
+        &recipient,
+        approved_amount,
+        approved_nonce,
+    ));
+    let approval_pda = *compute_pda(&program_id, &[&marker_seed]).value();
+    let approve = || Instruction::ApproveSpend {
+        marker_seed,
+        policy_hash: real_hash,
+        owner_id: real_owner,
+        agent_id: agent,
+        per_tx: real.per_tx,
+        per_period: real.per_period,
+        period_blocks: real.period_blocks,
+        recipient,
+        amount: approved_amount,
+        nonce: approved_nonce,
+    };
+    let spend_approved = || Instruction::SpendApproved {
+        policy_hash: real_hash,
+        owner_id: real_owner,
+        agent_id: agent,
+        per_tx: real.per_tx,
+        per_period: real.per_period,
+        period_blocks: real.period_blocks,
+        recipient_id: recipient,
+        amount: approved_amount,
+        nonce: approved_nonce,
+        marker_seed,
+    };
+
     // What the policy account holds after 1000 has been moved in period 8000 —
     // not written by hand: this is `SpendLedger` as the guest encodes it, and
     // the run below checks the guest produces exactly these bytes.
@@ -277,6 +315,68 @@ fn main() -> Result<()> {
             accounts: vec![policy_account(vec![]), payer(agent), payee()],
             instruction: spend(1, 8001),
             expect: Some(6014),
+        },
+        // ── the above-threshold path ─────────────────────────────────────
+        //
+        // Nothing else in this repository executes it: `scripts/a2a-task.sh`
+        // settles inside the envelope and `scripts/e2e-local-sequencer.sh`
+        // exercises `spend`. An untested path in the instruction that exists to
+        // let an agent spend MORE than its ceiling is the last place to leave
+        // unexercised.
+        Case {
+            what: "an agent signs its own owner approval",
+            accounts: vec![
+                with_id(Account::default(), false, approval_pda),
+                policy_account(vec![]),
+                with_id(account(HOLDER_PROGRAM, 0, vec![]), true, agent),
+            ],
+            instruction: approve(),
+            expect: Some(6012),
+        },
+        Case {
+            what: "the owner signs it — accepted",
+            accounts: vec![
+                with_id(Account::default(), false, approval_pda),
+                policy_account(vec![]),
+                with_id(account(HOLDER_PROGRAM, 0, vec![]), true, real_owner),
+            ],
+            instruction: approve(),
+            expect: None,
+        },
+        Case {
+            what: "an above-threshold spend on an approval anyone could have funded",
+            accounts: vec![
+                policy_account(vec![]),
+                // Program-owned, at the right address, and not by this program:
+                // exactly what funding an address gets you.
+                with_id(account(HOLDER_PROGRAM, 0, vec![]), false, approval_pda),
+                payer(agent),
+                payee(),
+            ],
+            instruction: spend_approved(),
+            expect: Some(6007),
+        },
+        Case {
+            what: "the same spend on the approval this program created — accepted",
+            accounts: vec![
+                policy_account(vec![]),
+                with_id(account(program_id, 0, vec![]), false, approval_pda),
+                payer(agent),
+                payee(),
+            ],
+            instruction: spend_approved(),
+            expect: None,
+        },
+        Case {
+            what: "presenting that approval a second time, after it was stamped",
+            accounts: vec![
+                policy_account(vec![]),
+                with_id(account(program_id, 0, vec![1]), false, approval_pda),
+                payer(agent),
+                payee(),
+            ],
+            instruction: spend_approved(),
+            expect: Some(6018),
         },
     ];
 
