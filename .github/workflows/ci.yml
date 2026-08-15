@@ -42,6 +42,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # demo.sh runs the policy tests and then executes the committed guest ELF
+      # in the risc0 executor, which is a large dependency tree built once and
+      # cached. Both target directories are cached: the workspace one for the
+      # policy crate, and the adversarial checker's own, which is a separate
+      # workspace precisely so `cargo build --workspace` does not pay for risc0.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            crates/agent-verifier-adversarial/target
+          key: demo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: demo-${{ runner.os }}-
 
       # The guest is content-addressed and committed under artifacts/programs/.
       # Rebuilding it needs the risc0 docker toolchain and is done locally;
