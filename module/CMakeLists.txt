@@ -30,4 +30,6 @@ logos_module(
         src/messaging_skills.cpp
         src/storage_skills.h
         src/storage_skills.cpp
+        src/inference.h
+        src/inference.cpp
 )

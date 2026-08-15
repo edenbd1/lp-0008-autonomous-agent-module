@@ -99,3 +99,15 @@ jobs:
             module/src/messaging_skills.cpp module/src/storage_skills.cpp \
             -o skills_test
           ./skills_test
+
+      # Same argument for inference. No model here and none needed: what has to
+      # hold is that a backend which is down, slow, incoherent or actively
+      # hostile cannot move money, and a fake answers that better than a real
+      # model would — a real one cannot be made to reliably return a malicious
+      # amount on demand.
+      - name: Exercise the inference port
+        run: |
+          clang++ -std=c++17 module/tests/inference_test.cpp \
+            module/src/inference.cpp \
+            -o inference_test
+          ./inference_test

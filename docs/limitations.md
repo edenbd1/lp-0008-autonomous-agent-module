@@ -2,6 +2,47 @@
 
 What does not work, stated before anyone has to discover it.
 
+## The three anchors do not belong to the program in this repository
+
+Criterion 1 was met and is not met now, and the regression is ours.
+
+The three anchored policies — storage `3dcb2378…`, messaging `28930c0a…`,
+blockchain `1075e47d…` — are all live on chain and each policy hash recomputes
+from its (owner, agent, limits) triple. But they were anchored against program
+`6e4a2000…`, and `artifacts/programs/agent_verifier.bin` now hashes to
+`b028eabf…` after the chained-transfer rebuild. A policy account is a PDA
+derived from the program id, so an anchor under the old program is not an
+anchor under the new one.
+
+Only re-anchoring all three under the current program fixes this, and it needs
+three signers that have never signed — see the next section for why.
+
+The lesson is a sequencing one worth stating plainly: on this stack, every guest
+change invalidates every anchor. Criterion 1 and criterion 2 have to be
+satisfied under the *same* program, so the guest must be final before the
+anchors are treated as evidence.
+
+## spel builds every transaction against nonce 0
+
+The single root cause behind the whole "submitted, returns a hash, never lands"
+family, and it is a client bug rather than a chain rule.
+
+Every public signer sits permanently at `nonce: 1` after its first landed
+transaction and never advances again. Measured across five independent fresh
+accounts, and corroborated by every signer in this repository: the ones that
+landed something read nonce 1, the ones that never did read nonce 0.
+
+The sequencer checks the nonce for exact equality
+(`lee/state_machine/src/validated_state_diff/mod.rs:499-505`), so a second
+transaction carrying nonce 0 against an account now at nonce 1 is dropped
+silently. That explains why refreshing the wallet does not help, why
+re-importing the key into a clean home does not help, and why the failure is
+not specific to `create_policy` — `approve_spend` behaves identically.
+
+Consequence: **any flow that needs a signer to act twice is unavailable** —
+re-anchoring, rotating a policy, and the owner approving a spend. Only the
+autonomous below-threshold path survives, because each agent signs once.
+
 ## The owner can never approve a spend after anchoring a policy
 
 The most serious open defect, and it is structural rather than a bug.
