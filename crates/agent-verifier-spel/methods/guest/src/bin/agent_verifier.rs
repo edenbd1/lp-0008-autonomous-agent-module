@@ -8,39 +8,64 @@
 // the process takes the spending. The limit has to be enforced somewhere the
 // agent cannot rewrite, which is here.
 //
-// The policy account's address derives from the policy itself — both limits and
-// the period length. Raising a limit therefore does not edit an account, it
-// names a different one, which `create_policy` never initialised, so its owner
-// is the default and the spend is rejected before the program body runs.
+// ONE POLICY ACCOUNT PER AGENT
 //
-// THE THREE BINDINGS THAT MAKE THAT A CEILING
+// The policy account's address is `PDA(this program, ["agent-policy/v1",
+// agent_id])`. The agent, and nothing else. Everything the policy says — who
+// owns it, both limits, the period, and the running total — lives in that
+// account's DATA, which only this program may write (LEZ rule 6,
+// `UnauthorizedDataModification`, `program/mod.rs:718-728`).
 //
-// Deriving the address from the limits stops the agent EDITING its policy. On
-// its own it does not stop the agent ANCHORING ANOTHER ONE, and for four
-// deployments it did not: `create_policy` accepted a caller-supplied `owner_id`
-// without ever comparing it to the account that signed, and `spend` accepted any
-// anchored policy account without comparing the payer to the agent that policy
-// names. Both were demonstrated against the deployed binary — a `create_policy`
-// signed by an agent's own key, naming an invented owner and `per_tx =
-// u128::MAX`, was accepted at halt 0, and a `spend` of that agent's entire
-// balance under it was accepted at halt 0 as well.
+// `create_policy` declares that account `#[account(init)]`, and `init` refuses
+// an account that is not in its default state. So the first anchor for an agent
+// is the only anchor for that agent. A second one is not detected — it is
+// impossible.
 //
-// Fixing only the first would have changed nothing: an attacker who cannot
-// invent an owner id can still anchor a policy under an account it really
-// controls and point the compromised agent at that. Fixing only the first two
-// leaves `approve_spend`, which took a signer and never asked whether that
-// signer was the policy's owner — so the agent could sign its own approvals and
-// step over the threshold that way. The property needs all three:
+// WHY THAT, AND NOT MORE CHECKS
 //
-//   create_policy   the signer IS the owner the policy commits to   (6012)
-//   spend           the payer IS the agent the policy commits to    (6013)
-//   spend_approved  same, and the marker was created by this program
-//   approve_spend   the signer IS that same owner                   (6012)
+// The three previous deployments derived the address from the policy CONTENTS:
+// owner, agent, and both limits. Each fix added a comparison, and each time the
+// attack moved:
 //
-// Each is one comparison against account metadata the caller does not control,
-// which is why they are here and not in the agent: `account_id` and
-// `program_owner` reach the program through the pre-states the state machine
-// built, not through the instruction the agent serialised.
+//   - `create_policy` did not compare `owner_id` to the signer, so an agent
+//     anchored a policy naming an owner that did not exist;
+//   - `spend` did not compare the payer to `agent_id`, so any agent spent under
+//     anybody's anchored policy;
+//   - `approve_spend` did not compare its signer to the owner, so the agent
+//     signed its own approvals.
+//
+// All three were closed. The attack still worked, and this is the version that
+// matters: an attacker holding a compromised agent's key does not have to
+// invent an owner or borrow a policy. **It is the owner.** It anchors a fresh
+// policy naming the compromised agent as `agent_id` and itself as `owner_id`,
+// with `per_tx = per_period = u128::MAX`, and spends the balance under that.
+// Every comparison above passes, because every one of them is satisfied. That
+// was executed against the deployed binary — `create_policy` accepted at halt 0,
+// `spend` of the agent's whole balance accepted at halt 0 — in three variants,
+// including one where the anchoring signer was the agent's own public pay
+// account and the follow-up was a self-signed `approve_spend` for 999,999.
+//
+// The defect was never a missing comparison. It was that the caller chose the
+// address: folding the limits into it meant every (owner, agent, limits) triple
+// had an account of its own, all uninitialised, so "anchor a new policy" was
+// always available. Removing that choice is the fix. There is one address per
+// agent, `init` gives it to whoever writes first, and the owner writes it when
+// it creates the agent — before the agent has run, let alone been taken.
+//
+// WHAT REMAINS, AND WHERE IT IS CHECKED
+//
+//   create_policy   `init` — one policy account per agent, first writer wins.
+//                   The owner recorded is the signer's own id, not an argument.
+//   spend           the policy account's address is derived from the PAYING
+//                   account's id, so there is no `agent_id` argument to lie
+//                   about. The limits come out of the account, not the call.
+//   approve_spend   the signer must be the owner the RECORD names            (6012)
+//   spend_approved  same address derivation, and the marker was created by
+//                   this program and is unspent.
+//
+// `account_id` and `program_owner` reach the program through the pre-states the
+// state machine built, not through the instruction the agent serialised, which
+// is why these are here and not in the agent.
 //
 // THE PER-PERIOD LIMIT, AND THE CLOCK THIS CHAIN DOES NOT HAVE
 //
@@ -50,9 +75,8 @@
 // trusting the agent". It did not. The enforced ceiling was min(per_tx,
 // per_period) per transaction and unbounded in aggregate.
 //
-// The total now lives in the policy account's data. This program owns that
-// account, so LEZ rule 6 lets it write there and stops anyone else
-// (`UnauthorizedDataModification`, `program/mod.rs:718-728`).
+// The total lives in the policy account's data, next to the limits it is
+// measured against.
 //
 // The period is harder, because a program cannot read the block height:
 // `ProgramInput` is (self_program_id, caller_program_id, pre_states,
@@ -74,7 +98,7 @@
 // quantity the chain computes rather than one the agent asserts.
 //
 // An above-threshold spend needs an approval marker seeded by the exact payment
-// — policy, recipient, amount, nonce. The marker is created with `init` by
+// — agent, recipient, amount, nonce. The marker is created with `init` by
 // `approve_spend`, which only the owner can sign, and `spend_approved` stamps it
 // as it consumes it: a marker that exists is not the same as a marker that is
 // still unspent, and without the stamp the same approval paid out again on every
@@ -131,14 +155,10 @@ enum AuthTransfer {
 }
 
 // Deterministic and stable: an integration may branch on these.
-/// The policy hash does not commit to the (owner, agent, limits) presented.
-const E_POLICY_MISMATCH: u32 = 6001;
-/// No policy is committed at this address: the limits are not anchored.
+/// No policy is committed at this address: the agent has never been anchored.
 const E_POLICY_NOT_ANCHORED: u32 = 6002;
-/// `spend_ref` is not the reference for this (policy, recipient, amount, nonce).
+/// `marker_seed` is not the marker for this (agent, recipient, amount, nonce).
 const E_SPEND_REF_MISMATCH: u32 = 6003;
-/// The marker seed does not commit to the spend reference it claims to.
-const E_MARKER_SEED_MISMATCH: u32 = 6004;
 /// The spend exceeds the per-transaction limit and carries no owner approval.
 const E_OVER_PER_TX_LIMIT: u32 = 6005;
 /// The spend would carry the period total past the per-period limit.
@@ -155,103 +175,84 @@ const E_RECIPIENT_OVERFLOW: u32 = 6009;
 const E_AGENT_UNOWNED: u32 = 6010;
 /// The recipient account presented is not the recipient the approval names.
 const E_RECIPIENT_MISMATCH: u32 = 6011;
-/// The account that signed is not the owner this policy commits to. Without
-/// this an agent anchors its own policy, or approves its own spend.
+/// The account that signed is not the owner this agent's policy records.
+/// Without this the agent approves its own above-threshold spends.
 const E_OWNER_MISMATCH: u32 = 6012;
-/// The account paying is not the agent this policy commits to. Without this any
-/// agent spends under anybody's anchored policy — including one the attacker
-/// anchored for itself.
-const E_AGENT_MISMATCH: u32 = 6013;
 /// The period named does not start on a multiple of `period_blocks`.
 const E_WINDOW_MISALIGNED: u32 = 6014;
-/// The period named is older than the one the policy ledger records.
+/// The period named is older than the one the policy record holds.
 const E_WINDOW_REGRESSED: u32 = 6015;
-/// The policy account's data is not a ledger this program wrote.
-const E_LEDGER_MALFORMED: u32 = 6016;
+/// The policy account's data is not a record this program wrote.
+const E_RECORD_MALFORMED: u32 = 6016;
 /// `period_blocks` is zero, so the policy has no period to account against.
 const E_PERIOD_ZERO: u32 = 6017;
 /// The owner approval presented has already been spent.
 const E_APPROVAL_ALREADY_SPENT: u32 = 6018;
+
+// 6001 (policy hash mismatch), 6004 (marker seed mismatch at anchoring) and
+// 6013 (payer is not the agent) are retired rather than reused. All three
+// existed because the caller chose the policy account's address and the program
+// had to check the choice; the address is now a function of the agent, so the
+// disagreements they reported cannot be expressed. Leaving the numbers unused
+// keeps an integration that branches on them from silently matching a different
+// refusal.
 
 #[lez_program]
 mod agent_verifier {
     #[allow(unused_imports)]
     use super::*;
 
-    /// Publish an agent's spending policy.
-    ///
-    /// The owner signs this once, when they deploy the agent. What matters is
-    /// that a given (owner, agent, limits) maps to exactly one account, which
-    /// `init` guarantees by refusing to overwrite — and that the owner it
-    /// commits to is the account that actually signed.
+    /// Publish an agent's spending policy. Once, per agent, for good.
     ///
     /// Accounts:
-    /// - `policy` (init, PDA seeded by `policy_hash`): the on-chain commitment.
-    ///   Its address encodes both limits and the period, so none of them can be
-    ///   altered later. Its data is the running total, and starts empty.
-    /// - `owner` (signer): the human deploying the agent. `owner_id` must be
-    ///   this account's own id.
+    /// - `policy` (init, PDA seeded by `["agent-policy/v1", agent_id]`): the
+    ///   on-chain commitment. Its address is a function of the agent and nothing
+    ///   else, so this is *the* policy account for that agent rather than one of
+    ///   many, and `init` refuses to overwrite it. That is the whole of the fix
+    ///   for the anchoring hole: an attacker holding the agent's key cannot
+    ///   anchor a second, unlimited policy, because there is nowhere to put it.
     ///
-    ///   Signers reach the state machine through the witness set rather than
-    ///   through `message.account_ids`
-    ///   (`lee/state_machine/src/validated_state_diff/mod.rs:498`), which is why
-    ///   an earlier version of this instruction declared `owner` and never read
-    ///   it. Declaring it is what makes `spel` sign at all; comparing it is what
-    ///   makes anchoring authenticated. Without the comparison `owner_id` is 32
-    ///   bytes the caller invents, and an agent that can call this instruction —
-    ///   any agent, it needs no permission — anchors itself a policy with
-    ///   `per_tx = u128::MAX` and spends its whole balance under it. That was
-    ///   not a theory about this program; it was done to the deployed binary.
+    ///   Its data is the record — owner, limits, period, running total — written
+    ///   here and afterwards only by `spend`.
+    ///
+    /// - `owner` (signer): the human deploying the agent. There is no `owner_id`
+    ///   argument: the signer's own account id is what gets recorded, so the
+    ///   claim and the fact cannot differ. Signers reach the state machine
+    ///   through the witness set rather than through `message.account_ids`
+    ///   (`lee/state_machine/src/validated_state_diff/mod.rs:498`), and
+    ///   declaring the account is what makes `spel` sign at all.
     ///
     ///   **The signer must be an account some program already owns** — in
-    ///   practice, one that has received a transfer. A signer still holding the
-    ///   default program owner works exactly once: on its second anchor its
-    ///   nonce is no longer zero, `#[lez_program]` drops its post-state to dodge
-    ///   rule 7 (`program/mod.rs:730-738`), and the state machine then rejects
-    ///   the transaction for the account being declared and missing
+    ///   practice, one that has received a transfer — if it is to anchor more
+    ///   than once. A signer still holding the default program owner works
+    ///   exactly once: on its second anchor its nonce is no longer zero,
+    ///   `#[lez_program]` drops its post-state to dodge rule 7
+    ///   (`program/mod.rs:730-738`), and the state machine then rejects the
+    ///   transaction for the account being declared and missing
     ///   (`validated_state_diff/mod.rs:311-319`,
     ///   `DeclaredAccountMissingFromOutput`). A program-owned signer is exempt
-    ///   from both: it is never filtered, and rule 7 only fires on a *default*
-    ///   post-state owner. Measured, not assumed — `DumJ4LCB…`, owned by the
-    ///   transfer program, anchored `28930c0a…` at nonce 29 and `1075e47d…` at
-    ///   nonce 30, in consecutive blocks.
+    ///   from both. Measured, not assumed — `DumJ4LCB…`, owned by the transfer
+    ///   program, anchored two policies in consecutive blocks.
+    ///
+    /// `agent_id` is still a caller-supplied value, and it has to be: the owner
+    /// must be able to name the agent it is deploying. What changed is that
+    /// naming an agent no longer buys anything, because the account that name
+    /// resolves to is either free (and then this is the owner anchoring) or
+    /// taken (and then this call cannot land).
     #[instruction]
     pub fn create_policy(
-        #[account(init, pda = arg("policy_hash"))]
+        #[account(init, pda = [literal("agent-policy/v1"), arg("agent_id")])]
         policy: AccountWithMetadata,
         #[account(signer)]
         owner: AccountWithMetadata,
-        policy_hash: [u8; 32],
-        owner_id: [u8; 32],
         agent_id: [u8; 32],
         per_tx: u128,
         per_period: u128,
         period_blocks: u64,
     ) -> SpelResult {
-        // Re-derive the commitment the address encodes. The macro already
-        // constrains `policy` to be the PDA for this hash; this check is what
-        // gives the hash its meaning, tying the address to specific limits
-        // rather than to opaque bytes.
-        let expected = agent_policy_core::compute_policy_hash(
-            &owner_id,
-            &agent_id,
-            &agent_policy_core::SpendPolicy { per_tx, per_period, period_blocks },
-        );
-        if expected != policy_hash {
-            return Err(SpelError::custom(
-                E_POLICY_MISMATCH,
-                "policy_hash does not commit to this (owner, agent, limits)",
-            ));
-        }
-        // The whole of the fix for the anchoring hole. Same shape as the
-        // recipient check in `spend_approved`: an id in the instruction is a
-        // claim, an id on an account in the pre-states is a fact.
-        if *owner.account_id.value() != owner_id {
-            return Err(SpelError::custom(
-                E_OWNER_MISMATCH,
-                "the signer is not the owner this policy commits to",
-            ));
-        }
+        // `agent_id` is read by the macro to derive and check the PDA above; the
+        // body has nothing left to compare it against, which is the point.
+        let _ = agent_id;
         // A policy with no period cannot be accounted against — `authorize`
         // would have nothing to align a window to. Refuse it at anchoring time
         // so no such account can ever exist.
@@ -261,6 +262,14 @@ mod agent_verifier {
                 "period_blocks must not be zero",
             ));
         }
+        let record = agent_policy_core::PolicyRecord {
+            // The signer, off the pre-state. Not a claim in the instruction.
+            owner: *owner.account_id.value(),
+            policy: agent_policy_core::SpendPolicy { per_tx, per_period, period_blocks },
+            ledger: agent_policy_core::SpendLedger::default(),
+        };
+        let mut policy = policy;
+        write_record(&mut policy, &record)?;
         Ok(SpelOutput::execute(vec![policy, owner], vec![]))
     }
 
@@ -270,17 +279,13 @@ mod agent_verifier {
     /// - `approval` (init, PDA seeded by `marker_seed`): exists only because the
     ///   owner signed. `init` makes it single-issue; `spend_approved` stamping
     ///   its data is what makes it single-*use*.
-    /// - `policy` (PDA seeded by `policy_hash`): required to be owned by this
-    ///   program, so an approval cannot be attached to an invented policy.
-    /// - `owner` (signer): must be the owner the policy commits to.
-    ///
-    /// The limits are arguments here for one reason: without them the policy
-    /// hash is opaque bytes and this instruction cannot tell whose policy it is.
-    /// Re-deriving the hash from (owner, agent, limits) and then checking the
-    /// signer against `owner_id` is what stops a compromised agent signing its
-    /// own approvals — which would walk straight past the threshold that
-    /// `spend` refuses to cross, and make the whole above-threshold path
-    /// decorative.
+    /// - `policy` (PDA seeded by `["agent-policy/v1", agent_id]`): required to be
+    ///   owned by this program, so an approval cannot be attached to an invented
+    ///   policy. It is also where the owner comes from.
+    /// - `owner` (signer): must be the owner the RECORD names — read off the
+    ///   chain, not supplied here. Without this a compromised agent signs its own
+    ///   approvals and walks straight past the threshold `spend` refuses to
+    ///   cross, which would make the whole above-threshold path decorative.
     ///
     /// `recipient` is the account id of the account that will be paid, the same
     /// bytes `spend_approved` reads off the recipient account it is handed. An
@@ -290,53 +295,36 @@ mod agent_verifier {
         ctx: ProgramContext,
         #[account(init, pda = arg("marker_seed"))]
         approval: AccountWithMetadata,
-        #[account(pda = arg("policy_hash"))]
+        #[account(pda = [literal("agent-policy/v1"), arg("agent_id")])]
         policy: AccountWithMetadata,
         #[account(signer)]
         owner: AccountWithMetadata,
         marker_seed: [u8; 32],
-        policy_hash: [u8; 32],
-        owner_id: [u8; 32],
         agent_id: [u8; 32],
-        per_tx: u128,
-        per_period: u128,
-        period_blocks: u64,
         recipient: [u8; 32],
         amount: u128,
         nonce: u64,
     ) -> SpelResult {
-        let expected = agent_policy_core::compute_policy_hash(
-            &owner_id,
-            &agent_id,
-            &agent_policy_core::SpendPolicy { per_tx, per_period, period_blocks },
-        );
-        if expected != policy_hash {
-            return Err(SpelError::custom(
-                E_POLICY_MISMATCH,
-                "policy_hash does not commit to this (owner, agent, limits)",
-            ));
-        }
         // Owned by *this* program, not merely non-default: anyone can fund an
         // address, and an approval attached to an account this program never
         // created is not attached to a policy at all.
         if policy.account.program_owner != ctx.self_program_id {
             return Err(SpelError::custom(
                 E_POLICY_NOT_ANCHORED,
-                "no policy is committed at this address",
+                "no policy is committed for this agent",
             ));
         }
-        if *owner.account_id.value() != owner_id {
+        let record = read_record(&policy)?;
+        if *owner.account_id.value() != record.owner {
             return Err(SpelError::custom(
                 E_OWNER_MISMATCH,
-                "the signer is not the owner this policy commits to",
+                "the signer is not the owner this agent's policy records",
             ));
         }
-        let spend_ref =
-            agent_policy_core::compute_spend_ref(&policy_hash, &recipient, amount, nonce);
-        let expected = agent_policy_core::compute_approval_marker(&spend_ref);
-        if expected != marker_seed {
+        let spend_ref = agent_policy_core::compute_spend_ref(&agent_id, &recipient, amount, nonce);
+        if agent_policy_core::compute_approval_marker(&spend_ref) != marker_seed {
             return Err(SpelError::custom(
-                E_MARKER_SEED_MISMATCH,
+                E_SPEND_REF_MISMATCH,
                 "marker_seed does not commit to this spend",
             ));
         }
@@ -344,6 +332,13 @@ mod agent_verifier {
     }
 
     /// The agent pays another account, inside its envelope, alone.
+    ///
+    /// There is no `agent_id` argument and no limits in the call. The policy
+    /// account's address is derived from the PAYING account's own id — `pda =
+    /// [const("agent-policy/v1"), account("agent")]` — so an agent presenting
+    /// another agent's policy account fails the PDA check the macro emits before
+    /// this body runs, and the ceiling it is measured against is whatever the
+    /// account says, not what the caller typed.
     ///
     /// This instruction does not take an approval account, and that is the
     /// point. An earlier version declared one for both paths and passed
@@ -361,17 +356,14 @@ mod agent_verifier {
     ///
     /// `window_start` is the period the agent declares it is spending in. It is
     /// not trusted: it must be a multiple of `period_blocks`, it may not be
-    /// older than the period the ledger records, and the transaction this
+    /// older than the period the record holds, and the transaction this
     /// instruction produces is only valid inside it.
     ///
     /// Accounts:
-    /// - `policy` (mut, PDA seeded by `policy_hash`): the anchored limits, and
-    ///   the running total. Mutable because the total is written back here —
-    ///   the address carries the limits, the data carries what has been spent
-    ///   against them.
-    /// - `agent` (signer): the agent's own account, and the payer. Checked to
-    ///   be the agent the policy commits to, otherwise every anchored policy on
-    ///   the chain is a ceiling any agent may borrow.
+    /// - `policy` (mut, PDA seeded by `["agent-policy/v1", agent]`): the anchored
+    ///   record. Mutable because the running total is written back here.
+    /// - `agent` (signer): the agent's own account, the payer, and the seed of
+    ///   the policy address.
     /// - `recipient` (mut): the account that is actually paid. An earlier
     ///   version did not declare it, which meant the program could check that a
     ///   policy permitted an amount and then move nothing — an authorisation
@@ -379,57 +371,33 @@ mod agent_verifier {
     #[instruction]
     pub fn spend(
         ctx: ProgramContext,
-        #[account(mut, pda = arg("policy_hash"))]
+        #[account(mut, pda = [literal("agent-policy/v1"), account("agent")])]
         policy: AccountWithMetadata,
         #[account(signer)]
         agent: AccountWithMetadata,
         #[account(mut)]
         recipient: AccountWithMetadata,
-        policy_hash: [u8; 32],
-        owner_id: [u8; 32],
-        agent_id: [u8; 32],
-        per_tx: u128,
-        per_period: u128,
-        period_blocks: u64,
         amount: u128,
         window_start: u64,
     ) -> SpelResult {
-        let pol =
-            agent_policy_core::SpendPolicy { per_tx, per_period, period_blocks };
-        let expected = agent_policy_core::compute_policy_hash(&owner_id, &agent_id, &pol);
-        if expected != policy_hash {
-            return Err(SpelError::custom(
-                E_POLICY_MISMATCH,
-                "policy_hash does not commit to these limits",
-            ));
-        }
         if policy.account.program_owner != ctx.self_program_id {
             return Err(SpelError::custom(
                 E_POLICY_NOT_ANCHORED,
-                "no policy is committed for these limits",
-            ));
-        }
-        // The policy names an agent. This is the account paying. They have to be
-        // the same account, or an agent under a 25-per-transaction envelope
-        // simply presents the 200-per-transaction policy anchored next to it —
-        // or one an attacker anchored for itself — and the ceiling is whatever
-        // the loosest policy on the chain happens to be.
-        if *agent.account_id.value() != agent_id {
-            return Err(SpelError::custom(
-                E_AGENT_MISMATCH,
-                "the paying account is not the agent this policy commits to",
+                "no policy is committed for this agent",
             ));
         }
 
         let mut policy = policy;
-        let ledger = read_ledger(&policy)?;
+        let mut record = read_record(&policy)?;
         // The one decision, made in the crate the tests exercise. Refuse rather
         // than silently fall through: an agent that is over its limit must be
         // told to go and get an approval, not handed a success.
-        let next = pol
-            .authorize(&ledger, window_start, amount)
+        record.ledger = record
+            .policy
+            .authorize(&record.ledger, window_start, amount)
             .map_err(refusal_error)?;
-        write_ledger(&mut policy, &next)?;
+        let pol = record.policy;
+        write_record(&mut policy, &record)?;
 
         let transfer = delegated_transfer(&agent, &recipient, amount)?;
 
@@ -465,19 +433,19 @@ mod agent_verifier {
     ///
     /// An approved payment does not consume the unattended budget and is not
     /// blocked by it. That budget bounds what the agent moves *by itself*; this
-    /// payment carries a signature from the owner naming this recipient, this
-    /// amount and this nonce. Making it draw down the same budget would mean an
-    /// owner's own approval could be refused because the agent had been busy,
+    /// payment carries an authorisation from the owner naming this recipient,
+    /// this amount and this nonce. Making it draw down the same budget would mean
+    /// an owner's own approval could be refused because the agent had been busy,
     /// and — since the marker is single-use — would buy nothing.
     ///
     /// Accounts:
-    /// - `policy` (PDA seeded by `policy_hash`): the anchored limits.
+    /// - `policy` (PDA seeded by `["agent-policy/v1", agent]`): the anchored
+    ///   record, addressed from the payer exactly as in `spend`.
     /// - `approval` (mut, PDA seeded by `marker_seed`): the owner's
     ///   authorisation, checked to be owned by this program — an account merely
     ///   *existing* at the right address proves nothing, since anyone can fund
     ///   an address — and stamped here so it cannot be presented twice.
-    /// - `agent` (signer): the agent's own account, and the payer. Checked
-    ///   against the agent the policy commits to, exactly as in `spend`.
+    /// - `agent` (signer): the agent's own account, and the payer.
     /// - `recipient` (mut): the account paid, checked against the account id
     ///   the approval commits to.
     #[instruction]
@@ -485,7 +453,7 @@ mod agent_verifier {
         // Injected by the dispatcher from the trusted ProgramInput; never part
         // of the instruction ABI, so the published IDL does not carry it.
         ctx: ProgramContext,
-        #[account(pda = arg("policy_hash"))]
+        #[account(pda = [literal("agent-policy/v1"), account("agent")])]
         policy: AccountWithMetadata,
         #[account(mut, pda = arg("marker_seed"))]
         approval: AccountWithMetadata,
@@ -493,50 +461,26 @@ mod agent_verifier {
         agent: AccountWithMetadata,
         #[account(mut)]
         recipient: AccountWithMetadata,
-        policy_hash: [u8; 32],
-        owner_id: [u8; 32],
-        agent_id: [u8; 32],
-        per_tx: u128,
-        per_period: u128,
-        period_blocks: u64,
         recipient_id: [u8; 32],
         amount: u128,
         nonce: u64,
         marker_seed: [u8; 32],
     ) -> SpelResult {
-        // 1. The limits must be the anchored ones. Without re-deriving the hash,
-        //    the agent could present generous limits alongside a real policy
-        //    account and the address constraint alone would not notice.
-        let pol =
-            agent_policy_core::SpendPolicy { per_tx, per_period, period_blocks };
-        let expected = agent_policy_core::compute_policy_hash(&owner_id, &agent_id, &pol);
-        if expected != policy_hash {
-            return Err(SpelError::custom(
-                E_POLICY_MISMATCH,
-                "policy_hash does not commit to these limits",
-            ));
-        }
-
-        // 2. Anchor it. An invented policy resolves to an address this program
-        //    never initialised, and one anyone funded is not one this program
-        //    created.
+        // 1. Anchor it. The address came from the payer, so this is that agent's
+        //    policy or it is nothing — and one anyone funded is not one this
+        //    program created.
         if policy.account.program_owner != ctx.self_program_id {
             return Err(SpelError::custom(
                 E_POLICY_NOT_ANCHORED,
-                "no policy is committed for these limits",
+                "no policy is committed for this agent",
             ));
         }
+        // Read it so a policy account holding data this program did not write
+        // cannot be presented as an anchor. Nothing else here needs the limits:
+        // an approved payment is bounded by the approval, not by the envelope.
+        let _ = read_record(&policy)?;
 
-        // 3. The payer must be the agent the policy names — same reason as in
-        //    `spend`. An approval is granted to one agent under one policy.
-        if *agent.account_id.value() != agent_id {
-            return Err(SpelError::custom(
-                E_AGENT_MISMATCH,
-                "the paying account is not the agent this policy commits to",
-            ));
-        }
-
-        // 4. The account being paid must be the account the approval names.
+        // 2. The account being paid must be the account the approval names.
         //    Without this, `recipient_id` is a label in a hash and the money
         //    could go somewhere else entirely.
         if *recipient.account_id.value() != recipient_id {
@@ -546,11 +490,16 @@ mod agent_verifier {
             ));
         }
 
-        // 5. The owner must have approved this exact payment. The seed binds the
-        //    approval to (policy, recipient, amount, nonce), so an approval for
-        //    one transfer cannot be spent on another.
-        let spend_ref =
-            agent_policy_core::compute_spend_ref(&policy_hash, &recipient_id, amount, nonce);
+        // 3. The owner must have approved this exact payment. The seed binds the
+        //    approval to (agent, recipient, amount, nonce) — and the agent is
+        //    read off the paying account, not taken from the call, so an
+        //    approval granted for one agent cannot be presented by another.
+        let spend_ref = agent_policy_core::compute_spend_ref(
+            agent.account_id.value(),
+            &recipient_id,
+            amount,
+            nonce,
+        );
         if agent_policy_core::compute_approval_marker(&spend_ref) != marker_seed {
             return Err(SpelError::custom(
                 E_SPEND_REF_MISMATCH,
@@ -558,7 +507,7 @@ mod agent_verifier {
             ));
         }
 
-        // 6. And the approval must have been created by *this* program.
+        // 4. And the approval must have been created by *this* program.
         //    Checking it is merely non-default would let anyone fund the
         //    address and manufacture consent.
         if approval.account.program_owner != ctx.self_program_id {
@@ -568,7 +517,7 @@ mod agent_verifier {
             ));
         }
 
-        // 7. Once. `init` in `approve_spend` stops the marker being created
+        // 5. Once. `init` in `approve_spend` stops the marker being created
         //    twice; nothing stopped it being *presented* twice, and a marker
         //    that stays untouched authorises the same payment on every later
         //    transaction that names it. Stamping the account is the consumption
@@ -582,7 +531,7 @@ mod agent_verifier {
         }
         let mut approval = approval;
         approval.account.data = nssa_core::account::Data::try_from(SPENT_MARKER.to_vec())
-            .map_err(|_| SpelError::custom(E_LEDGER_MALFORMED, "the spent marker does not fit"))?;
+            .map_err(|_| SpelError::custom(E_RECORD_MALFORMED, "the spent marker does not fit"))?;
 
         let transfer = delegated_transfer(&agent, &recipient, amount)?;
 
@@ -597,24 +546,29 @@ mod agent_verifier {
 /// data would do; a version byte leaves room to say more later.
 const SPENT_MARKER: [u8; 1] = [1];
 
-/// Read the running total out of the policy account.
-fn read_ledger(policy: &AccountWithMetadata) -> Result<agent_policy_core::SpendLedger, SpelError> {
-    agent_policy_core::SpendLedger::decode(&policy.account.data).map_err(|_| {
+/// Read the owner, the limits and the running total out of the policy account.
+///
+/// Fails closed: data this program did not write is not a policy, and empty data
+/// is not "a fresh ledger" any more — `create_policy` writes a full record, so an
+/// account this program owns always has one.
+fn read_record(policy: &AccountWithMetadata) -> Result<agent_policy_core::PolicyRecord, SpelError> {
+    agent_policy_core::PolicyRecord::decode(&policy.account.data).map_err(|_| {
         SpelError::custom(
-            E_LEDGER_MALFORMED,
-            "the policy account does not hold a ledger this program wrote",
+            E_RECORD_MALFORMED,
+            "the policy account does not hold a record this program wrote",
         )
     })
 }
 
 /// Write it back. Rule 6 allows this because the policy account is a PDA of
-/// this program, and forbids it to everyone else.
-fn write_ledger(
+/// this program — or, at `create_policy`, because its pre-state is default —
+/// and forbids it to everyone else.
+fn write_record(
     policy: &mut AccountWithMetadata,
-    ledger: &agent_policy_core::SpendLedger,
+    record: &agent_policy_core::PolicyRecord,
 ) -> Result<(), SpelError> {
-    policy.account.data = nssa_core::account::Data::try_from(ledger.encode().to_vec())
-        .map_err(|_| SpelError::custom(E_LEDGER_MALFORMED, "the ledger does not fit in account data"))?;
+    policy.account.data = nssa_core::account::Data::try_from(record.encode().to_vec())
+        .map_err(|_| SpelError::custom(E_RECORD_MALFORMED, "the record does not fit in account data"))?;
     Ok(())
 }
 

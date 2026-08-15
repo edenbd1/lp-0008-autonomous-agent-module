@@ -9,35 +9,63 @@
 //! deploying an autonomous agent on a remote node is trusting exactly the
 //! machine most likely to be compromised.
 //!
-//! So the policy is anchored the way LP-0002 anchors a member set: the policy
-//! account's *address* is derived from the policy itself. Changing a limit
-//! changes the address, which resolves to an account nobody created, and the
-//! spend is rejected before the program body runs.
+//! ONE POLICY ACCOUNT PER AGENT, AND WHY THAT IS THE WHOLE PROPERTY
 //!
-//! THAT ALONE IS NOT ENOUGH, AND SAYING IT WAS IS HOW THIS BROKE
+//! The previous three deployments derived the policy account's *address* from
+//! the policy contents — owner, agent, and both limits. The reasoning was that
+//! an agent cannot edit a limit, because an edited limit names a different
+//! address that `create_policy` never initialised. That much was true and it
+//! was never the attack.
 //!
-//! An address that encodes limits stops an agent *editing* its policy. It does
-//! not stop it *anchoring a different one*, and until the deployment that this
-//! comment was written for, nothing did: `create_policy` took the owner as a
-//! caller-supplied 32 bytes and never compared it to the account that signed,
-//! and `spend` never compared the paying account to the agent the policy names.
-//! Both holes were demonstrated against the deployed binary, not argued from the
-//! source: a `create_policy` signed by an agent's own key, naming an invented
-//! owner and `per_tx = u128::MAX`, was accepted, and a `spend` of that agent's
-//! whole balance under it was accepted too. Halt 0 both times.
+//! Folding the limits into the address means every (owner, agent, limits)
+//! triple has an address of its own, so there is no such thing as *the* policy
+//! account for an agent — there are 2^256 of them, all uninitialised, and
+//! anchoring is first-come at every one. An attacker holding a compromised
+//! agent's key therefore never had to invent an owner or forge a signature. It
+//! could **be** the owner: anchor a fresh policy naming the compromised agent
+//! as `agent_id` and itself as `owner_id`, with `per_tx = per_period =
+//! u128::MAX`, and then spend the agent's whole balance under it. Every check
+//! passed, because every check was satisfied — the signer really was the owner
+//! that policy named. That was executed against the deployed binary, `Halted(0)`
+//! on both transactions, and it made the headline claim of this repository
+//! false.
 //!
-//! So three bindings, not one, are what makes the ceiling a ceiling, and all
-//! three live in the guest because only the guest sees who signed:
+//! Checking more fields could not close it. What closes it is removing the
+//! choice of address:
 //!
-//! 1. `create_policy` — the signer must BE the owner the policy commits to.
-//! 2. `spend` / `spend_approved` — the paying account must BE the agent it names.
-//! 3. `approve_spend` — the signer must be that same owner.
+//!   the policy account's address is `PDA(program, ["agent-policy/v1", agent])`
 //!
-//! Without (1) an attacker anchors a fresh unlimited policy under an owner id it
-//! made up. With (1) but without (2) it anchors one under an owner id it really
-//! controls and points the agent at it. With both but without (3) it signs its
-//! own approvals and walks past the threshold. Each is three lines; any one of
-//! them missing costs the whole property.
+//! and nothing else. The limits and the owner live in that account's **data**,
+//! written by the program that owns it. `create_policy` declares the account
+//! `#[account(init)]`, and `init` refuses an account that is not in its default
+//! state — so the first anchor for an agent is the only anchor for that agent.
+//! A second one is not *detected*, it is impossible: there is one address, and
+//! it is taken.
+//!
+//! An attacker who takes the agent process now finds that the policy account it
+//! would have to anchor already exists and belongs to the owner, and that the
+//! only account `spend` will read for that agent is that one. Anchoring an
+//! unlimited policy is no longer a thing the chain can be asked to do.
+//!
+//! WHAT THIS COSTS, AND WHAT IT DOES NOT
+//!
+//! It costs the ability to change a policy. There is exactly one per agent and
+//! its data is written once by `create_policy` and thereafter only by `spend`,
+//! which touches the running total and nothing else. Raising an envelope means
+//! a new agent identity. That is a deliberate trade — see
+//! `docs/security-model.md` — and it is strictly stronger than the previous
+//! design, where an owner could anchor a second, looser policy and the agent
+//! could then choose which to present.
+//!
+//! It costs no new trust. The program already had to read this account's data
+//! for the period ledger, and LEZ rule 6 (`UnauthorizedDataModification`) is
+//! what stops anyone else writing there.
+//!
+//! What it does NOT cover is anchoring order. If an agent's key is compromised
+//! *before* its owner has anchored anything, the attacker can anchor first, and
+//! first-writer-wins then favours the attacker. The owner anchors when it
+//! creates the agent, which is before the agent has run, let alone been taken.
+//! That residual is stated rather than papered over.
 //!
 //! WHAT THE OWNER SIGNS
 //!
@@ -48,13 +76,18 @@
 //! `spend_approved` stamps the marker's data on the way through, so a marker
 //! that exists is not the same thing as a marker that is still unspent.
 //!
+//! Who the owner *is* is no longer an argument either. `approve_spend` reads it
+//! out of the policy account and compares it to the signer, so a compromised
+//! agent signing its own approvals is refused by the same account it would have
+//! had to overwrite.
+//!
 //! WHERE THE RUNNING TOTAL LIVES
 //!
 //! The per-period limit needs a total, and a total supplied by the caller is not
 //! a limit — this crate previously said the on-chain program "re-derives it
 //! rather than trusting the agent", and the program did no such thing: both
-//! callers passed zero. The total now lives in the policy account's own data,
-//! written by the program that owns that account, and [`SpendPolicy::authorize`]
+//! callers passed zero. The total lives in the policy account's own data,
+//! alongside the limits it is measured against, and [`SpendPolicy::authorize`]
 //! below is the whole of the decision. The guest is an adapter around it, which
 //! is what makes the tests at the bottom of this file worth reading.
 
@@ -64,11 +97,30 @@ extern crate alloc;
 
 use sha2::{Digest, Sha256};
 
+/// The constant first seed of every policy account's address. The second is the
+/// agent's own account id, and there are no others.
+///
+/// It is here rather than spelled out at each call site because it is
+/// consensus: the deployment script resolves the address through `spel pda`
+/// against the published IDL, and the adversarial harness recomputes it to build
+/// pre-states. The guest is the one place that cannot use this constant —
+/// `#[account(pda = [literal("agent-policy/v1"), …])]` needs a string literal at
+/// macro-expansion time — so the harness recomputing the PDA from *this* value
+/// and then running the committed ELF is what pins the two together: if they
+/// ever drift, the macro's own PDA check fails every case in the suite.
+///
+/// Domain separation, not decoration: approval markers are PDAs of this same
+/// program seeded by a single 32-byte value. Without a distinct prefix a caller
+/// could pass an unspent approval's seed as `agent_id` and squat that address
+/// with a policy account, blocking one specific owner approval before it was
+/// ever granted. `seed_from_str` zero-pads to 32 bytes and panics past that, so
+/// this must stay short.
+pub const POLICY_PDA_PREFIX: &str = "agent-policy/v1";
+
 /// Domain separators. Distinct prefixes keep a hash computed for one purpose
 /// from ever being valid for another.
-pub const POLICY_HASH_PREFIX: &[u8] = b"/lp-0008/v0.1/AgentPolicy/";
-pub const SPEND_REF_PREFIX: &[u8] = b"/lp-0008/v0.1/SpendRef/";
-pub const APPROVAL_MARKER_PREFIX: &[u8] = b"/lp-0008/v0.1/ApprovalMark/";
+pub const SPEND_REF_PREFIX: &[u8] = b"/lp-0008/v0.2/SpendRef/";
+pub const APPROVAL_MARKER_PREFIX: &[u8] = b"/lp-0008/v0.2/ApprovalMark/";
 
 /// What the owner fixes when they deploy the agent.
 ///
@@ -86,11 +138,6 @@ pub struct SpendPolicy {
 }
 
 /// The running total, and the period it belongs to.
-///
-/// This is the entire contents of the policy account's data. It is written by
-/// the policy program, which owns that account — LEZ rule 6
-/// (`UnauthorizedDataModification`) is what stops anyone else touching it — and
-/// read back on the next spend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SpendLedger {
     /// First block of the period this total covers. Always a multiple of
@@ -150,9 +197,9 @@ impl SpendPolicy {
     /// May the agent move `amount` unattended, given what it has already moved?
     ///
     /// Returns the ledger to write back on success. This is the whole decision:
-    /// the guest re-derives the policy hash, checks who signed, and then calls
-    /// this — so what the tests below cover is what the chain enforces, not a
-    /// comparison performed on a number the agent chose.
+    /// the guest checks who signed, reads the anchored limits out of the policy
+    /// account, and then calls this — so what the tests below cover is what the
+    /// chain enforces, not a comparison performed on numbers the agent chose.
     pub fn authorize(
         &self,
         ledger: &SpendLedger,
@@ -193,71 +240,107 @@ impl SpendPolicy {
 
 /// The policy account's data was not written by this program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MalformedLedger;
+pub struct MalformedRecord;
 
-impl SpendLedger {
-    /// `window_start` little-endian, then `spent` little-endian.
-    pub const ENCODED_LEN: usize = 24;
+/// Everything the chain knows about one agent's envelope: who owns it, what it
+/// permits, and what has been spent against it.
+///
+/// This is the entire contents of the policy account's data, and the account's
+/// address is a function of the agent alone — so these fields are what an
+/// attacker would have had to overwrite, and rule 6
+/// (`UnauthorizedDataModification`) is what stops it. The previous design put
+/// `owner` and the limits in the *address* instead, which sounds stronger and is
+/// weaker: an address the caller picks is an address the caller can pick a
+/// different one of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyRecord {
+    /// The account that signed `create_policy`. Not an argument — the guest
+    /// writes the signer's own id here, so there is nothing to disagree with.
+    pub owner: [u8; 32],
+    /// The envelope, fixed at anchoring.
+    pub policy: SpendPolicy,
+    /// What has been spent inside the current period.
+    pub ledger: SpendLedger,
+}
 
-    /// Decode the policy account's data. Empty data is a policy that has been
-    /// anchored and never spent against — `create_policy` writes nothing.
-    pub fn decode(data: &[u8]) -> Result<Self, MalformedLedger> {
-        if data.is_empty() {
-            return Ok(Self::default());
-        }
-        if data.len() != Self::ENCODED_LEN {
-            return Err(MalformedLedger);
-        }
-        let mut w = [0u8; 8];
-        w.copy_from_slice(&data[..8]);
-        let mut s = [0u8; 16];
-        s.copy_from_slice(&data[8..Self::ENCODED_LEN]);
-        Ok(Self {
-            window_start: u64::from_le_bytes(w),
-            spent: u128::from_le_bytes(s),
-        })
-    }
+impl PolicyRecord {
+    /// Layout version. A record this program did not write, or wrote under a
+    /// different layout, decodes to an error rather than to a policy — which is
+    /// the difference between "no ceiling" and "refuse".
+    pub const VERSION: u8 = 1;
+    /// `version || owner || per_tx || per_period || period_blocks ||
+    /// window_start || spent`, every integer little-endian.
+    pub const ENCODED_LEN: usize = 1 + 32 + 16 + 16 + 8 + 8 + 16;
 
     #[must_use]
     pub fn encode(&self) -> [u8; Self::ENCODED_LEN] {
         let mut out = [0u8; Self::ENCODED_LEN];
-        out[..8].copy_from_slice(&self.window_start.to_le_bytes());
-        out[8..].copy_from_slice(&self.spent.to_le_bytes());
+        out[0] = Self::VERSION;
+        out[1..33].copy_from_slice(&self.owner);
+        out[33..49].copy_from_slice(&self.policy.per_tx.to_le_bytes());
+        out[49..65].copy_from_slice(&self.policy.per_period.to_le_bytes());
+        out[65..73].copy_from_slice(&self.policy.period_blocks.to_le_bytes());
+        out[73..81].copy_from_slice(&self.ledger.window_start.to_le_bytes());
+        out[81..97].copy_from_slice(&self.ledger.spent.to_le_bytes());
         out
+    }
+
+    /// Decode the policy account's data.
+    ///
+    /// Empty data is an error here, and that is the point: `create_policy`
+    /// writes a full record, so an account this program owns always has one. An
+    /// empty-data policy account would be an account created some other way, and
+    /// treating it as a default policy would mean a zero envelope at best and a
+    /// missing one at worst. Refuse instead.
+    pub fn decode(data: &[u8]) -> Result<Self, MalformedRecord> {
+        if data.len() != Self::ENCODED_LEN || data[0] != Self::VERSION {
+            return Err(MalformedRecord);
+        }
+        let mut owner = [0u8; 32];
+        owner.copy_from_slice(&data[1..33]);
+        Ok(Self {
+            owner,
+            policy: SpendPolicy {
+                per_tx: u128_le(&data[33..49]),
+                per_period: u128_le(&data[49..65]),
+                period_blocks: u64_le(&data[65..73]),
+            },
+            ledger: SpendLedger {
+                window_start: u64_le(&data[73..81]),
+                spent: u128_le(&data[81..97]),
+            },
+        })
     }
 }
 
-/// The commitment the policy account's address is derived from.
-///
-/// Every field is folded in, so no two policies share an address and a policy
-/// cannot be edited in place — an edited policy is simply a different account.
-#[must_use]
-pub fn compute_policy_hash(owner: &[u8; 32], agent: &[u8; 32], policy: &SpendPolicy) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(POLICY_HASH_PREFIX);
-    h.update(owner);
-    h.update(agent);
-    h.update(policy.per_tx.to_le_bytes());
-    h.update(policy.per_period.to_le_bytes());
-    h.update(policy.period_blocks.to_le_bytes());
-    h.finalize().into()
+fn u64_le(b: &[u8]) -> u64 {
+    let mut x = [0u8; 8];
+    x.copy_from_slice(b);
+    u64::from_le_bytes(x)
 }
 
-/// Names one specific spend: this policy, this recipient, this amount, once.
+fn u128_le(b: &[u8]) -> u128 {
+    let mut x = [0u8; 16];
+    x.copy_from_slice(b);
+    u128::from_le_bytes(x)
+}
+
+/// Names one specific spend: this agent, this recipient, this amount, once.
 ///
-/// The nonce is what stops an approval being replayed for an identical later
-/// payment. Without it, "send 100 to Bob" approved today authorises the same
-/// transfer forever.
+/// The agent identifies the policy, because there is exactly one policy account
+/// per agent and its address is derived from this same value. The nonce is what
+/// stops an approval being replayed for an identical later payment: without it,
+/// "send 100 to Bob" approved today authorises the same transfer forever.
 #[must_use]
 pub fn compute_spend_ref(
-    policy_hash: &[u8; 32],
+    agent: &[u8; 32],
     recipient: &[u8; 32],
     amount: u128,
     nonce: u64,
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(SPEND_REF_PREFIX);
-    h.update(policy_hash);
+    h.update(agent);
     h.update(recipient);
     h.update(amount.to_le_bytes());
     h.update(nonce.to_le_bytes());
@@ -281,12 +364,15 @@ mod tests {
     //
     // The accumulation these tests drive is the accumulation the chain performs:
     // `authorize` returns the ledger the guest writes into the policy account,
-    // and the guest does nothing to it but encode it. What is still out of reach
-    // from here is everything about *who is asking* — that the signer is the
-    // owner the policy names, that the payer is the agent it names, that the
-    // policy account was created by this program and not merely funded at the
-    // right address. Those are checks on account metadata, they are in the
-    // guest, and only an on-chain run reaches them.
+    // and the guest does nothing to it but put it back in the record. What is
+    // still out of reach from here is everything about *who is asking* — that
+    // the payer is the agent whose address the policy account derives from, that
+    // the signer of an approval is the owner the record names, that the policy
+    // account was created by this program and not merely funded at the right
+    // address. Those are checks on account metadata, they are in the guest, and
+    // only an on-chain run — or the adversarial harness in
+    // `crates/agent-verifier-adversarial`, which executes the committed ELF —
+    // reaches them.
     //
     // Two more, likewise on-chain:
     //
@@ -296,10 +382,10 @@ mod tests {
     //    `window_bounds` are tested here as arithmetic; the enforcement is not
     //    arithmetic.
     //
-    // 2. "An approval cannot be spent twice." The marker names one spend, which
-    //    is what `compute_approval_marker` is tested for. Single use comes from
-    //    `init` refusing to create the marker twice and from `spend_approved`
-    //    stamping it on the way through — both on-chain properties.
+    // 2. "An agent has one policy account and cannot anchor a second." That is
+    //    `#[account(init)]` refusing a non-default account at an address derived
+    //    from the agent alone. There is no hash to test here any more, which is
+    //    the improvement — the harness proves it against the binary.
 
     const OWNER: [u8; 32] = [1; 32];
     const AGENT: [u8; 32] = [2; 32];
@@ -309,9 +395,13 @@ mod tests {
         SpendPolicy { per_tx: 100, per_period: 250, period_blocks: 1000 }
     }
 
-    /// The ledger as it is when a policy has just been anchored.
+    /// The record as `create_policy` writes it, before anything is spent.
+    fn anchored() -> PolicyRecord {
+        PolicyRecord { owner: OWNER, policy: policy(), ledger: SpendLedger::default() }
+    }
+
     fn fresh() -> SpendLedger {
-        SpendLedger::decode(&[]).expect("empty data is a fresh ledger")
+        SpendLedger::default()
     }
 
     /// SHA-256 over `separator || parts…`, spelled out so a test can ask what a
@@ -391,7 +481,7 @@ mod tests {
         // A ledger holding a hostile total must not wrap around into "plenty
         // left". It cannot be reached through `authorize`, which caps every
         // total at `per_period` — but the guest decodes this value from account
-        // data, so the arithmetic has to hold for anything 24 bytes can say.
+        // data, so the arithmetic has to hold for anything the record can say.
         let p = policy();
         let maxed = SpendLedger { window_start: 1000, spent: u128::MAX };
         assert_eq!(p.authorize(&maxed, 1000, 1), Err(SpendRefusal::OverPerPeriod));
@@ -408,17 +498,6 @@ mod tests {
     }
 
     #[test]
-    fn the_ledger_survives_the_round_trip_through_account_data() {
-        let l = SpendLedger { window_start: 8000, spent: 1234567890123456789 };
-        assert_eq!(SpendLedger::decode(&l.encode()).expect("round trip"), l);
-        // A never-spent policy has empty data, and that is not an error.
-        assert_eq!(SpendLedger::decode(&[]).expect("fresh"), SpendLedger::default());
-        // Anything else was not written by this program.
-        assert!(SpendLedger::decode(&[0u8; 23]).is_err());
-        assert!(SpendLedger::decode(&[0u8; 25]).is_err());
-    }
-
-    #[test]
     fn the_window_a_block_falls_in_is_the_one_the_chain_will_accept() {
         let p = policy();
         assert_eq!(p.window_start_for(8629), 8000);
@@ -430,150 +509,161 @@ mod tests {
         assert_eq!(p.window_bounds(u64::MAX), None);
     }
 
+    // ── the policy record, which is now where the ceiling lives ──────────
+
     #[test]
-    fn changing_any_limit_changes_the_policy_address() {
-        let base = compute_policy_hash(&OWNER, &AGENT, &policy());
-        for altered in [
-            SpendPolicy { per_tx: 101, ..policy() },
-            SpendPolicy { per_period: 251, ..policy() },
-            SpendPolicy { period_blocks: 1001, ..policy() },
-        ] {
-            assert_ne!(base, compute_policy_hash(&OWNER, &AGENT, &altered));
+    fn the_record_survives_the_round_trip_through_account_data() {
+        let mut r = anchored();
+        r.ledger = SpendLedger { window_start: 8000, spent: 1234567890123456789 };
+        assert_eq!(PolicyRecord::decode(&r.encode()).expect("round trip"), r);
+        assert_eq!(PolicyRecord::ENCODED_LEN, 97);
+    }
+
+    #[test]
+    fn every_field_of_the_record_is_carried_and_none_is_transposed() {
+        // owner is 32 bytes and so is nothing else here, but `per_tx` and
+        // `per_period` are both u128 and `period_blocks` and `window_start` are
+        // both u64. Transposing either pair round-trips perfectly and silently
+        // swaps a 1-per-transaction envelope for a 1000-per-transaction one. So
+        // vary each field alone and require the encoding to move.
+        let base = anchored();
+        let variants = [
+            PolicyRecord { owner: [9; 32], ..base },
+            PolicyRecord { policy: SpendPolicy { per_tx: 101, ..policy() }, ..base },
+            PolicyRecord { policy: SpendPolicy { per_period: 251, ..policy() }, ..base },
+            PolicyRecord { policy: SpendPolicy { period_blocks: 1001, ..policy() }, ..base },
+            PolicyRecord { ledger: SpendLedger { window_start: 1000, spent: 0 }, ..base },
+            PolicyRecord { ledger: SpendLedger { window_start: 0, spent: 1 }, ..base },
+        ];
+        for v in variants {
+            assert_ne!(base.encode(), v.encode());
+            assert_eq!(PolicyRecord::decode(&v.encode()).expect("round trip"), v);
         }
+        // And the fields land where the layout says, not merely somewhere
+        // reversible: a decoder written against this comment must agree.
+        let e = base.encode();
+        assert_eq!(e[0], PolicyRecord::VERSION);
+        assert_eq!(&e[1..33], &OWNER);
+        assert_eq!(u128_le(&e[33..49]), policy().per_tx);
+        assert_eq!(u128_le(&e[49..65]), policy().per_period);
+        assert_eq!(u64_le(&e[65..73]), policy().period_blocks);
     }
 
     #[test]
-    fn the_same_policy_under_a_different_agent_is_a_different_policy() {
-        assert_ne!(
-            compute_policy_hash(&OWNER, &AGENT, &policy()),
-            compute_policy_hash(&OWNER, &[9; 32], &policy())
-        );
+    fn data_this_program_did_not_write_is_not_a_policy() {
+        // The guest reads this off an account it owns, so in practice only it
+        // writes here — but "the ceiling could not be read" must fail closed,
+        // not decode to something permissive. Empty data included: an anchored
+        // policy always carries a record, so empty means the account was made
+        // some other way.
+        assert!(PolicyRecord::decode(&[]).is_err());
+        assert!(PolicyRecord::decode(&[0u8; PolicyRecord::ENCODED_LEN - 1]).is_err());
+        assert!(PolicyRecord::decode(&[0u8; PolicyRecord::ENCODED_LEN + 1]).is_err());
+        // Right length, wrong version.
+        let mut wrong = anchored().encode();
+        wrong[0] = PolicyRecord::VERSION + 1;
+        assert!(PolicyRecord::decode(&wrong).is_err());
+        // The old 24-byte ledger from the previous deployment is not a record.
+        assert!(PolicyRecord::decode(&[0u8; 24]).is_err());
     }
 
-    #[test]
-    fn the_same_policy_under_a_different_owner_is_a_different_policy() {
-        // Two owners deploying the identical (agent, limits) must not derive the
-        // same policy account. If they did, one owner's agent could present the
-        // other's policy — and the address is the whole of the policy's authority,
-        // so nothing downstream would notice.
-        assert_ne!(
-            compute_policy_hash(&OWNER, &AGENT, &policy()),
-            compute_policy_hash(&[9; 32], &AGENT, &policy())
-        );
-    }
+    // ── approvals ────────────────────────────────────────────────────────
 
     #[test]
-    fn the_policy_hash_folds_its_fields_in_one_fixed_order() {
-        // `owner` and `agent` are both 32 bytes, and `per_tx` and `per_period` are
-        // both u128. Transposing either pair is invisible to every test that varies
-        // one field at a time, yet it collides two distinct policies onto one
-        // address: (owner=A, agent=B) with (owner=B, agent=A), and a 1-per-tx /
-        // 1000-per-period policy with a 1000-per-tx / 1-per-period one — the agent
-        // then picks whichever reading of the account it prefers. Only pinning the
-        // layout catches that, so the layout is pinned.
-        let p = policy();
-        let per_tx = p.per_tx.to_le_bytes();
-        let per_period = p.per_period.to_le_bytes();
-        let period_blocks = p.period_blocks.to_le_bytes();
-        let parts: [&[u8]; 5] = [&OWNER, &AGENT, &per_tx, &per_period, &period_blocks];
-        assert_eq!(compute_policy_hash(&OWNER, &AGENT, &p), digest(POLICY_HASH_PREFIX, &parts));
-    }
-
-    #[test]
-    fn an_approval_is_bound_to_the_policy_it_was_granted_under() {
-        // The owner approving "500 to Bob, nonce 7" under a tight policy is not
-        // approving the identical payment under a different policy account. Drop
-        // the policy from the spend reference and one marker satisfies the check
-        // under every policy the agent can name: the owner's approval of a payment
-        // under a 100-per-tx ceiling would also authorise it under a 10_000 one.
-        // That is a replay across policies, which this derivation exists to stop.
-        let raised = SpendPolicy { per_tx: 10_000, ..policy() };
-        let tight = compute_policy_hash(&OWNER, &AGENT, &policy());
-        let loose = compute_policy_hash(&OWNER, &AGENT, &raised);
-        assert_ne!(tight, loose);
-
-        let under_tight = compute_spend_ref(&tight, &BOB, 500, 7);
-        let under_loose = compute_spend_ref(&loose, &BOB, 500, 7);
-        assert_ne!(under_tight, under_loose);
-        assert_ne!(compute_approval_marker(&under_tight), compute_approval_marker(&under_loose));
+    fn an_approval_is_bound_to_the_agent_it_was_granted_for() {
+        // The owner approving "500 to Bob, nonce 7" for one agent is not
+        // approving the identical payment for another. The agent is what selects
+        // the policy account now, so binding the spend reference to it is what
+        // stops one owner's approval being presented by a different agent.
+        let mine = compute_spend_ref(&AGENT, &BOB, 500, 7);
+        let theirs = compute_spend_ref(&[9; 32], &BOB, 500, 7);
+        assert_ne!(mine, theirs);
+        assert_ne!(compute_approval_marker(&mine), compute_approval_marker(&theirs));
     }
 
     #[test]
     fn the_spend_ref_folds_its_fields_in_one_fixed_order() {
-        // Same argument as for the policy hash: `policy_hash` and `recipient` are
-        // both 32 bytes, so a transposition would let a spend to recipient R under
-        // policy P share an approval with a spend to recipient P under policy R.
-        let p = compute_policy_hash(&OWNER, &AGENT, &policy());
+        // `agent` and `recipient` are both 32 bytes, so a transposition would let
+        // a spend to recipient R by agent A share an approval with a spend to
+        // recipient A by agent R.
         let amount = 500u128.to_le_bytes();
         let nonce = 7u64.to_le_bytes();
-        let parts: [&[u8]; 4] = [&p, &BOB, &amount, &nonce];
-        assert_eq!(compute_spend_ref(&p, &BOB, 500, 7), digest(SPEND_REF_PREFIX, &parts));
+        let parts: [&[u8]; 4] = [&AGENT, &BOB, &amount, &nonce];
+        assert_eq!(
+            compute_spend_ref(&AGENT, &BOB, 500, 7),
+            digest(SPEND_REF_PREFIX, &parts)
+        );
+        assert_ne!(
+            compute_spend_ref(&AGENT, &BOB, 500, 7),
+            compute_spend_ref(&BOB, &AGENT, 500, 7)
+        );
     }
 
     #[test]
     fn an_approval_names_one_spend_and_not_another() {
-        let p = compute_policy_hash(&OWNER, &AGENT, &policy());
-        let a = compute_spend_ref(&p, &BOB, 500, 0);
+        let a = compute_spend_ref(&AGENT, &BOB, 500, 0);
         // Same recipient and amount, later nonce: a distinct authorisation.
-        assert_ne!(a, compute_spend_ref(&p, &BOB, 500, 1));
+        assert_ne!(a, compute_spend_ref(&AGENT, &BOB, 500, 1));
         // Same nonce, larger amount: cannot ride on the first approval.
-        assert_ne!(a, compute_spend_ref(&p, &BOB, 501, 0));
+        assert_ne!(a, compute_spend_ref(&AGENT, &BOB, 501, 0));
         // Same spend, different recipient.
-        assert_ne!(a, compute_spend_ref(&p, &[4; 32], 500, 0));
+        assert_ne!(a, compute_spend_ref(&AGENT, &[4; 32], 500, 0));
     }
 
     #[test]
     fn the_marker_is_a_function_of_the_spend_alone() {
-        let p = compute_policy_hash(&OWNER, &AGENT, &policy());
-        let r = compute_spend_ref(&p, &BOB, 500, 7);
+        let r = compute_spend_ref(&AGENT, &BOB, 500, 7);
         assert_eq!(compute_approval_marker(&r), compute_approval_marker(&r));
         assert_ne!(
             compute_approval_marker(&r),
-            compute_approval_marker(&compute_spend_ref(&p, &BOB, 500, 8))
+            compute_approval_marker(&compute_spend_ref(&AGENT, &BOB, 500, 8))
         );
     }
 
     #[test]
     fn a_digest_made_for_one_role_is_not_a_digest_for_another() {
         // A hash produced for one role must never be valid in another. That the
-        // three constants differ is necessary and nowhere near sufficient: it says
+        // constants differ is necessary and nowhere near sufficient: it says
         // nothing about whether the functions use them, or use the right one.
-        assert_ne!(POLICY_HASH_PREFIX, SPEND_REF_PREFIX);
         assert_ne!(SPEND_REF_PREFIX, APPROVAL_MARKER_PREFIX);
-        assert_ne!(POLICY_HASH_PREFIX, APPROVAL_MARKER_PREFIX);
 
-        // Feed all three functions the same material and require three digests.
         const X: [u8; 32] = [0xab; 32];
-        let zero_policy = SpendPolicy { per_tx: 0, per_period: 0, period_blocks: 0 };
-        let as_policy = compute_policy_hash(&X, &X, &zero_policy);
         let as_spend = compute_spend_ref(&X, &X, 0, 0);
         let as_marker = compute_approval_marker(&X);
-        assert_ne!(as_policy, as_spend);
         assert_ne!(as_spend, as_marker);
-        assert_ne!(as_policy, as_marker);
 
-        // Those three would differ even with no separators at all, because the
-        // three bodies are different lengths — which is an accident of the current
-        // field list, not the guarantee. The guarantee is that each digest commits
-        // to its own role, so assert that directly: no function may agree with the
-        // same material hashed bare, or hashed under another role's separator.
+        // Those two would differ even with no separators at all, because the
+        // bodies are different lengths — which is an accident of the current
+        // field list, not the guarantee. The guarantee is that each digest
+        // commits to its own role, so assert that directly: neither function may
+        // agree with the same material hashed bare, or under the other's
+        // separator.
         let zero_u128 = 0u128.to_le_bytes();
         let zero_u64 = 0u64.to_le_bytes();
-        let policy_body: [&[u8]; 5] = [&X, &X, &zero_u128, &zero_u128, &zero_u64];
         let spend_body: [&[u8]; 4] = [&X, &X, &zero_u128, &zero_u64];
         let marker_body: [&[u8]; 1] = [&X];
 
         for (own, got, body) in [
-            (POLICY_HASH_PREFIX, as_policy, &policy_body[..]),
             (SPEND_REF_PREFIX, as_spend, &spend_body[..]),
             (APPROVAL_MARKER_PREFIX, as_marker, &marker_body[..]),
         ] {
             assert_ne!(got, digest(b"", body), "the separator is not in the digest");
-            for other in [POLICY_HASH_PREFIX, SPEND_REF_PREFIX, APPROVAL_MARKER_PREFIX] {
+            for other in [SPEND_REF_PREFIX, APPROVAL_MARKER_PREFIX] {
                 if other != own {
                     assert_ne!(got, digest(other, body), "another role's separator");
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_policy_address_prefix_is_a_usable_pda_seed() {
+        // `spel_framework::pda::seed_from_str` zero-pads to 32 bytes and panics
+        // past that, inside the guest, where a panic is a halt with no error
+        // code. Catch it here instead. It also has to be non-empty, or every
+        // policy address collapses onto the marker namespace it exists to
+        // separate.
+        assert!(!POLICY_PDA_PREFIX.is_empty());
+        assert!(POLICY_PDA_PREFIX.len() <= 32);
     }
 }
