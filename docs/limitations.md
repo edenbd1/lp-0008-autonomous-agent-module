@@ -2,6 +2,32 @@
 
 What does not work, stated before anyone has to discover it.
 
+## Funding from the owner account breaks anchoring from the same account
+
+Root cause of the criterion-1 regression, and it is self-inflicted.
+
+`auth-transfer send` leaves the sending account owned by the authenticated
+transfer program:
+
+```
+Public/DumJ4LCB…  {"balance":30,"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB",…}
+```
+
+`create_policy` declares that same account as `#[account(signer)] owner` and
+returns it as a post-state. A program may not hand back an account another
+program owns — the sequencer rejects it the way it rejected an earlier
+experiment with `Post-state for account … has default program owner but
+pre-state was not default`. spel still submits and still returns a transaction
+hash; it simply never lands, with nothing reported anywhere.
+
+So anchoring worked before funding was added to `deploy-agents.sh`, and every
+anchor failed after — not because anchoring changed, but because the account
+doing the anchoring had been repurposed as a payer in between.
+
+The fix is to separate the roles: fund agents from an account that is not the
+policy owner, or fund them before the owner ever signs a policy. One account
+cannot be both a live auth-transfer sender and a signer this program returns.
+
 ## deploy-agents.sh is not idempotent, and looks broken when it is right
 
 Agent identities are stable once funded — `fund_agent` reuses the account that
