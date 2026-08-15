@@ -871,7 +871,12 @@ jobs:
           # nothing else.
           cargo build --release --locked -p spel --manifest-path vendor/spel/Cargo.toml
           echo "SPEL_BIN=$PWD/vendor/spel/target/release/spel" >> "$GITHUB_ENV"
-          "$PWD/vendor/spel/target/release/spel" --help > /dev/null
+          # Not --help: spel exits 1 on it, so `set -e` killed the step on a
+          # binary that was perfectly fine. Ask it to do the smallest real piece
+          # of work instead -- read the committed program and derive its
+          # ProgramId -- which exits 0 and proves rather more than a usage
+          # banner: that this spel can parse the ELF the scripts below hand it.
+          "$PWD/vendor/spel/target/release/spel" program-id artifacts/programs/agent_verifier.bin > /dev/null
 
       # Verification only. A settlement costs real testnet balance, the paying
       # agent holds about 5 LEZ — which is the note it needs in order to sign at
