@@ -55,7 +55,7 @@ jobs:
           import hashlib,struct
           b=open('artifacts/programs/agent_verifier.bin','rb').read()
           print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
-          want=b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549
+          want=8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe
           if [ "$got" != "$want" ]; then
             echo "deploy hash drifted: got $got, expected $want"; exit 1
           fi
@@ -73,7 +73,7 @@ jobs:
               -H 'Content-Type: application/json' \
               -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"
           }
-          real=$(q b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549)
+          real=$(q 8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe)
           ctrl=$(q dededededededededededededededededededededededededededededededede)
           echo "$real" | grep -q '"result":\[' || { echo "deploy not on chain: $real"; exit 1; }
           echo "$ctrl" | grep -q '"result":null' || { echo "control did not return null: $ctrl"; exit 1; }
@@ -89,16 +89,76 @@ jobs:
       - uses: actions/checkout@v4
       - name: JSON header
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nlohmann-json3-dev
+
+      # skills_test.cpp guards its module half behind
+      #     #if __has_include(<logos_module_context.h>)
+      # and, when the header is absent, prints a SKIPPED banner and exits 0. So
+      # for as long as the SDK was not on the include path this job compiled 18
+      # of that suite's 90 assertions and went green on them. The 72 it dropped
+      # are skill registration, the plugin's JSON escaping, its exception
+      # isolation, its mutex discipline and its lifecycle — precisely the
+      # defects that survived undetected here before, since a module that
+      # answers skills() with [] loads perfectly and looks like it works.
+      #
+      # Pinned to a revision, not to master: master has already moved past this
+      # commit, and a floating head turns an upstream push into a red build on a
+      # change that is not ours. Same argument as `--locked` on the cargo lines.
+      #
+      # Headers only, and only two of them are reached — logos_module_context.h
+      # and logos_result.h. Both are Qt-free, so this does not resurrect the Qt
+      # module build removed in 829ef18 for failing on the SDK's own ScopedQArg
+      # under the runner's GCC.
+      - name: Check out the Logos C++ SDK
+        env:
+          CPP_SDK_REV: c87f3437e38616436df6e475570f9d25abf9b36f
+        run: |
+          set -e
+          git clone --filter=blob:none \
+            https://github.com/logos-co/logos-cpp-sdk _external/logos-cpp-sdk
+          git -C _external/logos-cpp-sdk checkout --quiet "$CPP_SDK_REV"
+          echo "logos-cpp-sdk at $(git -C _external/logos-cpp-sdk rev-parse --short HEAD)"
+          # A clone that half-worked would leave the compile below on the
+          # guarded path, passing while testing nothing. Fail here instead.
+          test -f _external/logos-cpp-sdk/cpp/logos_module_context.h
+          test -f _external/logos-cpp-sdk/cpp/logos_result.h
+
       # No Logos node here on purpose. A node is needed to prove a message
       # arrives; it is not needed to prove a skill refuses when the node is
       # down, blames the right half of a share, or does not throw on a
       # malformed payload — which is what a stub would get wrong.
-      - name: Exercise the skills
+      #
+      # Every skill's translation unit is on this line, not just the two ports
+      # under test: registration is what links the skills into the module, so
+      # the module half of the suite needs all of them to link at all.
+      #
+      # -Wall -Wextra, but deliberately not -Werror, here and below: the
+      # compiler is whatever ubuntu-latest ships, and -Werror would turn a clang
+      # upgrade into a red build on a change that is not ours — the same failure
+      # `--locked` spends effort to avoid on the Rust side. Warnings stay
+      # visible in the log; the assertions are what gate the merge.
+      - name: Exercise the skills, and the module that hosts them
         run: |
-          clang++ -std=c++17 module/tests/skills_test.cpp \
-            module/src/messaging_skills.cpp module/src/storage_skills.cpp \
+          set -euo pipefail
+          clang++ -std=c++17 -Wall -Wextra \
+            -I_external/logos-cpp-sdk/cpp \
+            module/tests/skills_test.cpp \
+            module/src/agent_module_plugin.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
             -o skills_test
-          ./skills_test
+          ./skills_test | tee skills_test.out
+          # The suite's exit code cannot distinguish "the module half passed"
+          # from "the module half was compiled out", so assert on the banner
+          # too. No step may go green by skipping.
+          if grep -q SKIPPED skills_test.out; then
+            echo "the module half did not compile in: the SDK headers were not reached"
+            exit 1
+          fi
 
       # Same argument for inference. No model here and none needed: what has to
       # hold is that a backend which is down, slow, incoherent or actively
@@ -107,20 +167,14 @@ jobs:
       # amount on demand.
       - name: Exercise the inference port
         run: |
-          clang++ -std=c++17 module/tests/inference_test.cpp \
+          clang++ -std=c++17 -Wall -Wextra module/tests/inference_test.cpp \
             module/src/inference.cpp \
             -o inference_test
           ./inference_test
 
-      # The remaining four suites existed and were never run here, which by this
+      # The remaining suites existed and were never run here, which by this
       # repository's own standard means they were not run at all. Each is its own
       # step so a red X names the suite that broke rather than "the skills job".
-      #
-      # -Wall -Wextra, but deliberately not -Werror: the compiler is whatever
-      # ubuntu-latest ships, and -Werror would turn a clang upgrade into a red
-      # build on a change that is not ours — the same failure the Rust job spends
-      # `--locked` to avoid. Warnings stay visible in the log; the assertions are
-      # what gate the merge.
       - name: Exercise the wallet skills
         run: |
           clang++ -std=c++17 -Wall -Wextra module/tests/wallet_skills_test.cpp \
@@ -155,3 +209,39 @@ jobs:
             module/src/owner_channel.cpp \
             -o owner_channel_test
           ./owner_channel_test
+
+      # ---------------------------------------------------------------------
+      # Everything under module/tests/ is accounted for. Six suites run above.
+      # The four that do not run here are named, with what they need, because a
+      # suite silently absent from CI is indistinguishable from one that was
+      # never written — and this repository's own standard is that a step CI
+      # skips counts as not run. None of these is skipped: they are not claimed.
+      #
+      #   module/tests/plugin_load_test.cpp
+      #     Needs Qt 6 (QtCore, QtRemoteObjects, QtNetwork) AND the built
+      #     plugin binary to load — it drives QPluginLoader over
+      #     build-basecamp/modules/agent_plugin.{so,dylib}. Building that
+      #     plugin needs the logos-module-builder / logos-module toolchain,
+      #     which is the job removed in 829ef18: it fails on the SDK's own
+      #     ScopedQArg, an overload GCC rejects and Clang accepts, and
+      #     switching CI to Clang did not clear it. Upstream's code, not ours.
+      #     Run by hand against the built module; docs/basecamp.md carries the
+      #     exact compile line and the recorded output.
+      #
+      #   module/tests/logos_core_load_test.cpp
+      #     Needs Logos Basecamp *installed*: it dlopen's the shipped
+      #     liblogos_core, links the app's own bundled QtCore, and needs
+      #     LOGOS_HOST_PATH to point at the app's logos_host binary. There is
+      #     no Basecamp on a GitHub runner and no headless install of one, so
+      #     this is the packaged-artifact check and it stays manual.
+      #     docs/basecamp.md carries the invocation and the recorded output.
+      #
+      #   module/tests/delivery_node_drive.c
+      #   module/tests/storage_node_drive.c
+      #     Need a real Logos Delivery / Storage node library built from
+      #     source — a Nim build plus a cargo build of librln — which is tens
+      #     of minutes and not what this job is for. Driven by
+      #     scripts/exercise-nodes.sh, which owns the paths. Their whole point
+      #     is a live node, so a runner without one could only run them as the
+      #     stub the fake ports above already cover better.
+      # ---------------------------------------------------------------------

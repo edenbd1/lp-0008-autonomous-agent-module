@@ -79,13 +79,28 @@ new_agent() {
     | grep -oE 'Private/[1-9A-HJ-NP-Za-km-z]+' | sed 's|Private/||' | tail -n1
 }
 
-# Owner id as 32 bytes of hex, derived from the funded signer's base58 id so the
-# policy hash commits to a real owner rather than a placeholder.
-OWNER_HEX=$(python3 -c "
-import hashlib,sys
-print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$SIGNER")
+# An account id, base58 as the wallet prints it, as the 32 raw bytes the chain
+# holds. This is not cosmetic and it is not the old sha256(base58) label: the
+# program now compares `owner_id` against the id of the account that SIGNED and
+# `agent_id` against the id of the account that PAYS, so both have to be the
+# account itself. A hash of the printed form is unverifiable on chain, which is
+# exactly how an agent used to be able to anchor a policy naming an owner that
+# did not exist.
+id_hex() {
+  python3 -c "
+import sys
+A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+s=sys.argv[1]
+n=0
+for c in s:
+    n = n*58 + A.index(c)
+b = n.to_bytes((n.bit_length()+7)//8,'big')
+b = b'\x00'*(len(s)-len(s.lstrip('1'))) + b
+assert len(b)==32, 'not a 32-byte account id: %r' % s
+print(b.hex())" "$1"
+}
+
 echo "owner  $SIGNER"
-echo "       committed into every policy hash as $OWNER_HEX"
 echo
 
 # The program has to be on chain before anything can call it, and spel does not
@@ -233,10 +248,9 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   # and 8051). Fresh signers are passed below because they are unambiguous;
   # `SIGNER` may be reused if it is program-owned.
   local signer="${6:-$SIGNER}"
-  local OWNER_HEX; OWNER_HEX=$(python3 -c "
-import hashlib,sys
-print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$signer")
+  local OWNER_HEX; OWNER_HEX=$(id_hex "$signer")
   echo "  owner  $signer"
+  echo "         committed into this policy hash as $OWNER_HEX"
   echo "[$cat] new shielded account"
   local seed; seed=$(new_agent "$cat")
   if [ -z "$seed" ]; then echo "  FAILED to create an account" >&2; return 1; fi
@@ -251,9 +265,10 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$signer")
   if [ -z "$pay" ]; then echo "  FAILED to open a receiving account" >&2; return 1; fi
   echo "  pays into Public/$pay  (advertised in its Agent Card)"
 
-  local agent_hex; agent_hex=$(python3 -c "
-import hashlib,sys
-print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
+  # Same again for the agent, and for the same reason: `spend` compares this
+  # against the id of the account presenting itself as the payer, so a policy
+  # anchored for one agent cannot be borrowed by another.
+  local agent_hex; agent_hex=$(id_hex "$agent")
 
   # The policy hash is computed by the same code the on-chain program runs, so
   # a mismatch here would be caught by create_policy rather than silently
@@ -336,9 +351,17 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
 
 # One per default skill category, with envelopes sized to what each does: a
 # storage agent pays small and often, a blockchain agent moves more per call.
-deploy_agent storage    50   500  1000  10  74X2qWYq9ibq9BZgNrYc9ar2VrjvZEGjknrx21ypmXMi
-deploy_agent messaging  25   250  1000  10  AX5t22nfuWV5hWroReYjP885SmdJRuUuM7h8vD1msEHH
-deploy_agent blockchain 200 1000  1000  30  CD7UznmriALT8khbr2vCe46vN1YQyeMrAqZHy7Sfq7ct
+#
+# Each anchor gets its own signer, and each of those was created by
+# `wallet account new public` and has never signed anything else. That is not
+# tidiness: `spel` builds every transaction against nonce 0 while the sequencer
+# checks the nonce for exact equality, so a signer's *second* program
+# transaction is built with a stale nonce, submitted, given a hash, and then
+# silently dropped. Nothing reports it. Make three more the same way if you are
+# re-anchoring — the ids below are only useful to a wallet that holds their keys.
+deploy_agent storage    50   500  1000  10  5SbpPMeLbjsA1FZ4SKasmFi9V2xghZfq7TAZQjb1Qzmc
+deploy_agent messaging  25   250  1000  10  7qq3wppDveZo8eHM26k4g7SLD3juZaJPAEHK7bigbwk6
+deploy_agent blockchain 200 1000  1000  30  FF8HZ8d38chXGDoZ1VV1pKBkoFx4QqyLwDsRjzEbngy9
 
 echo "manifest: $MANIFEST"
 column -t -s$'\t' "$MANIFEST" 2>/dev/null || cat "$MANIFEST"

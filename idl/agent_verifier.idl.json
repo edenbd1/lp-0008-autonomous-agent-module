@@ -126,6 +126,36 @@
           }
         },
         {
+          "name": "owner_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "agent_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "per_tx",
+          "type": "u128"
+        },
+        {
+          "name": "per_period",
+          "type": "u128"
+        },
+        {
+          "name": "period_blocks",
+          "type": "u64"
+        },
+        {
           "name": "recipient",
           "type": {
             "array": [
@@ -149,7 +179,7 @@
       "accounts": [
         {
           "name": "policy",
-          "writable": false,
+          "writable": true,
           "signer": false,
           "init": false,
           "pda": {
@@ -219,8 +249,8 @@
           "type": "u128"
         },
         {
-          "name": "spent_this_period",
-          "type": "u128"
+          "name": "window_start",
+          "type": "u64"
         }
       ]
     },
@@ -243,7 +273,7 @@
         },
         {
           "name": "approval",
-          "writable": false,
+          "writable": true,
           "signer": false,
           "init": false,
           "pda": {
@@ -324,10 +354,6 @@
         {
           "name": "nonce",
           "type": "u64"
-        },
-        {
-          "name": "spent_this_period",
-          "type": "u128"
         },
         {
           "name": "marker_seed",

@@ -1,0 +1,33 @@
+# Runs the committed guest ELF against hostile instructions, in the risc0
+# executor, on the host.
+#
+# Its own workspace, like the guest: `risc0-zkvm` with `prove` pulls in the
+# rv32im circuit and its dependencies, and nothing else in this repository needs
+# that. Keeping it out of the root workspace keeps `cargo build --workspace`
+# down to the policy crate.
+[workspace]
+
+[package]
+name        = "agent-verifier-adversarial"
+version     = "0.1.0"
+edition     = "2021"
+license     = "MIT OR Apache-2.0"
+publish     = false
+
+[[bin]]
+name = "adversarial"
+path = "src/main.rs"
+
+[dependencies]
+# `prove` is what makes `default_executor()` run in-process. Without it risc0
+# looks for an external `r0vm` binary and the check turns into a dependency on
+# whatever is installed on the machine.
+risc0-zkvm = { version = "=3.0.5", features = ["prove"] }
+nssa_core  = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "47eba256479f6f785acbd138834340703cd03401", features = ["host"], package = "lee_core" }
+spel-framework-core = { path = "../../vendor/spel/spel-framework-core" }
+agent-policy-core = { path = "../agent-policy-core", features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = 2

@@ -201,8 +201,24 @@ done
 echo "  agent $AGENT  (holds 1000)"
 
 PER_TX=100; PER_PERIOD=500; PERIOD=1000
-OWNER_HEX=$(python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$TEST_SIGNER")
-AGENT_HEX=$(python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$AGENT")
+# Account ids as the 32 bytes the chain holds. `create_policy` compares
+# `owner_id` against the account that signs and `spend` compares `agent_id`
+# against the account that pays, so neither can be a hash of the printed form.
+id_hex() {
+  python3 -c "
+import sys
+A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+s=sys.argv[1]
+n=0
+for c in s:
+    n = n*58 + A.index(c)
+b = n.to_bytes((n.bit_length()+7)//8,'big')
+b = b'\x00'*(len(s)-len(s.lstrip('1'))) + b
+assert len(b)==32, 'not a 32-byte account id: %r' % s
+print(b.hex())" "$1"
+}
+OWNER_HEX=$(id_hex "$TEST_SIGNER")
+AGENT_HEX=$(id_hex "$AGENT")
 POLICY=$(cd "$ROOT" && cargo run --quiet --release -p agent-policy-core --example policy-hash -- \
   "$OWNER_HEX" "$AGENT_HEX" "$PER_TX" "$PER_PERIOD" "$PERIOD")
 [ -n "$POLICY" ] || die "could not compute the policy hash"
@@ -248,13 +264,26 @@ BEFORE=$(balance_of "$RECIP")
 # call.
 AUTH_TRANSFER="$ROOT/artifacts/programs/authenticated_transfer.bin"
 [ -f "$AUTH_TRANSFER" ] || die "no transfer program at $AUTH_TRANSFER"
+# The period the spend is accounted against. The guest refuses any window that
+# is not a multiple of `period_blocks` and pins the transaction to it, so this
+# is read off the chain rather than passed as a constant. On a chain that has
+# just been started from genesis every block so far is inside period 0.
+window_start() {
+  local h
+  h=$(curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"getLastBlockId","params":[]}' \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])')
+  ( cd "$ROOT" && cargo run --quiet --release -p agent-policy-core \
+      --example window-start -- "$h" "$PERIOD" ) | cut -d' ' -f1
+}
+
 spend_at() { # amount
   LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   spel --idl "$IDL" --program "$PROGRAM" --bin-auth-transfer "$AUTH_TRANSFER" \
     -- spend --agent "Private/$AGENT" --recipient "Public/$RECIP" \
     --policy-hash "$POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
     --per-tx "$PER_TX" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" \
-    --amount "$1" --spent-this-period 0 2>&1
+    --amount "$1" --window-start "$(window_start)" 2>&1
 }
 
 OUT=$(spend_at 50)
