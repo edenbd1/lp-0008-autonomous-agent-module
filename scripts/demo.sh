@@ -71,7 +71,31 @@ else
   bad "the control hash did not return null — the check above is not meaningful"
 fi
 
-rule "4. what the chain enforces, in one sentence"
+rule "4. the transfer program it chains into is the chain's own"
+# `spend` moves no balance itself — LEZ rule 5 forbids a program from debiting
+# an account it does not own — so it chains a call into the transfer program
+# that owns the agent's account, and the privacy circuit needs that program's
+# ELF to prove the inner call. A stale or substituted copy would be a real
+# problem, so the copy is pinned by content and its ProgramId is read back from
+# the chain rather than asserted here.
+AT=artifacts/programs/authenticated_transfer.bin
+AT_SHA=d0cfb36899c9100f089bbabae8b3ddf449a0bec0791c2955ba7fea1a976e5351
+AT_ID='583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078'
+GOT_SHA=$(python3 -c "
+import hashlib;print(hashlib.sha256(open('$AT','rb').read()).hexdigest())" 2>/dev/null)
+if [ "$GOT_SHA" = "$AT_SHA" ]; then ok "the vendored transfer program is byte-for-byte the pinned one"
+else bad "$AT hashed to ${GOT_SHA:-nothing}, expected $AT_SHA"; fi
+CHAIN_ID=$(curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getProgramIds","params":[]}' \
+  | python3 -c "
+import json,sys
+try: print(','.join(str(x) for x in json.load(sys.stdin)['result']['authenticated_transfer']))
+except Exception: print('')" 2>/dev/null)
+echo "   chain reports authenticated_transfer = ${CHAIN_ID:-<no answer>}"
+if [ "$CHAIN_ID" = "$AT_ID" ]; then ok "and its ImageID is the ProgramId the chain runs"
+else bad "the chain reports a different transfer program: ${CHAIN_ID:-<no answer>}"; fi
+
+rule "5. what the chain enforces, in one sentence"
 cat <<'TXT'
    The policy account's address is the hash of (owner, agent, per-tx limit,
    per-period limit, period). Raising a limit does not edit an account — it
