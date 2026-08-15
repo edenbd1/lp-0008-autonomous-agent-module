@@ -347,10 +347,19 @@ int main()
             m.start();
             check(parsed(openTask(m, "task-1")).value("ok", false), "a task is opened while up");
 
-            up = false;
-            const json failed = parsed(m.invoke(
+            // The positive half FIRST. `!ok` is satisfied by a subscribe that
+            // fails ALWAYS just as well as by one that fails because the node is
+            // down, and nothing in this file or in skills_test.cpp ever asserted
+            // that agent.subscribe succeeds — so making SubscribeSkill::invoke
+            // return an unconditional failure left both suites entirely green.
+            const json subscribed = parsed(m.invoke(
                 "agent.subscribe", json{{"agent_address", kPeer}, {"task_id", "task-1"}}.dump()));
-            check(failed.value("ok", true) == false, "the subscribe fails while the node is down");
+            check(subscribed.value("ok", false),
+                  "agent.subscribe succeeds while the node is up");
+            up = false;
+            const json failed2 = parsed(m.invoke(
+                "agent.subscribe", json{{"agent_address", kPeer}, {"task_id", "task-1"}}.dump()));
+            check(failed2.value("ok", true) == false, "the subscribe fails while the node is down");
             check(counts(m).active == 1, "and the task is still pending, not dropped");
 
             // A second task cannot be opened while the transport is down — and
@@ -462,6 +471,14 @@ int main()
         check(lastAttempt == notifications,
               "and each notification carries its attempt number, so a listener can tell a "
               "retry from a new request");
+        // Absent on BOTH sides gives "" == "" — the assertion that two ids agree
+        // was satisfied by neither existing. Removing `id` from the published
+        // request and `request_id` from the reply left this green. Each side has
+        // to carry one before comparing them means anything.
+        check(!parsed(lastRequest).value("id", std::string{}).empty(),
+              "the published request carries a correlation id");
+        check(!held.value("request_id", std::string{}).empty(),
+              "and the reply names one back");
         check(parsed(lastRequest).value("id", std::string{}) ==
                   held.value("request_id", std::string{}),
               "under the correlation id the reply names");

@@ -591,7 +591,18 @@ int main()
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
         check(strOf(r, "outcome") == "denied", "a refusal by the owner is reported as a denial");
         check(spends == 0 && notSubmitted(r), "and nothing is submitted");
-        check(parsed(r).value("waited_ms", -1) < 1000,
+        // The field has to BE there, and only then be small. `value("waited_ms",
+        // -1) < 1000` was satisfied by a reply that carried no `waited_ms` at
+        // all: deleting the one line in wallet_skills.cpp that writes it left
+        // this printing `ok` while its mirror at "it waited out the whole
+        // timeout before giving up" — the same field, read with a default that
+        // makes absence fail — went red. A denial that arrives early and a
+        // module that stopped reporting how long it waited are not the same
+        // event, and this is the assertion that tells them apart.
+        check(parsed(r).contains("waited_ms"),
+              "the reply says how long it waited");
+        check(parsed(r).value("waited_ms", -1) >= 0
+                  && parsed(r).value("waited_ms", -1) < 1000,
               "and it does not sit out the whole timeout once the answer is in");
     }
     {
@@ -687,7 +698,14 @@ int main()
 
         WalletSendSkill s(port, owner, envelopeOf("100", "500"));
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
-        check(true, "a stopped clock terminates the wait rather than hanging the module");
+        // `check(true, …)` stood here, which is an assertion that cannot fail,
+        // and it stayed green when the skill was made to answer `{}` — nothing
+        // at all. The claim is that the call TERMINATED, and the evidence for
+        // termination is that a reply came back and that it parses: a module
+        // that hung would never reach this line, and one that returned an empty
+        // string reached it having answered nothing. Both are now told apart.
+        check(!r.empty() && !parsed(r).is_discarded(),
+              "a stopped clock terminates the wait rather than hanging the module");
         check(parsed(r).value("clock_stalled", false),
               "and it is reported as a stopped clock, not as a deadline that passed");
         check(spends == 0 && notSubmitted(r) && strOf(r, "outcome") == "owner_unreachable",

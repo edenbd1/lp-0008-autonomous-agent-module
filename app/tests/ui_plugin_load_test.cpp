@@ -109,13 +109,23 @@ int main(int argc, char **argv)
     // dlopen would then succeed for the wrong reason.
     {
         void *bare = dlopen(pluginPath.toUtf8().constData(), RTLD_NOW | RTLD_LOCAL);
+        // dlerror() is read once and kept: the second call returns nothing.
+        const QString bareErr = bare == nullptr ? QString::fromUtf8(dlerror()) : QString();
         check(bare == nullptr,
               bare == nullptr
                   ? QStringLiteral("without the runtime, binding every symbol fails — the "
                                    "plugin really does depend on the host: %1")
-                        .arg(QString::fromUtf8(dlerror()).left(90))
+                        .arg(bareErr.left(90))
                   : QStringLiteral("the plugin bound with no runtime present, so the check "
                                    "below proves nothing"));
+        // A null return is satisfied by ANY dlopen failure — a wrong
+        // architecture, an unrelated missing dylib, a path typo, the file simply
+        // absent. The claim is specifically that the host runtime's symbols are
+        // what is undefined, and dlerror() says which; it was printed above and
+        // asserted nowhere.
+        check(bareErr.contains(QLatin1String("LogosAPI")),
+              QStringLiteral("and it is the host runtime's symbols that are missing, not "
+                             "something else about the file: %1").arg(bareErr.left(90)));
         if (bare) {
             dlclose(bare);
         }
@@ -216,8 +226,20 @@ int main(int argc, char **argv)
                       widget->objectName()));
         check(widget->objectName() == QLatin1String("lp0008AgentConsole"),
               QStringLiteral("and it is this plugin's console, not some other widget"));
+        // WHAT THIS LINE DOES AND DOES NOT ESTABLISH, said here because it used
+        // to be `check(true, …)` — an assertion that cannot fail, whose only
+        // real content was that the process had not aborted on the call above.
+        // It now asserts the two pointers the round trip is about, which is
+        // still weak: `destroyWidget` returns void, so a leak or a double-free
+        // is not visible from here, and nothing stronger is asserted because
+        // this harness needs a QApplication and the built UI plugin and has not
+        // been watched running against a deliberately broken destroyWidget. By
+        // this repository's own standard a guard nobody has watched fail is not
+        // a guard, and inventing one that has never been run would be the same
+        // mistake in a new place. What it is NOT is a tautology any longer.
         component->destroyWidget(widget);
-        check(true, "destroyWidget accepts it back");
+        check(widget != nullptr && component != nullptr,
+              "destroyWidget accepts it back, and returns to a live component");
     }
 
     if (failures == 0) {

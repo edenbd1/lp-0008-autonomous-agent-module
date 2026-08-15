@@ -233,14 +233,40 @@ echo "  policy anchored"
 # limits, any signer — resolves to the account just created and `init` refuses
 # it. That is the anchoring bypass closed, checked against a real sequencer
 # rather than argued: an attacker holding the agent's key gets this too.
-if spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
+# `grep -q 'Transaction confirmed'` is an ABSENCE, and this is the repository's
+# central security claim — that a bigger ceiling has nowhere to go. Measured: a
+# spel invocation that cannot possibly anchor anything (a --idl path that does
+# not exist) prints `Error reading IDL ...` and no "Transaction confirmed", so
+# the guard announced the refusal on a call that never reached the chain. A
+# renamed flag, a moved binary, an unreachable sequencer, a typo in the amount:
+# every one of them passed. Two positives are required instead.
+SECOND=$(spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
      --agent-id "$AGENT_HEX" \
      --per-tx 340282366920938463463374607431768211455 \
      --per-period 340282366920938463463374607431768211455 \
-     --period-blocks "$PERIOD" 2>&1 | grep -q 'Transaction confirmed'; then
+     --period-blocks "$PERIOD" 2>&1)
+if echo "$SECOND" | grep -q 'Transaction confirmed'; then
+  echo "$SECOND" | tail -8
   die "a SECOND, unlimited policy was anchored for the same agent"
 fi
-echo "  a second, unlimited policy for the same agent was refused"
+# It has to have been REFUSED, not merely not-confirmed: spel must have got as
+# far as the program and come back with an error from it.
+echo "$SECOND" | grep -qiE 'already initialized|AccountAlreadyInitialized|Program error' \
+  || { echo "$SECOND" | tail -8
+       die "the second anchor produced neither a confirmation nor a program refusal — it never reached the chain, so nothing was demonstrated"; }
+# And the account still says what the OWNER anchored, which is the property the
+# refusal is about. An unlimited policy that was refused and an unlimited policy
+# that was written both leave "no Transaction confirmed" in some failure mode.
+STILL=$(curl -s -m 10 -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$POLICY\"]}" \
+  | python3 -c "
+import json,sys
+r = json.load(sys.stdin).get('result') or {}
+d = bytes(r.get('data') or b'')
+print(int.from_bytes(d[33:49],'little') if len(d) == 97 and d[0] == 1 else 'unreadable')")
+[ "$STILL" = "$PER_TX" ] \
+  || die "after the second anchor the policy account reads per_tx=$STILL, not the owner's $PER_TX"
+echo "  a second, unlimited policy for the same agent was refused, and the account still reads per_tx=$STILL"
 
 say "[5/5] the agent pays inside its envelope, and is refused outside it"
 # A second party, with its own wallet home, so the payer holds no key for the

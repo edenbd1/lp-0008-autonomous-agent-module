@@ -35,6 +35,32 @@ jobs:
           if grep -q SKIPPED check-docs.out; then
             echo "check-docs.py reported SKIPPED"; exit 1
           fi
+          # And the COUNTS, because the banner above is printed unconditionally.
+          # This was measured, not imagined: emptying every document leaves
+          #   checked 0 paths, 0 link targets, 0 line citations, 0 symbol
+          #   citations, 0 lines of two hash-free documents, across 13 documents
+          #   every path, link target, line citation and symbol citation resolves
+          # and both assertions above pass. The step's own comment named that
+          # trap and the assertion did not close it. Floors rather than
+          # equalities — citations come and go with ordinary edits, and only
+          # "essentially none" is a defect — in the shape the `package` job
+          # already uses for its literal count.
+          python3 - <<'PY_COUNTS'
+          import re, sys
+          line = [l for l in open("check-docs.out", encoding="utf-8")
+                  if l.startswith("checked ")]
+          if not line:
+              sys.exit("check-docs.py printed no summary line at all")
+          got = dict(zip(("path", "link", "line", "symbol", "promise", "docs"),
+                         (int(n) for n in re.findall(r"\d+", line[0]))))
+          floors = {"path": 100, "link": 50, "line": 1, "symbol": 20,
+                    "promise": 500, "docs": 8}
+          for k, low in floors.items():
+              if got.get(k, 0) < low:
+                  sys.exit("check-docs.py checked %d %s (floor %d): it walked "
+                           "almost nothing" % (got.get(k, 0), k, low))
+          print("counts above their floors:", got)
+          PY_COUNTS
           rm -f check-docs.out
 
       - uses: actions/cache@v4
@@ -53,8 +79,21 @@ jobs:
       - name: Build
         run: cargo build --workspace --release --locked
 
+      # `cargo test` exits 0 when it runs NO tests, so the exit code alone
+      # cannot tell "the suite passed" from "the suite is gone". Measured:
+      # emptying `mod tests` in agent-policy-core gives `test result: ok. 0
+      # passed` and exit 0, and scripts/demo.sh printed "OK the policy tests
+      # pass" on it. The count is the assertion; the exit code is the other half.
       - name: Test
-        run: cargo test --workspace --release --locked
+        run: |
+          set -euo pipefail
+          cargo test --workspace --release --locked 2>&1 | tee cargo-test.out
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' \
+                   cargo-test.out | awk '{n += $1} END {print n+0}')
+          echo "tests that actually ran and passed: $passed"
+          [ "$passed" -ge 20 ] \
+            || { echo "only $passed test(s) ran: a suite that is not there exits 0 too"; exit 1; }
+          rm -f cargo-test.out
 
   binaries:
     name: The committed program matches its recorded ImageID
@@ -984,7 +1023,7 @@ jobs:
           [ -n "$got" ] || { echo "04 exited 0 without reporting how many it verified"; exit 1; }
           [ "$got" -eq "$rows" ] && [ "$got" -ge 1 ] \
             || { echo "04 verified ${got:-0} of $rows notarisations"; exit 1; }
-          grep -q "control: a document nobody notarised" uc04.out \
+          grep -q "control: the same search finds a recorded key" uc04.out \
             || { echo "the un-notarised control did not run"; exit 1; }
           rm -f uc04.out
 
@@ -1037,6 +1076,13 @@ jobs:
           set -e
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "04 accepted a content address the chain contradicts"; exit 1; }
+          # Red FOR THE RIGHT REASON, the way the 02 control above is. `rc != 0`
+          # alone is satisfied by 04 falling over: pointing SEQUENCER_URL at a
+          # dead port makes it exit 1 having checked nothing, and this control
+          # passed on that. What has to appear is the verdict about the KEY.
+          grep -q "this address derives" /tmp/wn.out \
+            || { echo "04 went red without contradicting the derived key:"; \
+                 sed -e 's/\x1b\[[0-9;]*m//g' /tmp/wn.out | tail -20; exit 1; }
 
       - name: Negative control — an alert whose block the chain contradicts
         run: |
@@ -1050,3 +1096,8 @@ jobs:
           set -e
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "05 accepted a block the chain contradicts"; exit 1; }
+          # Same argument as the 04 control just above: a script that died for an
+          # unrelated reason exits non-zero too. Name the contradiction.
+          grep -q "the chain says block" /tmp/wa.out \
+            || { echo "05 went red without contradicting the recorded block:"; \
+                 sed -e 's/\x1b\[[0-9;]*m//g' /tmp/wa.out | tail -20; exit 1; }

@@ -54,7 +54,18 @@ echo "being replayed onto another."
 TESTLOG=$(mktemp)
 if cargo test -p agent-policy-core --release --locked --quiet > "$TESTLOG" 2>&1; then
   grep -E "result: ok\. [1-9]" "$TESTLOG" | sed 's/^/   /'
-  ok "the policy tests pass"
+  # The exit code is not the whole assertion, and the grep above was only ever
+  # display. `cargo test` exits 0 when it runs NO tests: emptying `mod tests`
+  # in agent-policy-core gives `test result: ok. 0 passed` and this printed
+  # "OK the policy tests pass" on it — the same shape as a `--list` filter that
+  # matches nothing. So count what ran.
+  PASSED=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' "$TESTLOG" \
+           | awk '{n += $1} END {print n+0}')
+  if [ "$PASSED" -ge 20 ]; then
+    ok "the policy tests pass ($PASSED of them ran)"
+  else
+    bad "only $PASSED policy test(s) ran — a suite that is not there exits 0 too"
+  fi
 else
   tail -20 "$TESTLOG" | sed 's/^/   /'
   bad "the policy tests did not pass"
@@ -161,8 +172,22 @@ echo
 echo "   the identical call, same agent, same limits, to the program this"
 echo "   repository deploys today:"
 echo "     $ATTACK_REFUSED"
-if q "$ATTACK_REFUSED" | grep -q '"result":null'; then
-  ok "never included — the sequencer refused it (6020)"
+# ABSENCE, and it is labelled as one. Measured against the live chain just now,
+# the answer for $ATTACK_REFUSED is byte-identical to the answer for the
+# impossible hash this script installs as its own control eighty lines up, and
+# to the answer for a hash nobody ever submitted:
+#     {"jsonrpc":"2.0","id":1,"result":null}
+# So "(6020)" was asserted by nothing — this chain cannot tell a refused
+# transaction from one that was never sent, which is what the control is FOR.
+# Two things are required of it now. The same query must return a block for the
+# accepted attack, or "null" would be all this RPC ever says; and the claim is
+# stated as what it is. The discriminating evidence is the account read-back
+# below, which is a positive fact about state and not an absence.
+if ! q "$ATTACK_ACCEPTED" | grep -q '"result":\['; then
+  bad "the same query returns nothing for the accepted attack either — null means nothing here"
+elif q "$ATTACK_REFUSED" | grep -q '"result":null'; then
+  ok "not in any block — consistent with the refusal, and with never having been sent"
+  echo "     (this chain answers null for both; the account read below is what tells them apart)"
 else
   bad "the refused attack is on chain, which means it was not refused"
 fi

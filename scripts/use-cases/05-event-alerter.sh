@@ -105,6 +105,51 @@ if len(d) != 33 or d[0] != 2:
 print({'version': d[0], 'owner': d[1:33].hex()}[sys.argv[2]])" "$1" "$2"
 }
 
+# `control_a_no_record <ghost-account> <an-account-that-DOES-hold-a-claim>`
+#
+# The comment above claim_record says "an unreadable claim must never read as an
+# absent one", and the control that was supposed to hold it to that was
+#
+#     if claim_record "$GHOST_PDA" owner >/dev/null 2>&1; then bad; else ok; fi
+#
+# which is the shape it was warning about. `claim_record` exits non-zero when the
+# account holds no claim AND when the RPC is unreachable, when curl times out,
+# when the JSON does not parse, when python is missing. Run with SEQUENCER_URL
+# pointing at a dead port, that control printed
+#   "OK control A: and it yields no claim record — 'unreadable' cannot read as
+#    'absent'"
+# on a run where every other check had already failed for want of a chain.
+#
+# So two things are required instead of one refusal: the ghost must fail with
+# the SPECIFIC message that means the account is not there, and the very same
+# helper must SUCCEED against an account that does hold a claim. An unreachable
+# chain fails the second half, which is what the sentence claims.
+control_a_no_record() {
+  local ghost="$1" known="$2" err
+  err=$(claim_record "$ghost" owner 2>&1 >/dev/null)
+  if [ -z "$err" ]; then
+    bad "control A: an unclaimed account produced a claim record"
+    return
+  fi
+  # The two ways this chain says "nobody ever wrote here": no result at all, or
+  # the default account, which getAccount answers with for an uninitialised PDA
+  # and which decodes as zero bytes. Anything else — a curl that timed out, a
+  # body that did not parse, a missing python — is a READ failure and must not
+  # be reported as an absence, which is the whole of what this control claims.
+  case "$err" in
+    *"no such account"*|*"holds 0 bytes"*) ;;
+    *) bad "control A: the ghost account failed to decode, but not by being absent: $err"
+       return ;;
+  esac
+  if [ -z "$known" ]; then
+    bad "control A: no account known to hold a claim, so 'no record' proves nothing here"
+  elif claim_record "$known" owner >/dev/null 2>&1; then
+    ok "control A: and it yields no claim record, while the same read succeeds on $known"
+  else
+    bad "control A: the reader cannot decode $known either — it is not distinguishing anything"
+  fi
+}
+
 # `find_claim_tx <account> <from-block> <to-block>` — the transaction that wrote
 # an account, discovered by reading the blocks rather than by being told.
 #
@@ -236,7 +281,15 @@ claim() {
 verify_recorded() {
   rule "recorded alerts, re-checked against the chain"
   [ -s "$MANIFEST" ] || { bad "no alerts recorded at $MANIFEST"; return; }
-  local n=0
+  # `seen` is rows this loop entered; `n` is rows that passed EVERY check in it.
+  # They were one variable, incremented on entry, and the summary line below —
+  # the one CI parses and compares against the manifest's row count — called it
+  # "each re-verified from the chain". It was not: a row whose claim the chain
+  # would not return still incremented it and then `continue`d, so a run against
+  # an unreachable chain printed "OK 1 alert(s), each re-verified from the
+  # chain" having re-verified none. Demonstrated by pointing SEQUENCER_URL at a
+  # dead port.
+  local n=0 seen=0 row_ok
   local agents; agents=$(column_of "$MANIFEST" agent)
   local a
   for a in $agents; do
@@ -246,7 +299,8 @@ verify_recorded() {
     rec_owner=$(field "$MANIFEST" "$a" owner)
     rec_tx=$(field "$MANIFEST" "$a" claim_tx)
     rec_block=$(field "$MANIFEST" "$a" block)
-    n=$((n + 1))
+    seen=$((seen + 1))
+    row_ok=1
     echo
     echo "  agent $a"
     echo "    $rec_tx"
@@ -273,7 +327,7 @@ verify_recorded() {
     if [ "$blk" = "$rec_block" ]; then
       ok "  in the block the manifest records"
     else
-      bad "  the chain says block $blk, the manifest records $rec_block"
+      bad "  the chain says block $blk, the manifest records $rec_block"; row_ok=0
     fi
     # The owner, decoded out of the account the claim wrote.
     local owner
@@ -281,18 +335,21 @@ verify_recorded() {
     if [ "$owner" = "$rec_owner" ]; then
       ok "  it still names owner $owner"
     else
-      bad "  the chain says the owner is $owner, the manifest records $rec_owner"
+      bad "  the chain says the owner is $owner, the manifest records $rec_owner"; row_ok=0
     fi
     local own_words; own_words=$(owner_of "$rec_claim")
     if [ -n "$PID" ] && [ "$own_words" = "$PID" ]; then
       ok "  and the account is owned by this repository's policy program"
     else
-      bad "  the claim account is owned by $own_words, not $PID"
+      bad "  the claim account is owned by $own_words, not $PID"; row_ok=0
     fi
+    [ "$row_ok" -eq 1 ] && n=$((n + 1))
   done
   echo
-  if [ "$n" -ge 1 ]; then
+  if [ "$n" -ge 1 ] && [ "$n" -eq "$seen" ]; then
     ok "$n alert(s), each re-verified from the chain"
+  elif [ "$seen" -ge 1 ]; then
+    bad "$n of $seen alert(s) re-verified — the rest failed a check above"
   else
     bad "the manifest records no alert at all"
   fi
@@ -320,11 +377,7 @@ if [ "$VERIFY_ONLY" = "1" ]; then
   else
     bad "control A: the unclaimed control account is owned by $(owner_of "$GHOST_PDA")"
   fi
-  if claim_record "$GHOST_PDA" owner >/dev/null 2>&1; then
-    bad "control A: an unclaimed account produced a claim record"
-  else
-    ok "control A: and it yields no claim record — 'unreadable' cannot read as 'absent'"
-  fi
+  control_a_no_record "$GHOST_PDA" "$(column_of "$MANIFEST" claim_account 2>/dev/null | grep -m1 .)"
   if rpc getTransaction "[\"$IMPOSSIBLE\"]" | grep -q '"result":null'; then
     ok "control B: a transaction hash that cannot exist returns null"
   else
@@ -505,11 +558,7 @@ else
 fi
 # And the decode, not just the ownership: a claim record must refuse to come out
 # of an account that holds none.
-if claim_record "$GHOST_PDA" owner >/dev/null 2>&1; then
-  bad "control A: an unclaimed account produced a claim record"
-else
-  ok "control A: and it yields no claim record — 'unreadable' cannot read as 'absent'"
-fi
+control_a_no_record "$GHOST_PDA" "${PDA:-}"
 
 # CONTROL B — the payload check must be capable of failing. The same comparison
 # that passed in section 5 is run against an alert with one field changed, and

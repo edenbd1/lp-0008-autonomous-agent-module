@@ -132,8 +132,19 @@ int driveCard(int argc, char **argv)
 }
 
 /// One transition, applied to the real store, reported as the store answered.
+///
+/// `expectRefusalSaying` is not decoration on the refusing calls. `ok ==
+/// expectAccepted` asks only that the store was UNSUCCESSFUL, and every refusal
+/// this store can produce satisfies that — a malformed event, an unknown task
+/// id, a rejected message field. The one call in the lifecycle that expects a
+/// refusal is the one the file's own header calls the part that matters most:
+/// a completed task cannot be reopened. Adding an unrelated rule to
+/// TaskStore::advance (reject an update whose note is empty) made that step
+/// refuse for the new reason, print the new reason in its own output, and still
+/// exit 0. So a refusal must now also SAY what it is a refusal about.
 bool step(TaskStore &tasks, const std::string &taskId, const char *state, const char *note,
-          const char *why, bool expectAccepted = true)
+          const char *why, bool expectAccepted = true,
+          const char *expectRefusalSaying = nullptr)
 {
     char ev[512];
     std::snprintf(ev, sizeof ev, R"({"taskId":"%s","status":{"state":"%s","message":"%s"}})",
@@ -144,7 +155,14 @@ bool step(TaskStore &tasks, const std::string &taskId, const char *state, const 
     tasks.find(taskId, cur);
     std::printf("  %-14s -> %-14s %s   %s\n", ok ? "accepted" : "REFUSED", taskStateName(cur.state).c_str(),
                 why, ok ? "" : ("(" + err + ")").c_str());
-    return ok == expectAccepted;
+    if (ok != expectAccepted) return false;
+    if (!ok && expectRefusalSaying != nullptr
+        && err.find(expectRefusalSaying) == std::string::npos) {
+        std::printf("                 but refused for the wrong reason: wanted \"%s\"\n",
+                    expectRefusalSaying);
+        return false;
+    }
+    return true;
 }
 
 int driveLifecycle(int argc, char **argv)
@@ -215,7 +233,9 @@ int driveLifecycle(int argc, char **argv)
     bad += !step(tasks, taskId, "completed", "bzz-1a2b3c", "the peer finished");
 
     // And the part that matters most: terminal is terminal.
-    bad += !step(tasks, taskId, "working", "", "a completed task cannot be reopened", false);
+    bad += !step(tasks, taskId, "working", "done already",
+                 "a completed task cannot be reopened", false,
+                 "completed and cannot move to");
 
     TaskStore::Task fin;
     tasks.find(taskId, fin);

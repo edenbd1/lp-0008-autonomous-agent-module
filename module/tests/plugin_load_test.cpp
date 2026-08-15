@@ -91,6 +91,27 @@ const char *const kSkills[] = {
 };
 constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 
+/// The registry's refusal, and the refusal `invoke()` gives BEFORE it ever
+/// consults the registry.
+///
+/// `module/tests/logos_core_load_test.cpp` carries both of these and explains at
+/// length why: `{"ok":false,"error":"agent is not started"}` starts with `{`,
+/// contains `"ok":false`, and does NOT contain `no skill named`, so a module
+/// that never started satisfies every dispatch check phrased as the absence of
+/// the registry's message. That harness was hardened; this one was not, and the
+/// hole was still open. Measured, against the shipped darwin-arm64 plugin loaded
+/// through QPluginLoader, with the `start()` call removed:
+///
+///     ok    invoke() dispatches to every one of them: undispatched none
+///     <-    invoke(wallet.balance): {"error":"agent is not started","ok":false}
+///     ok    an unwired skill refuses as itself, not as a name nobody registered
+///
+/// Both strings are failures below, and they are kept apart because they mean
+/// different things to whoever reads the output: one says the module is not up,
+/// the other says the name is not in its registry.
+const char *const kUnregistered = "no skill named";
+const char *const kNotStarted = "agent is not started";
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -268,16 +289,22 @@ int main(int argc, char **argv)
     // Dispatch, across the plugin boundary. A skill nobody wired must refuse as
     // itself — the registry's "no skill named" would mean it is not there at
     // all, which is the state this step exists to tell apart.
-    QStringList undispatched;
+    QStringList undispatched, unstarted;
     for (const char *skill : kSkills) {
         const QVariant answer = provider->callMethod(
             QStringLiteral("invoke"), {QString::fromUtf8(skill), QStringLiteral("{}")});
+        if (contains(answer, kNotStarted)) unstarted << QString::fromUtf8(skill);
         if (!answer.toString().startsWith(QLatin1Char('{'))
-            || contains(answer, "no skill named")) {
+            || contains(answer, kUnregistered)) {
             undispatched << QString::fromUtf8(skill);
         }
     }
-    check(undispatched.isEmpty(),
+    check(unstarted.isEmpty(),
+          QStringLiteral("the module answered as a running agent, not \"%1\": %2")
+              .arg(QString::fromUtf8(kNotStarted),
+                   unstarted.isEmpty() ? QStringLiteral("none said it")
+                                       : unstarted.join(", ")));
+    check(undispatched.isEmpty() && kSkillCount > 0,
           "invoke() dispatches to every one of them: undispatched "
               + (undispatched.isEmpty() ? QStringLiteral("none") : undispatched.join(", ")));
 
@@ -327,8 +354,10 @@ int main(int argc, char **argv)
                                             {QStringLiteral("wallet.balance"),
                                              QStringLiteral("{}")});
     note("invoke(wallet.balance): " + unwired.toString());
-    check(contains(unwired, "\"ok\":false") && !contains(unwired, "no skill named"),
-          "an unwired skill refuses as itself, not as a name nobody registered");
+    check(contains(unwired, "\"ok\":false") && !contains(unwired, kUnregistered)
+              && !contains(unwired, kNotStarted),
+          "an unwired skill refuses as itself, not as a name nobody registered "
+          "and not as a module that never started");
 
     QVariant missingName = provider->callMethod(QStringLiteral("invoke"),
                                                 {QStringLiteral("no.such.skill"),

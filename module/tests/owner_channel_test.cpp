@@ -292,7 +292,17 @@ int main()
         check(r.fake.sentOn == r.channel->channelId(), "sent on the channel that was opened");
         check(r.fake.drainedFrom == r.channel->channelId(), "and listened to on the same one");
 
-        bool sameId = !r.fake.sent.empty(), fullTerms = true;
+        // The count first, and it is not decoration. Both loops below are
+        // "no member of this collection is wrong", which an EMPTY collection
+        // satisfies — `fullTerms` was seeded `true` and only ever falsified
+        // inside the loop, so a module whose request document never reached the
+        // wire printed `ok and the full terms the owner is being asked to
+        // approve`. Demonstrated by making the fake's send report success and
+        // drop the payload: `sameId` went FAIL, because someone had seeded it
+        // `!sent.empty()`, and `fullTerms` stayed green beside it.
+        check(r.fake.sent.size() >= 2,
+              "there are retries on the wire to inspect at all");
+        bool sameId = !r.fake.sent.empty(), fullTerms = !r.fake.sent.empty();
         for (const auto &s : r.fake.sent) {
             const auto j = json::parse(s, nullptr, false);
             if (j.is_discarded() || j.value("id", std::string{}) != "req-1") sameId = false;
@@ -479,7 +489,20 @@ int main()
     std::printf("\nrequests this channel refuses to make\n");
     {
         Rig r;
-        r.channel->open();
+        // `requestApproval` validates the request BEFORE it consults `open_`,
+        // so every NotAsked below is returned just as readily by a channel that
+        // never opened — and `sent.empty()` is then true because nothing COULD
+        // have been sent. Setting `createOk = false` here left all five
+        // assertions printing `ok`, which made this the only block in the file
+        // with nothing that a dead transport can falsify. The open is therefore
+        // asserted, not merely performed, and the wire is shown to be usable
+        // before "nothing reached it" is allowed to mean anything.
+        check(okOf(r.channel->open()), "the channel really is open for this block");
+        check(r.channel->isOpen(), "and it considers itself open");
+        r.channel->requestApproval(request());
+        check(!r.fake.sent.empty(),
+              "and a well-formed request on it does reach the wire, so the wire works");
+        r.fake.sent.clear();
         ApprovalRequest bad = request();
         bad.amount = "one hundred";
         const auto d = r.channel->requestApproval(bad);
