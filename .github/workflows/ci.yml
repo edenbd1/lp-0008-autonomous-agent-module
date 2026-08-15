@@ -18,6 +18,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
+      # First, and before anything is built, because a dangling citation costs
+      # nothing to check and this repository has shipped several. check-docs.py
+      # was added and then run by nothing, which is the failure it exists to
+      # catch, one level up. It needs no toolchain, so it fails in seconds
+      # rather than after the risc0 build in the next job.
+      - name: Documentation points at things that exist
+        run: |
+          set -e
+          ./scripts/check-docs.py | tee check-docs.out
+          # The summary line is the assertion that it walked the tree at all: a
+          # checker that found nothing to check exits 0 too. No step may go
+          # green by skipping.
+          grep -q "every path, line citation and symbol citation resolves" check-docs.out \
+            || { echo "check-docs.py exited 0 without reporting a full pass"; exit 1; }
+          if grep -q SKIPPED check-docs.out; then
+            echo "check-docs.py reported SKIPPED"; exit 1
+          fi
+          rm -f check-docs.out
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -94,6 +113,57 @@ jobs:
           echo "$real" | grep -q '"result":\[' || { echo "deploy not on chain: $real"; exit 1; }
           echo "$ctrl" | grep -q '"result":null' || { echo "control did not return null: $ctrl"; exit 1; }
           echo "OK deploy present, control null"
+
+      # SUBMISSION-DRAFT.md's evidence sections are generated from the chain and
+      # from the committed binary by scripts/submission-evidence.py. --check
+      # re-fetches every figure and fails if the document has drifted from what
+      # the chain now says. This step is the whole anti-rot property: without
+      # it, the generator is something a person has to remember to run, and the
+      # last four times a person had to remember, the document shipped claiming
+      # transactions that DEPLOYMENT.md disowns by name.
+      - name: SUBMISSION-DRAFT.md still matches the chain
+        run: |
+          set -e
+          if ! ./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md > evidence.out 2>&1; then
+            cat evidence.out
+            echo "SUBMISSION-DRAFT.md is stale. Run: ./scripts/submission-evidence.py --write SUBMISSION-DRAFT.md"
+            exit 1
+          fi
+          cat evidence.out
+
+          # A green exit code is not evidence that anything was checked. Assert
+          # the banner, and refuse the skip pattern this workflow already guards
+          # against elsewhere: no step may go green by skipping.
+          if ! grep -q "agrees with" evidence.out; then
+            echo "the check exited 0 without reporting agreement: it did not run to completion"
+            exit 1
+          fi
+          if grep -q SKIPPED evidence.out; then
+            echo "the evidence check reported SKIPPED"
+            exit 1
+          fi
+
+          # The control, and the same argument as the dedede hash two steps up:
+          # a checker that cannot fail would pass everything above just as
+          # happily. So alter one generated figure and require a red.
+          cp SUBMISSION-DRAFT.md drift.md
+          python3 - <<'PY'
+          import re, sys
+          s = open('drift.md', encoding='utf-8').read()
+          new, n = re.subn(r'\| block \| (\d+) \|',
+                           lambda m: '| block | %d |' % (int(m.group(1)) + 1), s, count=1)
+          if n != 1:
+              sys.exit("the control found no block figure to alter; the "
+                       "generated sections are not shaped as expected")
+          open('drift.md', 'w', encoding='utf-8').write(new)
+          PY
+          if ./scripts/submission-evidence.py --check drift.md > drift.out 2>&1; then
+            echo "a document with an altered block number PASSED the check:"
+            cat drift.out
+            exit 1
+          fi
+          rm -f drift.md drift.out evidence.out
+          echo "OK the document matches the chain, and a drifted one is rejected"
 
       - name: demo.sh runs from a clean clone
         run: ./scripts/demo.sh
