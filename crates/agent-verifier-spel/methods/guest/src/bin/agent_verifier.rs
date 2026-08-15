@@ -50,6 +50,10 @@ const E_OVER_PERIOD_LIMIT: u32 = 6006;
 /// An approval account exists at the right address but this program never
 /// created it, so no owner ever approved this spend.
 const E_APPROVAL_NOT_ANCHORED: u32 = 6007;
+/// The agent's balance does not cover the amount it is trying to send.
+const E_INSUFFICIENT_BALANCE: u32 = 6008;
+/// Crediting the recipient would overflow its balance.
+const E_RECIPIENT_OVERFLOW: u32 = 6009;
 
 #[lez_program]
 mod agent_verifier {
@@ -163,6 +167,12 @@ mod agent_verifier {
         policy: AccountWithMetadata,
         #[account(signer)]
         agent: AccountWithMetadata,
+        // The account that is actually paid. An earlier version of this
+        // instruction did not declare it, which meant the program could check
+        // that a policy permitted an amount and then move nothing — an
+        // authorisation proof presented as a payment.
+        #[account(mut)]
+        recipient: AccountWithMetadata,
         policy_hash: [u8; 32],
         owner_id: [u8; 32],
         agent_id: [u8; 32],
@@ -195,7 +205,50 @@ mod agent_verifier {
                 "the spend needs an owner approval: use spend_approved",
             ));
         }
-        Ok(SpelOutput::execute(vec![policy, agent], vec![]))
+
+        // Move the money. The policy check above is a gate in front of a
+        // transfer, not a substitute for one: LEZ's own authenticated_transfer
+        // moves value exactly this way, by returning post-states with adjusted
+        // balances rather than by chaining a call.
+        let mut agent_post = agent.account;
+        agent_post.balance = match agent_post.balance.checked_sub(amount) {
+            Some(b) => b,
+            None => {
+                return Err(SpelError::custom(
+                    E_INSUFFICIENT_BALANCE,
+                    "the agent cannot cover this spend",
+                ))
+            }
+        };
+        let mut recipient_post = recipient.account;
+        recipient_post.balance = match recipient_post.balance.checked_add(amount) {
+            Some(b) => b,
+            None => {
+                return Err(SpelError::custom(
+                    E_RECIPIENT_OVERFLOW,
+                    "the recipient balance would overflow",
+                ))
+            }
+        };
+
+        // A recipient still owned by the default program has to be claimed, or
+        // the credit lands on an account nobody owns.
+        let recipient_claim = if recipient_post.program_owner
+            == nssa_core::program::DEFAULT_PROGRAM_ID
+        {
+            AutoClaim::Claimed(Claim::Authorized)
+        } else {
+            AutoClaim::None
+        };
+
+        Ok(SpelOutput::execute(
+            vec![
+                (policy.account, AutoClaim::None),
+                (agent_post, AutoClaim::None),
+                (recipient_post, recipient_claim),
+            ],
+            vec![],
+        ))
     }
 
     /// The agent spends above its envelope, on an approval the owner signed.
