@@ -47,10 +47,15 @@ jobs:
           # already uses for its literal count.
           python3 - <<'PY_COUNTS'
           import re, sys
+          # The coverage summary specifically, not the first line that happens to
+          # start with "checked". A skill-count line was added above it later and
+          # this floor then measured 19 mentions against a floor of 100 paths,
+          # turning a healthy run red -- a guard reading the wrong number is the
+          # same defect it exists to catch, pointed the other way.
           line = [l for l in open("check-docs.out", encoding="utf-8")
-                  if l.startswith("checked ")]
+                  if l.startswith("checked ") and " paths," in l]
           if not line:
-              sys.exit("check-docs.py printed no summary line at all")
+              sys.exit("check-docs.py printed no coverage summary at all")
           got = dict(zip(("path", "link", "line", "symbol", "promise", "docs"),
                          (int(n) for n in re.findall(r"\d+", line[0]))))
           floors = {"path": 100, "link": 50, "line": 1, "symbol": 20,
