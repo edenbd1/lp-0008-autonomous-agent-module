@@ -633,18 +633,66 @@ as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
 own transport: 22 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
-Stated plainly, because a reviewer will check: there is **no click in the
-Basecamp GUI** behind that, only Logos Core's C API with Basecamp's own shipped
-library; the package is **macOS arm64 only**; there is **no owner-facing UI
-plugin**, only the `core` module; and 20 of the 22 registered skills **have no
-ports wired**, because a port is a `std::function` and a host that loads this as
-a plugin has no wire format for one. Each of those refuses *as itself* —
+Stated plainly, because a reviewer will check: the packages are **macOS arm64
+only**, and 20 of the 22 registered skills **have no ports wired**, because a
+port is a `std::function` and a host that loads this as a plugin has no wire
+format for one. Each of those refuses *as itself* —
 `{"ok":false,"error":"no account to read: …"}` — which is what the harness
 asserts, and is the opposite of the failure worth hiding: a module that loads,
 answers `skills()` with `[]`, and looks like it works. The two that do answer
 are `meta.status` and `meta.skills`, and they answer for one reason: both are
 questions about *this module*, which it wires to itself. Every other skill asks
 about the world outside it.
+
+### 8a. The window: `app/agent-ui.lgx`
+
+A `core` module is not a surface. Basecamp gives windows to `ui` plugins, and
+until `app/` existed this repository shipped none — so the module loaded,
+answered, and was named nowhere a person watching the app could see. `grep -ci
+agent` over Basecamp's whole output returned **0**.
+
+`app/` is that plugin: Qt Widgets, implementing Basecamp's `IComponent`,
+packaged `type: ui`, holding no agent logic of its own. Every button is one call
+on the loaded module over Logos Core's transport. Install it into the user
+**plugins** directory the same way — the exact commands, the Qt ceiling, and the
+load harness are in [`app/README.md`](app/README.md):
+
+```sh
+DEST=~/Library/Application\ Support/Logos/LogosBasecamp/plugins/agent-ui
+mkdir -p "$DEST" && cd "$DEST"
+tar xzf /path/to/lp-0008/app/agent-ui.lgx
+mv variants/darwin-arm64/* . && rm -rf variants
+printf 'darwin-arm64' > variant
+```
+
+Restart Basecamp and the tile is in the left rail, labelled **LP-0008 Agent**.
+The same `grep -ci agent` now returns **42**, and the lines that matter are:
+
+```
+App launcher clicked: "agent-ui"
+Loading core dependency for "agent-ui" : "agent"
+[info] [logos] Module loaded: agent
+MainContainer: Added plugin dock to WorkspaceArea: "LP-0008 Agent" (module: "agent-ui" )
+Successfully loaded UI module: "agent-ui"
+```
+
+`Loading core dependency` is the mechanism: Basecamp's PluginLoader reads a `ui`
+plugin's `dependencies`, loads each named core module, has `capability_module`
+mint the plugin a token for it, and only then calls `createWidget(LogosAPI*)`.
+So `"dependencies": ["agent"]` in `app/metadata.json` is what turns a click on a
+tile into a loaded module.
+
+From that window an owner binds the agent, starts it, reads its 22-skill card,
+invokes any of them, and — the part the criterion is about — answers the spends
+the agent asks it to approve. A `wallet.send` above the envelope published
+`ownerApprovalRequested` to the window in **7 ms**, and the owner's `approved`
+came back and released the spend 7.2 s later, inside a 60 s wait.
+
+Two module-side facts had to be measured before that round trip worked at all —
+a module that blocks on a call cannot publish while it blocks, and a verdict
+cannot come back on the connection that asked for it. Both, with their
+measurements and what is still bounded, are in
+[`docs/limitations.md`](docs/limitations.md).
 
 One more, and it is not ours to fix. The prize asks that the module load
 "alongside the wallet, storage, and messaging modules". **Logos Basecamp 0.2.2
@@ -827,6 +875,12 @@ module/tests                      the suites, plus the two load harnesses and
 module/agent.lgx                  the loadable package (darwin-arm64)
 module/agent.lgx.sources          what that package was built from, written by
                                   package-basecamp.sh and checked by CI
+app/src                           the Basecamp `ui` plugin: the owner console,
+                                  which drives the loaded module and holds no
+                                  agent logic of its own
+app/tests                         the load harness that reproduces Basecamp's
+                                  PluginLoader
+app/agent-ui.lgx                  the loadable `ui` package (darwin-arm64)
 examples/agent-console            §5 — the module's dispatcher, from a shell
 examples/skills/notary-digest     §5 — a third-party skill, outside module/src
 scripts/demo.sh                   §1 — the whole thing from a clean clone
@@ -860,7 +914,8 @@ docs/                             see the reading order below
 | [`use-cases.md`](docs/use-cases.md) | the prize's illustrative use cases, and which of them this repository demonstrates |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | what is live, how it got there, and how to reproduce it |
 | [`benchmarks/cu-budget.md`](docs/benchmarks/cu-budget.md) | the cost of each on-chain operation, and why LEZ v0.2.4 does not meter compute units |
-| [`basecamp.md`](docs/basecamp.md) | building, packaging and loading the module in the Logos app, with the two load harnesses |
+| [`basecamp.md`](docs/basecamp.md) | building, packaging and loading the module in the Logos app, with the two load harnesses and the record of the app naming it |
+| [`app/README.md`](app/README.md) | the owner console: the Basecamp `ui` plugin, its build and install, and the transcript of an approval answered from inside the app |
 | [`limitations.md`](docs/limitations.md) | what does not work. Meant to be read before the rest, not after |
 | [`recon.md`](docs/recon.md) | notes from reading the Logos stack, kept because several conclusions in the others rest on them |
 

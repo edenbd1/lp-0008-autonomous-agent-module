@@ -269,6 +269,34 @@ public:
     /// timeout against an owner that has no way to answer it.
     void setOwnerNotifier(std::function<bool(const std::string &requestJson, int attempt)> notify);
 
+    /// What the owner-approval wait does between polls.
+    ///
+    /// The default sleeps, and inside a *loaded* module that is a deadlock
+    /// dressed as a timeout. Measured, in Basecamp 0.2.2, with this module
+    /// loaded and an above-threshold `wallet.send` issued from the owner
+    /// console: the call reaches the module at T, the console's next call —
+    /// a bare `status()` — reaches it at T+30.0 s, and all six
+    /// `ownerApprovalRequested` events are delivered to the app in the same
+    /// four milliseconds at T+30.0 s. T+30 s is when the wait gave up. A
+    /// module runs in its own `logos_host`, whose event loop dispatches the
+    /// transport; a wait that sleeps on that thread queues the requests it is
+    /// publishing *and* the @ref approveSpend that would release it behind
+    /// itself. The owner learns about the spend only once it is too late to
+    /// answer, and the answer could not have got in anyway.
+    ///
+    /// So the host installs an idle that pumps its own event loop instead of
+    /// sleeping. The re-entrancy that buys is bounded and was checked before it
+    /// was relied on: @ref invoke drops the mutex before calling a skill, and
+    /// @ref approveSpend takes it only to record a verdict, so an approval
+    /// dispatched inside the wait completes against the very map the wait is
+    /// polling. The mutex is not recursive, and a version of this that held it
+    /// across the skill call would deadlock rather than time out.
+    ///
+    /// Left unset, the wait sleeps exactly as before. A unit test that
+    /// constructs the impl directly has no event loop to pump, and pumping is
+    /// not something this class can decide to do — it has no Qt.
+    void setOwnerIdle(std::function<void()> idle);
+
     /// The owner's answer to a request the agent published.
     ///
     /// `verdict` is `"approved"` or `"denied"`, and nothing else — an answer the
@@ -357,6 +385,9 @@ private:
     /// Set by the module's Logos Core export. Empty means this module is not
     /// hosted, and therefore has no owner channel of its own.
     std::function<bool(const std::string &requestJson, int attempt)> ownerNotify_;
+    /// What the wait does between polls, when the host has an opinion about it.
+    /// See @ref setOwnerIdle. Empty means sleep.
+    std::function<void()> ownerIdle_;
     /// Requests a `wallet.send` is currently waiting on, by correlation id,
     /// against the number of times each has been put on the wire. An answer
     /// that names an id not in here is refused.

@@ -11,3 +11,5 @@ build/
 artifacts/agents/
 _external/
 build-basecamp/
+build-ui/
+app/src/metadata.json
