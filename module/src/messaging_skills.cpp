@@ -11,11 +11,13 @@ using nlohmann::json;
 // https://lip.logos.co/messaging/informational/23/topics.html
 std::string ownerTopic(const std::string &account)
 {
+    if (!isTopicIdentifier(account)) return {};
     return "/lp-0008/1/owner-" + account + "/json";
 }
 
 std::string discoveryTopic(const std::string &ns)
 {
+    if (!isTopicIdentifier(ns)) return {};
     return "/lp-0008/1/discovery-" + ns + "/json";
 }
 
@@ -56,6 +58,14 @@ json parse(const std::string &s, std::string &err)
     return j;
 }
 
+/// The refusal an identifier that cannot go into a content topic earns, in the
+/// words of the grammar it breaks.
+std::string notAnIdentifier(const std::string &what, const std::string &id)
+{
+    return "'" + what + "' is spliced into a Logos content topic, so it may only carry letters, "
+           "digits, '-' and '_'; '" + id + "' would name a different topic";
+}
+
 } // namespace
 
 std::string SendSkill::parameterSchema() const
@@ -82,6 +92,7 @@ std::string SendSkill::invoke(const std::string &paramsJson)
     }
 
     const std::string topic = ownerTopic(recipient);
+    if (topic.empty()) return fail(notAnIdentifier("recipient", recipient));
     const std::vector<std::uint8_t> payload(message.begin(), message.end());
     if (!port_.send || !port_.send(topic, payload)) {
         return fail("delivery refused the message");
@@ -106,6 +117,7 @@ std::string JoinSkill::invoke(const std::string &paramsJson)
     if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
 
     const std::string topic = discoveryTopic(group);
+    if (topic.empty()) return fail(notAnIdentifier("group_id", group));
     if (!port_.subscribe || !port_.subscribe(topic)) {
         return fail("delivery refused the subscription");
     }
@@ -127,8 +139,18 @@ std::string CreateGroupSkill::invoke(const std::string &paramsJson)
 
     std::string group;
     if (!field(p, "group_id", group, err)) return fail(err);
+    // The group id names a channel, and every member id becomes a content topic
+    // below. Both are checked before the channel is opened: a group that opens
+    // and then cannot invite anybody has to be torn down by hand.
+    if (!isTopicIdentifier(group)) return fail(notAnIdentifier("group_id", group));
     if (!p.contains("members") || !p["members"].is_array() || p["members"].empty()) {
         return fail("'members' must be a non-empty array");
+    }
+    for (const auto &m : p["members"]) {
+        if (!m.is_string()) return fail("every member must be a string account id");
+        if (!isTopicIdentifier(m.get<std::string>())) {
+            return fail(notAnIdentifier("member", m.get<std::string>()));
+        }
     }
     if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
 
@@ -148,9 +170,6 @@ std::string CreateGroupSkill::invoke(const std::string &paramsJson)
     // request, not something to skip quietly.
     std::size_t invited = 0, asked = 0;
     for (const auto &m : p["members"]) {
-        if (!m.is_string()) {
-            return fail("every member must be a string account id");
-        }
         ++asked;
         const std::string note = json{{"invite", group}}.dump();
         if (port_.send && port_.send(ownerTopic(m.get<std::string>()),
