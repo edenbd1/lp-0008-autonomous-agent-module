@@ -14,11 +14,22 @@
 // — which is how a policy hash of sixty-four 'z's and a second configure() that
 // silently rebound a running agent both passed for correct.
 //
+// The third thing this covers is registration. Thirteen skills can be
+// implemented, tested and merged and still be invisible: the module that hosts
+// them has to be told about them, and until it was, a module that loaded
+// perfectly in Basecamp answered `skills()` with `[]` and `invoke()` with "no
+// skill named …" for every name it documents — which is worse than not loading,
+// because it looks like it works. So the assertions below are not only that
+// each skill is registered, but that a skill whose port nobody wired *refuses
+// and says so*, rather than crashing on an empty std::function or reporting
+// success for work nothing performed.
+//
 // The module tests need the Logos C++ SDK headers, which are not installed
 // everywhere this file is compiled, so they are guarded. Build them with:
 //   clang++ -std=c++17 -I<nlohmann>/include -I<logos-cpp-sdk>/cpp \
-//     module/tests/skills_test.cpp module/src/messaging_skills.cpp \
-//     module/src/storage_skills.cpp module/src/agent_module_plugin.cpp -o skt
+//     module/tests/skills_test.cpp module/src/*.cpp -o skt
+// (all of module/src: registration is what links the skills into the module, so
+// the module half of this suite now needs every skill's translation unit.)
 #include "../src/messaging_skills.h"
 #include "../src/storage_skills.h"
 
@@ -34,6 +45,7 @@
 #include <cstdlib>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -121,6 +133,40 @@ json entryFor(const json &card, const std::string &name)
     }
     return json::object();
 }
+
+/// How many entries the card has under `name`. More than one would mean the
+/// registry accepted a duplicate, and `invoke()` dispatches on a map, so one of
+/// them would be advertised and unreachable.
+std::size_t entriesNamed(const json &card, const std::string &name)
+{
+    std::size_t n = 0;
+    if (!card.is_array()) return 0;
+    for (const auto &e : card) {
+        if (e.is_object() && e.value("name", std::string{}) == name) ++n;
+    }
+    return n;
+}
+
+/// Every skill the module ships with, spelled out rather than counted.
+///
+/// Named so that removing one from registration turns this suite red *with the
+/// name*, which is the mutation this file exists to catch: a count alone goes
+/// red without saying what went missing, and no assertion at all is how thirteen
+/// implemented skills came to be unreachable.
+const char *kBuiltinSkills[] = {
+    "messaging.send",      "messaging.join",   "messaging.create_group",
+    "storage.upload",      "storage.download", "storage.list",
+    "storage.share",       "wallet.balance",   "wallet.send",
+    "wallet.history",      "program.query",    "program.call",
+    "program.deploy",      "agent.card",       "agent.discover",
+    "agent.task",          "agent.subscribe",  "agent.cancel",
+    "meta.status",         "meta.configure",   "agent.evaluate_task",
+};
+constexpr std::size_t kBuiltinCount = sizeof(kBuiltinSkills) / sizeof(kBuiltinSkills[0]);
+
+/// A real-shaped LEZ account: 44 characters of base58, the alphabet the scripts
+/// match with. `wallet.balance` checks this before it reads anything.
+const char *kAgentAccount = "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r";
 
 } // namespace
 #endif
@@ -302,7 +348,9 @@ int main()
         check(!escaped, "a throwing parameterSchema() does not escape skills()");
 
         const auto card = json::parse(doc, nullptr, false);
-        check(!card.is_discarded() && card.is_array() && card.size() == 6,
+        // Six fakes, on top of the skills the module registers for itself when
+        // nobody wired them.
+        check(!card.is_discarded() && card.is_array() && card.size() == kBuiltinCount + 6,
               "the card parses, with one entry per registered skill");
 
         const auto hostile = entryFor(card, evil);
@@ -434,6 +482,210 @@ int main()
 
         check(m.stop().success, "stop succeeds");
         check(!okOf(m.invoke("echo", "{}")), "and a stopped agent refuses to invoke");
+    }
+
+    std::printf("built-in skills, with nothing wired\n");
+    {
+        // This is the state a module loaded by Basecamp is actually in. The host
+        // reaches it through configure/start/skills/invoke and nothing else —
+        // `registerSkill` takes a std::shared_ptr and is not remoteable — so no
+        // caller wires the ports, and what this module offers on the other side
+        // of the plugin boundary is exactly what is asserted here.
+        AgentModuleImpl m;
+        m.configure("owner-1", anchored);
+        check(m.start().success, "a module nobody wired starts");
+
+        const auto card = json::parse(m.skills(), nullptr, false);
+        check(!card.is_discarded() && card.is_array(), "and answers skills() with a card");
+
+        std::string missing;
+        std::string schemaless;
+        for (const char *name : kBuiltinSkills) {
+            const auto entry = entryFor(card, name);
+            if (entry.empty()) {
+                missing += std::string(missing.empty() ? "" : " ") + name;
+            } else if (!entry.contains("parameters") || !entry["parameters"].is_object()) {
+                schemaless += std::string(schemaless.empty() ? "" : " ") + name;
+            }
+        }
+        if (!missing.empty()) std::printf("       missing: %s\n", missing.c_str());
+        check(missing.empty(), "every skill the module ships with is registered and listed");
+        check(schemaless.empty(),
+              "each with a parameter schema another agent can call it from");
+        check(card.size() == kBuiltinCount, "and the card lists nothing it cannot dispatch");
+
+        // The module's own status port is the one it can answer honestly without
+        // anybody wiring anything, so it is the one skill that works out of the
+        // box — and it is how an operator sees the binding from outside.
+        const auto status = m.invoke("meta.status", "{}");
+        const auto sj = json::parse(status, nullptr, false);
+        check(okOf(status), "meta.status answers: the module wired itself into its own status port");
+        check(sj.value("configured", false) && sj.value("started", false)
+                  && sj.value("owner", std::string{}) == "owner-1"
+                  && sj.value("policy_hash", std::string{}) == anchored,
+              "and reports what the agent is bound to");
+        check(sj.contains("balance") && sj["balance"].is_null(),
+              "with an unreadable balance reported as unknown, never as zero");
+
+        // The other twenty have no port. Each must come back as its own refusal
+        // — not as "no skill named", which is the registry saying the skill does
+        // not exist, and not as ok:true, and not as a crash on an empty
+        // std::function.
+        int dispatched = 0;
+        int refusedCleanly = 0;
+        std::string wrong;
+        for (const char *name : kBuiltinSkills) {
+            std::string answer;
+            bool escaped = false;
+            try {
+                answer = m.invoke(name, "{}");
+            } catch (...) {
+                escaped = true;
+            }
+            const auto j = json::parse(answer, nullptr, false);
+            if (escaped || j.is_discarded() || !j.is_object()) {
+                wrong += std::string(wrong.empty() ? "" : " ") + name;
+                continue;
+            }
+            if (errOf(answer).find("no skill named") == std::string::npos) ++dispatched;
+            if (std::string(name) != "meta.status" && !okOf(answer) && !errOf(answer).empty()) {
+                ++refusedCleanly;
+            }
+        }
+        if (!wrong.empty()) std::printf("       not JSON: %s\n", wrong.c_str());
+        check(wrong.empty(), "invoking every one of them yields a JSON answer, not an exception");
+        check(dispatched == static_cast<int>(kBuiltinCount),
+              "each dispatches to a skill rather than answering 'no skill named'");
+        check(refusedCleanly == static_cast<int>(kBuiltinCount) - 1,
+              "and each unwired one refuses, naming what it is missing");
+
+        // The refusal that matters most: an unwired module must not be able to
+        // move money, and must not claim it did.
+        const auto send = m.invoke("wallet.send",
+                                   std::string(R"({"recipient":"Public/)") + kAgentAccount
+                                       + R"(","amount":"1"})");
+        const auto sendj = json::parse(send, nullptr, false);
+        check(!okOf(send) && sendj.value("submitted", true) == false,
+              "wallet.send with no wallet and no owner channel refuses, and says nothing was sent");
+    }
+
+    std::printf("built-in skills, wired to ports\n");
+    {
+        AgentModuleImpl m;
+        m.configure("owner-1", anchored);
+
+        SkillPorts ports;
+        std::string sentTopic;
+        ports.delivery = DeliveryPort{
+            [] { return true; },
+            [&](const std::string &t, const std::vector<std::uint8_t> &) { sentTopic = t; return true; },
+            [](const std::string &) { return true; },
+            [](const std::string &) { return true; }};
+        ports.storage = StoragePort{[] { return true; },
+                                    [](const std::string &, std::int64_t) { return std::string("cid-1"); },
+                                    [](const std::string &, const std::string &) { return true; },
+                                    [] { return std::string("[]"); },
+                                    [](const std::string &c) { return c == "cid-1"; }};
+        // The shielded read: the only path to a private balance, and the reason
+        // WalletPort has two account functions rather than one.
+        ports.agentAccount = std::string("Private/") + kAgentAccount;
+        ports.wallet.walletAccount = [](const std::string &) { return std::string(R"({"balance":42})"); };
+        ports.sequencer.rpc = [](const std::string &, const std::string &) {
+            return std::string(R"({"result":{"id":"7"}})");
+        };
+        std::map<std::string, std::string> settings;
+        ports.config.set = [&](const std::string &k, const std::string &v) {
+            settings[k] = v;
+            return true;
+        };
+        ports.config.get = [&](const std::string &k) { return settings.count(k) ? settings[k] : std::string{}; };
+        ports.envelope = SpendEnvelope{"1000", "5000", 100};
+        ports.inference = std::make_shared<StubLocalBackend>(
+            StubLocalBackend::Rules{{"storage.upload"}, 100});
+
+        const auto wired = m.registerBuiltinSkills(ports);
+        check(wired.success && wired.value == static_cast<int>(kBuiltinCount),
+              "a host that has ports wires every skill through them");
+        check(!m.registerBuiltinSkills(ports).success,
+              "and may not wire a second copy over the first");
+        check(m.start().success, "the wired module starts");
+        check(json::parse(m.skills(), nullptr, false).size() == kBuiltinCount,
+              "with the same card as the unwired one: wiring changes answers, not the offer");
+
+        check(okOf(m.invoke("messaging.send", R"({"recipient":"abc","message":"hi"})"))
+                  && sentTopic == ownerTopic("abc"),
+              "messaging.send reaches the delivery port it was registered with");
+        check(json::parse(m.invoke("storage.upload", R"({"path":"/tmp/x"})"), nullptr, false)
+                      .value("address", std::string{})
+                  == "cid-1",
+              "storage.upload reaches the storage port");
+        check(json::parse(m.invoke("wallet.balance", "{}"), nullptr, false).value("balance", 0) == 42,
+              "wallet.balance reads the agent's own shielded account through the wallet");
+        check(okOf(m.invoke("program.query", R"({"program_id":"p","method":"getLastBlockId"})")),
+              "program.query reaches the sequencer port");
+        check(okOf(m.invoke("meta.configure", R"({"key":"price_per_task","value":"5"})"))
+                  && settings["price_per_task"] == "5",
+              "meta.configure reaches the config port");
+
+        // The one skill whose port is a model. Registration hands it the same
+        // envelope wallet.send got, converted once, so the two mirrors of the
+        // anchored limits cannot disagree about what is affordable.
+        const auto verdict = m.invoke(
+            "agent.evaluate_task",
+            R"({"task_id":"t1","skill":"storage.upload","price":"50"})");
+        const auto vj = json::parse(verdict, nullptr, false);
+        check(okOf(verdict) && vj.value("accept", false) && vj.value("from_backend", false),
+              "agent.evaluate_task asks the backend it was wired with");
+        const auto tooBig = m.invoke(
+            "agent.evaluate_task",
+            R"({"task_id":"t2","skill":"storage.upload","price":"9000"})");
+        check(okOf(tooBig) && !json::parse(tooBig, nullptr, false).value("accept", true),
+              "and declines a price outside the envelope registration derived from the mirror");
+    }
+    {
+        AgentModuleImpl m;
+        m.configure("owner-1", anchored);
+        m.start();
+        check(!m.registerBuiltinSkills(SkillPorts{}).success,
+              "wiring after start is refused: the card has already been answered");
+    }
+    {
+        // A third party got there first. The built-in must not overwrite it and
+        // must not be dropped in silence — and whatever holds the name has to be
+        // the thing invoke() reaches, or the card advertises a skill nobody can
+        // call.
+        AgentModuleImpl m;
+        m.configure("owner-1", anchored);
+        bool mine = false;
+        auto theirs = std::make_shared<Fake>("wallet.send", R"({"type":"object"})");
+        theirs->onInvoke = [&mine](const std::string &) {
+            mine = true;
+            return std::string(R"({"ok":true})");
+        };
+        check(m.registerSkill(theirs).success, "a third party registers wallet.send first");
+
+        const auto wired = m.registerBuiltinSkills(SkillPorts{});
+        check(!wired.success && wired.error.find("wallet.send") != std::string::npos,
+              "the built-in of that name is reported as not registered, not dropped quietly");
+        check(wired.value == static_cast<int>(kBuiltinCount) - 1, "and the rest are registered");
+
+        m.start();
+        const auto card = json::parse(m.skills(), nullptr, false);
+        check(card.size() == kBuiltinCount && entriesNamed(card, "wallet.send") == 1,
+              "the card carries exactly one wallet.send");
+        check(okOf(m.invoke("wallet.send", "{}")) && mine,
+              "and it is the one invoke() dispatches to");
+    }
+    {
+        // Registration goes through registerSkill, which takes the module's own
+        // non-recursive lock. Doing it from inside start()'s critical section
+        // would deadlock on the first skill — a hang, not a failed assertion.
+        auto *m = new AgentModuleImpl();  // leaked on purpose: see completes()
+        m->configure("owner-1", anchored);
+        check(completes([m] { m->start(); }),
+              "start registers the built-ins without holding the module's lock");
+        check(json::parse(m->skills(), nullptr, false).size() == kBuiltinCount,
+              "and the module it started offers them");
     }
 #else
     std::printf("module lifecycle / skills document / module invoke\n"

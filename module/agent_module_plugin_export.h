@@ -33,6 +33,19 @@
  *   API for skills linked into the module; it is deliberately not remoteable, and
  *   nothing is lost by that: `invoke` is what a remote caller needs, and
  *   `skills()` is how it finds out what to invoke.
+ *
+ *   The same is true of `AgentModuleImpl::registerBuiltinSkills`, and it has a
+ *   consequence worth stating here rather than leaving to be discovered: a host
+ *   that loads this module as a *plugin* — Basecamp — cannot wire the skills'
+ *   ports, because a port is a `std::function` and there is no wire format for
+ *   one. So `start()` registers the module's own skills itself when nobody has,
+ *   with nothing wired, and each of them refuses naming the port it is missing.
+ *   That is why a loaded module answers `skills()` with a full card and
+ *   `invoke()` with a skill's own refusal, instead of `[]` and "no skill named"
+ *   — the state this module shipped in until the registration existed, and one
+ *   that is indistinguishable from an agent that works and does nothing.
+ *   Wiring real transports means linking the module and calling
+ *   `registerBuiltinSkills` before `start`.
  * - The generator's parser reads one-line prototypes. `AgentModuleImpl::configure`
  *   is wrapped across two lines and is silently skipped — the very method that
  *   binds the agent to its owner. Restating the surface here keeps that failure
