@@ -3,18 +3,21 @@
   "version": "0.1.0",
   "type": "core",
   "category": "agent",
+  "interface": "universal",
+  "author": "edenbd1",
   "description": "Autonomous agent for Logos Core: shielded LEZ account, owner channel, and a spending policy enforced on chain",
-  "main": "agent_module_plugin",
+  "main": "agent_plugin",
+  "codegen": {
+    "impl_header": "agent_module_plugin_export.h"
+  },
   "dependencies": [],
+  "capabilities": [],
 
   "nix": {
-    "packages": { "build": [], "runtime": [] },
-    "external_libraries": [],
-    "cmake": {
-      "find_packages": [],
-      "extra_sources": [],
-      "extra_include_dirs": [],
-      "extra_link_libraries": []
-    }
+    "packages": {
+      "build": ["nlohmann_json"],
+      "runtime": []
+    },
+    "external_libraries": []
   }
 }

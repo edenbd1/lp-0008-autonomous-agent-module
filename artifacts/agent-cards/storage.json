@@ -21,7 +21,8 @@
   ],
   "x-logos": {
     "lezAccount": "7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6",
+    "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
     "pricePerTask": 25,
-    "settlement": "lez-shielded-transfer"
+    "settlement": "lez-chained-authenticated-transfer"
   }
 }

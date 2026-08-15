@@ -1,0 +1,16 @@
+module agent {
+  version "0.1.0"
+  description "Autonomous agent for Logos Core: shielded LEZ account, owner channel, and a spending policy enforced on chain"
+  category "agent"
+  depends []
+
+  method configure(ownerAddress: tstr, policyHashHex: tstr) -> result
+  method start() -> result
+  method stop() -> result
+  method skills() -> tstr
+  method status() -> tstr
+  method invoke(name: tstr, paramsJson: tstr) -> tstr
+
+  event moduleStarted(success: bool, message: tstr, timestamp: int)
+  event moduleStopped(success: bool, message: tstr, timestamp: int)
+}
