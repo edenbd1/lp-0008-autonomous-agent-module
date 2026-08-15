@@ -70,11 +70,13 @@ refresh in place, against freshly fetched chain state, and still did not land.
 Re-importing the signer into a completely fresh wallet home does not help
 either. The gate reads the signer's on-chain state, not the wallet's.
 
-Two things that used to be at the top of this file are gone from it, because
-they were fixed rather than reworded: `spend` moved no balance at all, and a
-second `create_policy` from one signer was silently dropped. What replaced them
-is recorded in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md); what is still true is
-below.
+Three things that used to be in this file are gone from it, because they were
+fixed rather than reworded: `spend` moved no balance at all, a second
+`create_policy` from one signer was silently dropped, and a repeat A2A
+settlement could not be produced. The last one is now two settlements in blocks
+8605 and 8624, with the recipient going 0 → 25 → 50 by `getAccount`. What
+replaced them is recorded in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md); what is
+still true is below.
 
 ## A shielded agent can pay, but cannot be paid at its shielded account
 

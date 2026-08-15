@@ -121,17 +121,43 @@ The storage agent publishes an A2A Agent Card advertising `storage.upload` at a
 LEZ price. The blockchain agent discovers it, runs the A2A task lifecycle, and
 pays — signing with **its own** key, not the owner's.
 
-| | |
-|---|---|
-| task | `3e350c46d2802475572596adbdc24472` |
-| client | `AeGj71T1cwEP2hFbnNU422qZu3C9JqzUkFCK2sLChn61` |
-| server | `26tmxC9X8dywy5x7oyr1VeBUyR1vPxksrtbA3PJKPP7t` |
-| skill / price | `storage.upload` at 25 LEZ |
-| settlement | [`aea80817…d98449e7`](https://explorer.testnet.lez.logos.co/transaction/aea80817f6c4283c79b21095596ce774e3638cef888a3cc7b705b61ed98449e7) |
+The payment is not a post-state this program writes. It cannot be: LEZ rule 5
+refuses a post-state that debits an account the executing program does not own,
+and the agent's account belongs to the transfer program. `spend` checks the
+anchored envelope and then **chains a call** into that program, which does own
+the account. The privacy circuit proves both programs and the composition.
 
-The settlement is a **PrivacyPreserving** transaction of 270,566 bytes, so the
-payment carries a real proof rather than being a public transfer with a note
-attached.
+Two settlements, run one after the other with no special handling between them.
+The second one matters as much as the first: a repeat settlement is what this
+repository could not produce before.
+
+| | first | second |
+|---|---|---|
+| task | `53d4db43…8322d29d` | `b68c9e51…34b6a0a2` |
+| client (pays, shielded) | `9KdQSJ2t…VXicNe` | same |
+| server (paid, public) | `5Sa13NyN…dHtjnZ` | same |
+| skill / price | `storage.upload` at 25 LEZ | same |
+| settlement | [`c45d3f24…94cf7275`](https://explorer.testnet.lez.logos.co/transaction/c45d3f2441cf1d19d69ae4cc70cfd50308fc2f0ed89ec40310c5ea2a94cf7275) | [`8d7aba60…bb7502fb`](https://explorer.testnet.lez.logos.co/transaction/8d7aba60786d812d6e596624518a38813e7b9f4573d20b6efe802ac4bb7502fb) |
+| block | 8605 | 8624 |
+| kind / size | PrivacyPreserving, 270,566 bytes | PrivacyPreserving, 270,566 bytes |
+| server balance | 0 → 25 | 25 → 50 |
+| client balance | 100 → 75 | 75 → 50 |
+
+Manifest: [`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv).
+
+Balances read from the chain, not from the script's own output:
+
+```bash
+curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ"]}'
+```
+
+Only the credit side is publicly readable: the payer is a shielded account and
+`getAccount` answers with the default account for those. The debit is
+constrained anyway — rule 8 requires total balance to be preserved across every
+program in a transaction, so a transaction that credits 25 debited 25 — but it
+is the payer's wallet, not the RPC, that can show it directly. This is stated at
+length in [`docs/limitations.md`](limitations.md) rather than glossed.
 
 What makes it autonomous is not that nobody was watching. It is that the chain
 would have refused it otherwise: 25 LEZ is inside the client's anchored
@@ -140,7 +166,10 @@ above that limit and the identical call fails without an owner approval account
 seeded by the exact payment — which is the whole point of anchoring the envelope
 by address.
 
-Reproduce: `./scripts/a2a-task.sh`.
+Reproduce: `./scripts/a2a-task.sh`. It refuses to write its manifest unless the
+transaction confirms **and** the recipient's balance moved by exactly the price,
+because an earlier version of this instruction produced confirmed, on-chain
+proofs that a policy permitted 25 LEZ and moved nothing at all.
 
 ## A note on the explorer
 
