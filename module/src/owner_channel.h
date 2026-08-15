@@ -137,8 +137,8 @@ enum class ApprovalVerdict {
     /// The owner answered these exact terms with a no. A complete, successful
     /// exchange with a negative answer — not a failure of the channel.
     Denied,
-    /// An answer claiming this request's id arrived and did not match its terms,
-    /// or could not be read as a yes or a no. Terminal: see below.
+    /// Answers claiming this request's id arrived, none of them naming its
+    /// terms, and the wait then ran out. Terminal: see below.
     Refused,
     /// Nothing usable arrived before the timeout, after retrying the request.
     Unreachable,
@@ -160,6 +160,13 @@ struct ApprovalDecision {
     int attempts = 0;
     /// Frames seen on the channel that were not answers to this request.
     int ignored = 0;
+    /// Frames that claimed this request's id and named other terms.
+    ///
+    /// Reported on every verdict, including @ref ApprovalVerdict::Approved: an
+    /// operator whose owner app is answering with the wrong amount, or whose
+    /// topic somebody else is writing to, needs to know that even when the real
+    /// answer arrived afterwards.
+    int altered = 0;
     /// Echoed only on @ref ApprovalVerdict::Approved: the seed the caller hands
     /// to `spend_approved`. It is the request's own marker seed — an approval
     /// that named a different one never gets this far.
@@ -177,6 +184,16 @@ struct ApprovalDecision {
     /// so nothing is submitted. They stay distinct in @ref verdict because an
     /// operator needs to know whether the node was down, the owner was away, or
     /// somebody was answering with altered terms.
+    ///
+    /// `Refused` is reached at the *end* of the wait, not the instant an altered
+    /// frame is seen. Ending the exchange on the first one made a remote,
+    /// repeatable denial of approval out of a single injected frame: anyone who
+    /// could write to the topic could stop every spend the owner wanted to allow.
+    /// And it bought nothing — an attacker able to forge a frame naming other
+    /// terms is equally able to forge one naming *these* terms, so refusing to
+    /// read any further message never stood between an attacker and an approval.
+    /// What does stand there is the approval account on chain, which no message
+    /// on this channel can create.
     ///
     /// It is deliberately false for `Approved`. An approval unlocks the
     /// `spend_approved` path and nothing more: whether the payment happened is
@@ -241,8 +258,19 @@ struct OwnerChannelConfig {
     /// How often the same request — same id, same terms — is put back on the
     /// wire while waiting. "Retries notification before timing out."
     std::int64_t resendIntervalMs = 15000;
-    /// If set, frames from any other sender are ignored. A hint that costs
-    /// nothing and proves nothing: see @ref InboundMessage::senderId.
+    /// Frames from any other sender are ignored. **Required**: @ref
+    /// OwnerChannel::open refuses without it.
+    ///
+    /// It used to be optional, and empty was the default — and an empty value
+    /// accepted *every* sender as the owner. Measured: a third party who could
+    /// see the topic replayed the request's own terms back and got
+    /// `verdict:"approved"`. An unset filter that silently means "anyone" is
+    /// worse than no filter at all, because it reads like one that is on.
+    ///
+    /// It is still a hint and still proves nothing — sender ids are
+    /// self-declared, see @ref InboundMessage::senderId — and the proof is the
+    /// approval account on chain. What requiring it buys is that the agent
+    /// cannot be *configured* into believing everybody by leaving a field out.
     std::string ownerSenderId;
 };
 

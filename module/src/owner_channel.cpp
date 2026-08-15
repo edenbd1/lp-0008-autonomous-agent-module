@@ -1,5 +1,9 @@
 #include "owner_channel.h"
 
+// For `isTopicIdentifier`: the channel id is built by concatenation too, and
+// the grammar has one owner in this repository.
+#include "messaging_skills.h"
+
 #include <nlohmann/json.hpp>
 
 namespace logos::agent {
@@ -272,6 +276,7 @@ std::string ApprovalDecision::json() const
         {"detail", detail},
         {"attempts", attempts},
         {"ignored", ignored},
+        {"altered", altered},
         {"owner_unreachable", ownerUnreachable()},
     };
     if (approved()) j["marker_seed"] = markerSeed;
@@ -297,6 +302,21 @@ std::string OwnerChannel::open()
     if (config_.contentTopic.empty() || config_.ownerAccount.empty() ||
         config_.agentAccount.empty()) {
         return fail("the owner channel needs a content topic, an owner and an agent account");
+    }
+    // Both accounts are spliced into the channel id below. An account carrying a
+    // '/' would name a channel of somebody else's choosing, which is the same
+    // defect the content topics had.
+    if (!isTopicIdentifier(config_.ownerAccount) || !isTopicIdentifier(config_.agentAccount)) {
+        return fail("the owner and agent accounts are spliced into the channel id, so they may "
+                    "only carry letters, digits, '-' and '_'");
+    }
+    // Refuse rather than believe everybody. An empty `ownerSenderId` accepted
+    // every sender on the channel as the owner: a third party who could see the
+    // topic replayed the request's own terms and was told the owner approved.
+    // A filter that is off by default is not a default, it is a hole.
+    if (config_.ownerSenderId.empty()) {
+        return fail("the owner channel has no owner sender id, and an unset one accepts every "
+                    "sender on the topic as the owner");
     }
     if (config_.timeoutMs <= 0 || config_.resendIntervalMs <= 0) {
         return fail("the approval timeout and resend interval must both be positive");
@@ -391,6 +411,9 @@ ApprovalDecision OwnerChannel::requestApproval(const ApprovalRequest &request)
     // Force the first send on the first pass.
     std::int64_t lastSend = start - config_.resendIntervalMs;
     int sendFailures = 0;
+    /// Why the first altered answer was altered. The first, not the last: it is
+    /// the one closest to whatever went wrong.
+    std::string alteredWhy;
 
     for (int polls = 0; polls < kMaxPolls; ++polls) {
         const std::int64_t now = port_.nowMs();
@@ -417,7 +440,9 @@ ApprovalDecision OwnerChannel::requestApproval(const ApprovalRequest &request)
         }
 
         for (const auto &frame : port_.drain(channelId_)) {
-            if (!config_.ownerSenderId.empty() && frame.senderId != config_.ownerSenderId) {
+            // `open()` refuses without an owner sender id, so this is never the
+            // "accept everybody" branch it used to be.
+            if (frame.senderId != config_.ownerSenderId) {
                 ++d.ignored;
                 continue;
             }
@@ -428,14 +453,25 @@ ApprovalDecision OwnerChannel::requestApproval(const ApprovalRequest &request)
                 continue;
             }
             if (c.kind == ReplyKind::Altered) {
-                // Terminal, and that is a choice worth naming: continuing to
-                // wait would mean that after seeing evidence someone is
-                // answering this request with other terms, the agent would still
-                // act on the next message that looked right. Failing closed
-                // costs an approval round trip; the other way costs a payment.
-                d.verdict = ApprovalVerdict::Refused;
-                d.detail = "an answer to this request was refused: " + c.why;
-                return d;
+                // Counted, and the wait continues.
+                //
+                // This used to return immediately, which made one injected frame
+                // a permanent, repeatable denial of every approval the owner
+                // wanted to give — the agent would sit at `Refused` while the
+                // real answer was still on its way. Ending the exchange never
+                // stood between an attacker and an approval either: anyone able
+                // to forge a frame naming *other* terms can forge one naming
+                // these, so the early return only ever cost the owner their say.
+                // What stands between an attacker and a payment is the approval
+                // account on chain, which no message here can create.
+                //
+                // Failing closed is preserved at the other end: if nothing valid
+                // arrives, the timeout below reports `Refused` rather than
+                // `Unreachable`, so a caller still gets a terminal verdict and
+                // an operator still learns that somebody was answering.
+                ++d.altered;
+                if (alteredWhy.empty()) alteredWhy = c.why;
+                continue;
             }
             if (c.approve) {
                 d.verdict = ApprovalVerdict::Approved;
@@ -450,13 +486,24 @@ ApprovalDecision OwnerChannel::requestApproval(const ApprovalRequest &request)
                 d.detail = c.why.empty() ? "the owner denied this spend"
                                          : "the owner denied this spend: " + c.why;
             }
+            if (d.altered > 0) {
+                // Said out loud even on an approval. The exchange completed, and
+                // it completed on a channel somebody else was also writing to.
+                d.detail += " (after " + std::to_string(d.altered) +
+                            " answer(s) claiming this request and naming other terms: " +
+                            alteredWhy + ")";
+            }
             return d;
         }
 
         if (now - start >= config_.timeoutMs) {
-            d.verdict = ApprovalVerdict::Unreachable;
-            d.detail = "no answer within " + std::to_string(config_.timeoutMs) + "ms, after " +
-                       std::to_string(d.attempts) + " attempt(s)";
+            d.verdict = d.altered > 0 ? ApprovalVerdict::Refused : ApprovalVerdict::Unreachable;
+            d.detail = "no valid answer within " + std::to_string(config_.timeoutMs) +
+                       "ms, after " + std::to_string(d.attempts) + " attempt(s)";
+            if (d.altered > 0) {
+                d.detail += "; " + std::to_string(d.altered) +
+                            " answer(s) claimed this request and named other terms: " + alteredWhy;
+            }
             if (sendFailures > 0) {
                 d.detail += " (" + std::to_string(sendFailures) + " send(s) refused)";
             }
