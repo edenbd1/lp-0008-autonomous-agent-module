@@ -29,8 +29,19 @@ echo "It is an account address. These tests cover what that has to survive —"
 echo "a per-transaction cap drained by repetition, a hostile period total that"
 echo "must not overflow into 'plenty left', and an approval for one payment"
 echo "being replayed onto another."
-cargo test -p agent-policy-core --release --locked --quiet 2>&1 \
-  | grep -E "result: ok\. [1-9]" | sed 's/^/   /'
+# Gate on the test process, not on whether a line matched. Piping straight into
+# grep discards the exit status: a suite that failed prints nothing here, every
+# later check still runs, and the script ends with "demo complete" and exit 0 —
+# a demo that reports success precisely when the tests are broken.
+TESTLOG=$(mktemp)
+if cargo test -p agent-policy-core --release --locked --quiet > "$TESTLOG" 2>&1; then
+  grep -E "result: ok\. [1-9]" "$TESTLOG" | sed 's/^/   /'
+  ok "the policy tests pass"
+else
+  tail -20 "$TESTLOG" | sed 's/^/   /'
+  bad "the policy tests did not pass"
+fi
+rm -f "$TESTLOG"
 
 rule "2. the deployed program is the program in this repository"
 echo "A LEZ deploy tx hash is SHA256(borsh(bytecode)) — content addressed — so"
