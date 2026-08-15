@@ -106,7 +106,7 @@ of which cost nothing:
 
 ```sh
 otool -L build-ui/agent_ui.dylib | grep QtCore   # @rpath, current version 6.9.2
-nm -u build-ui/agent_ui.dylib | grep Logos       # 5 undefined symbols, and that is correct
+nm -u build-ui/agent_ui.dylib | grep -i logos    # 7 undefined symbols, and that is correct
 ```
 
 Undefined `LogosAPI` / `LogosAPIClient` symbols are the design, not a build
@@ -131,7 +131,7 @@ loads nowhere:
 ```
   ok    the plugin is newer than every source it is built from
   ok    Qt is referenced through @rpath, version(s): 6.9.2
-  ok    all 5 undefined Logos symbol(s) are exported by the host's liblogos_core
+  ok    all 7 undefined Logos symbol(s) are exported by the host's liblogos_core
   ok    type: ui — Basecamp installs this into its plugins directory
   ok    main[darwin-arm64] = agent_ui.dylib is in the package
 ```

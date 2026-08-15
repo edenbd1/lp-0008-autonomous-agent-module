@@ -97,7 +97,13 @@ if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
         # behaved, and it is the kind of failure that gets "fixed" by deleting
         # the check.
         core_syms="$(nm -gU "$core")"
-        undefined="$(nm -u "$plugin" | grep -E '^__ZN?K?[0-9]+Logos' || true)"
+        # Every undefined symbol that names a Logos type, not just the ones
+        # mangled as `LogosAPI::…`. The first version of this matched
+        # `^__ZN?K?[0-9]+Logos` and checked five symbols while the plugin had
+        # seven: the two QDataStream operators for `LogosResult` are mangled
+        # under QDataStream, so a host that stopped exporting them would have
+        # passed this check and failed to load.
+        undefined="$(nm -u "$plugin" | grep -i logos || true)"
         missing=0
         checked=0
         for sym in $undefined; do
