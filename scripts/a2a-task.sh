@@ -145,8 +145,11 @@ echo "  signing from $LEE_WALLET_HOME_DIR"
 # agent. It deliberately does not take an approval account: declaring one it
 # never reads is what made every settlement after the first fail to build.
 # An above-threshold payment calls `spend_approved` instead, with the marker.
+# `recipient` is now an ACCOUNT, not a 32-byte argument. That is the whole
+# difference between authorising a payment and making one: the program cannot
+# credit an account it was never handed.
 OUT_TXT=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
-  -- spend --agent "Private/$CLIENT_ID" \
+  -- spend --agent "Private/$CLIENT_ID" --recipient "Private/$SERVER_ID" \
   --policy-hash "$CLIENT_POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
   --per-tx "$CLIENT_PER_TX" --per-period "$CLIENT_PER_PERIOD" --period-blocks "$CLIENT_PERIOD" \
   --amount "$PRICE" --spent-this-period 0 2>&1)

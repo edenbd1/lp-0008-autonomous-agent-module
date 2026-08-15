@@ -231,22 +231,12 @@ mod agent_verifier {
             }
         };
 
-        // A recipient still owned by the default program has to be claimed, or
-        // the credit lands on an account nobody owns.
-        let recipient_claim = if recipient_post.program_owner
-            == nssa_core::program::DEFAULT_PROGRAM_ID
-        {
-            AutoClaim::Claimed(Claim::Authorized)
-        } else {
-            AutoClaim::None
-        };
-
+        // Return the accounts themselves, not (account, claim) pairs: the
+        // `#[lez_program]` macro rewrites this call into `execute_with_claims`
+        // and derives each claim from the `#[account(...)]` attribute above, so
+        // supplying claims here is both redundant and a type error.
         Ok(SpelOutput::execute(
-            vec![
-                (policy.account, AutoClaim::None),
-                (agent_post, AutoClaim::None),
-                (recipient_post, recipient_claim),
-            ],
+            vec![policy.account, agent_post, recipient_post],
             vec![],
         ))
     }

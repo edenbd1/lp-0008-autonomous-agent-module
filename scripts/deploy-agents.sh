@@ -24,6 +24,8 @@ SIGNER_HOME="${LEE_WALLET_HOME_DIR:-$HOME/.lez-wallet}"
 IDL=idl/agent_verifier.idl.json
 PROGRAM=artifacts/programs/agent_verifier.bin
 MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
+# Each agent is funded so it can pay for real; spend moves balance, not just proof.
+FUND_AMOUNT="${FUND_AMOUNT:-40}"
 
 mkdir -p artifacts
 : > "$MANIFEST"
@@ -87,12 +89,71 @@ else
 fi
 echo
 
-deploy_agent() { # category per_tx per_period period_blocks
-  local cat="$1" per_tx="$2" per_period="$3" period="$4"
+# Fund an agent, and report the account that ended up holding the money.
+#
+# A shielded transfer to (npk, vpk) does not credit an existing account — it
+# creates a new note, with its own account id, under the same keys. So funding
+# after anchoring would leave the policy committed to an account with nothing
+# in it, and `spend` would fail on the balance it is supposed to move. Fund
+# first, find the account that actually holds the balance, and anchor on that.
+best_funded() { # home -> account id holding the most, and its balance on stdout
+  local home="$1" best="" bestbal=0 a b
+  for a in $(LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+               "$WALLET" account list </dev/null 2>/dev/null \
+             | grep -oE 'Private/[1-9A-HJ-NP-Za-km-z]+'); do
+    b=$(LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+          "$WALLET" account get --account-id "$a" </dev/null 2>/dev/null \
+        | grep -o '"balance":[0-9]*' | cut -d: -f2 | head -1)
+    [ -n "$b" ] && [ "$b" -gt "$bestbal" ] && { bestbal="$b"; best="${a#Private/}"; }
+  done
+  printf '%s %s\n' "$best" "$bestbal"
+}
+
+fund_agent() { # category seed_account amount
+  local home="$AGENT_HOMES/$1" seed="$2" amount="$3"
+  local keys="$home/funding.keys"
+
+  # An agent funded by an earlier run is still funded: the keys are persistent
+  # and so are its notes. Re-sending would spend the owner's balance to buy
+  # something already owned, and the owner's balance is finite on a testnet.
+  LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+    "$WALLET" account sync-private </dev/null >/dev/null 2>&1
+  local have; have=$(best_funded "$home")
+  if [ "${have##* }" -ge "$amount" ] 2>/dev/null; then
+    echo "${have%% *}"; return 0
+  fi
+  LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+    "$WALLET" account show-keys --account-id "Private/$seed" </dev/null 2>/dev/null \
+    | grep -E "^[0-9a-f]{64,}$" > "$keys"
+  [ -s "$keys" ] || { echo "  could not export the agent's keys" >&2; return 1; }
+
+  LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
+    "$WALLET" auth-transfer send --from "Public/$SIGNER" \
+      --to-keys "$keys" --amount "$amount" </dev/null >/dev/null 2>&1
+  rm -f "$keys"
+
+  # Give the sequencer a moment, then take whichever account holds the most.
+  local i have
+  for i in $(seq 1 20); do
+    sleep 6
+    LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
+      "$WALLET" account sync-private </dev/null >/dev/null 2>&1
+    have=$(best_funded "$home")
+    if [ "${have##* }" -ge "$amount" ] 2>/dev/null; then echo "${have%% *}"; return 0; fi
+  done
+  return 1
+}
+
+deploy_agent() { # category per_tx per_period period_blocks fund
+  local cat="$1" per_tx="$2" per_period="$3" period="$4" fund="${5:-$FUND_AMOUNT}"
   echo "[$cat] new shielded account"
-  local agent; agent=$(new_agent "$cat")
-  if [ -z "$agent" ]; then echo "  FAILED to create an account" >&2; return 1; fi
-  echo "  agent $agent"
+  local seed; seed=$(new_agent "$cat")
+  if [ -z "$seed" ]; then echo "  FAILED to create an account" >&2; return 1; fi
+
+  echo "  funding it with $fund so it can actually pay"
+  local agent; agent=$(fund_agent "$cat" "$seed" "$fund")
+  if [ -z "$agent" ]; then echo "  FAILED to fund the agent" >&2; return 1; fi
+  echo "  agent $agent  (holds at least $fund)"
   echo "  keys  $AGENT_HOMES/$cat  (outside the repository, never committed)"
 
   local agent_hex; agent_hex=$(python3 -c "
@@ -129,9 +190,9 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
 
 # One per default skill category, with envelopes sized to what each does: a
 # storage agent pays small and often, a blockchain agent moves more per call.
-deploy_agent storage    50   500  1000
-deploy_agent messaging  25   250  1000
-deploy_agent blockchain 200 1000  1000
+deploy_agent storage    50   500  1000  10
+deploy_agent messaging  25   250  1000  10
+deploy_agent blockchain 200 1000  1000  30
 
 echo "manifest: $MANIFEST"
 column -t -s$'\t' "$MANIFEST" 2>/dev/null || cat "$MANIFEST"
