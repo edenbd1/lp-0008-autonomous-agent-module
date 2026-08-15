@@ -76,15 +76,39 @@ One per default skill category. Each has its own shielded account — a shared k
 would not be "indistinguishable on-chain from any other account holder" — and its
 own anchored policy.
 
-| Category | Agent | Policy hash | Limits | create_policy |
-|---|---|---|---|---|
-| storage | `26tmxC9X8dywy5x7oyr1VeBUyR1vPxksrtbA3PJKPP7t` | `40674979…5409a856` | 50 / 500 per 1000 blocks | [`dd7338f9…5d900514`](https://explorer.testnet.lez.logos.co/transaction/dd7338f91550b2ffeb9a4971eb1026752c0b24e0c48533f6078787965d900514) |
-| messaging | `1Yyo4FscmgZkeiNP4gcCtczzoZncKaByxKThPp8nqAc` | `6020573e…261c03c0` | 25 / 250 per 1000 blocks | [`8addbd40…bf4c4ffa`](https://explorer.testnet.lez.logos.co/transaction/8addbd40a196d77e0b0fbe6109c40f5cfe8e913f8c2a5b0bcfc3c45ebf4c4ffa) |
-| blockchain | `AeGj71T1cwEP2hFbnNU422qZu3C9JqzUkFCK2sLChn61` | `4f9aae3a…efbeb741` | 200 / 1000 per 1000 blocks | [`093d7cd6…e2f12c8e`](https://explorer.testnet.lez.logos.co/transaction/093d7cd6962acf4d21ef0d1fbd49ab3e4d0a5314c9b7f7615447b831e2f12c8e) |
+| Category | Agent (shielded) | Paid at (public) | Policy hash | Limits | create_policy |
+|---|---|---|---|---|---|
+| storage | `7o9PT8uE…PGPEUM6` | `5Sa13NyN…dHtjnZ` | `b040065d…ec749a87` | 50 / 500 per 1000 blocks | [`ab017c9c…d67735f2`](https://explorer.testnet.lez.logos.co/transaction/ab017c9c9d55ac6ea198e692c5ed2b1dea4a2a70a1863495e48e7a91d67735f2) |
+| messaging | `25LLt4Zx…gMdsafw` | `Dxh7ZLHF…fpEwD` | `885981bf…e8e0f5aa` | 25 / 250 per 1000 blocks | [`9373d809…92df8104`](https://explorer.testnet.lez.logos.co/transaction/9373d8094e3eb4a7efac5ce2514fbb58d188e84ad45582f2fe60738192df8104) |
+| blockchain | `9KdQSJ2t…VXicNe` | `BzYks91a…H2wLnu` | `a03fb8fb…0496725e` | 200 / 1000 per 1000 blocks | [`b4a73bef…390428bf`](https://explorer.testnet.lez.logos.co/transaction/b4a73befe7d653805588ddaf7eccba5020cd0576db40039373d79d2d390428bf) |
 
-Manifest: [`artifacts/agents.tsv`](../artifacts/agents.tsv). The envelopes differ
-on purpose: identical limits under one owner collapse to one policy hash, and
-anchoring-by-address is easier to see when three envelopes give three addresses.
+Blocks 8591, 8594 and 8596. Manifest, with the full ids and the account that
+anchored each policy: [`artifacts/agents.tsv`](../artifacts/agents.tsv).
+
+The envelopes differ on purpose: identical limits under one owner collapse to
+one policy hash, and anchoring-by-address is easier to see when three envelopes
+give three addresses.
+
+Each agent has **two** accounts, and the split is forced rather than chosen. The
+shielded account is the agent: it holds the balance and signs its own payments.
+The public account is where other agents pay it, because `spel` can resolve a
+`Private/<id>` recipient only for accounts the *sending* wallet holds keys for,
+and because `getAccount` reads the public state only — a payment into a shielded
+account cannot be checked by anyone but its owner. See
+[`docs/limitations.md`](limitations.md).
+
+Read any of it back:
+
+```bash
+# the policy account for the blockchain agent's envelope
+spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
+  pda policy --policy-hash a03fb8fb318b01d43c9d1a6c7a651210de14c1677fbdd83faa8488fc0496725e
+# 8zsfnzAk… for storage; each envelope gives a different address
+
+curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["<that address>"]}'
+# program_owner = 2UBUEH2tvc9xrYy21ZcQ6Bm4thn86cs2NPQJJNozuisb, the policy program
+```
 
 Agent keys live outside the repository, under `~/.lp0008-agents/`. An agent
 whose key is committed is not an agent, and one whose key is thrown away cannot
