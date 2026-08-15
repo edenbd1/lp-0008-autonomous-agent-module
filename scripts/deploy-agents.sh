@@ -213,7 +213,7 @@ print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$agent")
   # rewrites the stored state, which is what makes the next anchor provable.
   "$WALLET" account get --account-id "Public/$signer" </dev/null >/dev/null 2>&1
   local out; out=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
-    -- create_policy --owner "Public/$SIGNER" \
+    -- create_policy --owner "Public/$signer" \
     --policy-hash "$policy_hash" --owner-id "$OWNER_HEX" --agent-id "$agent_hex" \
     --per-tx "$per_tx" --per-period "$per_period" --period-blocks "$period" 2>&1)
   local tx; tx=$(echo "$out" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
