@@ -105,6 +105,76 @@ with tarfile.open(pkg, "w:gz", format=tarfile.GNU_FORMAT) as tar:
             tar.addfile(member, io.BytesIO(data))
 PY
 
+# `lgx verify` checks the contents against the manifest's hashes. It does not
+# check that `main` names one of them — a manifest can be internally consistent
+# and still point at a file the package does not contain, which is an invisible
+# load failure: the host resolves `main` inside the module directory, finds
+# nothing, and logs nothing. That defect shipped here once already, with `main`
+# naming `agent_module_plugin` while the builder emits `agent_plugin`. So it is
+# asserted at the one moment it can still be fixed cheaply.
+python3 - "$out" "$here/metadata.json" <<'PY'
+import json, posixpath, sys, tarfile
+
+pkg, metadata_path = sys.argv[1], sys.argv[2]
+meta = json.load(open(metadata_path))
+
+with tarfile.open(pkg, "r:gz") as tar:
+    names = set(tar.getnames())
+    manifest = json.loads(tar.extractfile("manifest.json").read())
+
+mains = manifest.get("main") or {}
+if not mains:
+    sys.exit("manifest declares no `main` — the host would have nothing to load")
+
+failures = []
+for variant, main in sorted(mains.items()):
+    if not main:
+        failures.append("variant %s declares an empty `main`" % variant)
+        continue
+    path = posixpath.join("variants", variant, main)
+    if path not in names:
+        failures.append(
+            "manifest `main` for %s is %r, which is not in the package "
+            "(it holds: %s)" % (
+                variant, main,
+                ", ".join(sorted(
+                    posixpath.basename(n) for n in names
+                    if n.startswith("variants/%s/" % variant) and
+                    posixpath.basename(n))) or "nothing"))
+        continue
+    # metadata.json carries the name without an extension; the manifest carries
+    # it with one. Anything else means the two disagree about what to load.
+    declared = meta.get("main", "")
+    if declared and main != declared and not main.startswith(declared + "."):
+        failures.append(
+            "metadata.json's `main` (%r) does not agree with the manifest's "
+            "(%r) for %s" % (declared, main, variant))
+    print("  ok    main[%s] = %s is in the package" % (variant, main))
+
+if failures:
+    sys.exit("\n".join("  FAIL  " + f for f in failures))
+PY
+
+# The other way a package loads nowhere: built against a Qt the host does not
+# have. Basecamp's bundled Qt is a ceiling, not a floor, and a Homebrew build
+# additionally hardcodes /opt/homebrew/... as its library paths, which resolve
+# on this machine and on no other. An official Qt references @rpath.
+if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
+    qtrefs="$(otool -L "$plugin" | awk '/Qt[A-Za-z]*\.framework/ {print $1, $NF}')"
+    if [ -z "$qtrefs" ]; then
+        echo "  FAIL  the plugin references no Qt frameworks at all" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$qtrefs" | grep -qv '^@rpath/'; then
+        echo "  FAIL  a Qt framework is referenced by absolute path, so it" >&2
+        echo "        resolves only on this machine — see docs/basecamp.md:" >&2
+        printf '%s\n' "$qtrefs" | grep -v '^@rpath/' >&2
+        exit 1
+    fi
+    echo "  ok    Qt is referenced through @rpath, version(s):" \
+         "$(printf '%s\n' "$qtrefs" | tr -d ')' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
+fi
+
 "$lgx" verify "$out"
 "$lgx" manifest "$out"
 echo

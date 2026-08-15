@@ -27,39 +27,97 @@ method table and asserts on the module's real behaviour:
   ok    `main` (agent_plugin) names the file that was built (agent_plugin)
   ok    it casts to PluginInterface across the boundary
   ok    it casts to LogosProviderPlugin across the boundary
-  <-    getMethods(): configure, skills, start, stop, status, invoke
+  <-    getMethods(): start, skills, configure, invoke, status, stop
+  ok    before configure it reports itself unconfigured
   ok    configure refuses a malformed policy hash
   ok    a second configure is refused — the binding is the agent's identity
+  ok    before start, skills() is an error rather than an empty card
   ok    status reflects the running agent
-  ok    invoking an unregistered skill fails rather than crashing the module
+  <-    skills(): 21 entries: storage.share, wallet.send, program.deploy, …
+  ok    every skill the module ships with is listed: missing none
+  ok    the card has exactly 21 entries, and 21 distinct names
+  ok    each carries a parameter schema: all present
+  ok    invoke() dispatches to every one of them: undispatched none
+  ok    an unwired skill refuses as itself, not as a name nobody registered
+  ok    and a name that is not registered is refused as that, without taking the module down
 all steps confirmed (0 failure(s))
 ```
 
-**2. Logos Core itself loads it** (`module/tests/logos_core_load_test.cpp`).
-This one is not a reproduction of the host: it `dlopen`s the real
-`liblogos_core.dylib` out of the installed `LogosBasecamp.app` and drives it
-through the same C API, in the same order, as Basecamp's own `app/main.cpp` —
-`logos_core_init`, both module directories added, persistence path, access
-policy, `logos_core_start`, then `logos_core_load_module("agent", true)`. That
-last call is exactly what runs when a user enables a module; Basecamp itself
-auto-loads only `package_manager` and `package_downloader`.
+That run is against the `agent_plugin.dylib` unpacked from the committed
+`module/agent.lgx`, not against `build-basecamp/`.
+
+**2. Logos Core itself loads it, and the module it loaded offers its skills**
+(`module/tests/logos_core_load_test.cpp`). This one is not a reproduction of
+the host: it `dlopen`s the real `liblogos_core.dylib` out of the installed
+`LogosBasecamp.app` and drives it through the same C API, in the same order, as
+Basecamp's own `app/main.cpp` — `logos_core_init`, both module directories
+added, persistence path, access policy, `logos_core_start`, then
+`logos_core_load_module("agent", true)`. That last call is exactly what runs
+when a user enables a module; Basecamp itself auto-loads only `package_manager`
+and `package_downloader`.
+
+It does not stop at "loaded", because loaded was never the claim worth making.
+A module that loads and answers `skills()` with `[]` is *worse* than one that
+fails to load: an empty Agent Card is a valid Agent Card, so what a reviewer
+sees is a module that installed, enabled, and does nothing, with no error
+anywhere saying why. So everything after the load goes back into the module
+over the runtime's own transport — `LogosAPI("core")` / `LogosAPIClient`, the
+same SDK facade `app/main.cpp` constructs, and the only way to reach a core
+module, which the runtime runs in its own `logos_host` process:
 
 ```
   <-    known modules: package_manager package_downloader capability_module agent
   ok    the runtime discovers the module in the user modules directory
+  ok    the installed module names the variant it is
+  <-    installed manifest: main[darwin-arm64] = agent_plugin.dylib
+  ok    the manifest declares a `main` for darwin-arm64
+  ok    `main` (agent_plugin.dylib) names a file that is really in the module directory
+  ok    metadata.json's `main` (agent_plugin) agrees with the manifest's (agent_plugin.dylib)
   ok    logos_core_load_module() reports success
   <-    loaded modules: capability_module agent
   ok    the module is in the runtime's loaded set
+  ok    the SDK hands out a client for the loaded module
+  ok    configure() is accepted across the transport
+  ok    start() is accepted across the transport
+  ok    skills() answers with a JSON array, not an error object: [{"name":"agent.cancel", …
+  <-    skills(): 21 entries
+  ok    the loaded module lists all 21 documented skills
+  ok    it lists exactly 21 — no more, no fewer (got 21)
+  ok    every listed skill carries a parameter schema (21 checked)
+  ok    invoke() dispatches to every one of the 21
+  ok    a name nobody registered is refused as unregistered: {"error":"no skill named 'wallet.definitely_not' is registered","ok":false}
 all steps confirmed (0 failure(s))
 ```
 
 The runtime's own log during that run prints `Module loaded: agent` — the same
-line it prints for `capability_module` — and the capability module issues a
-token for `agent`, so the module was published over the transport and registered
-with the capability system, not merely dlopened.
+line it prints for `capability_module` — then spawns `logos_host` for it,
+publishes `local:logos_agent_<id>`, and the capability module issues a token for
+`agent`. So the module was published over the transport and registered with the
+capability system, not merely dlopened, and the `skills()` above came back
+across that transport from the separate process the runtime started.
+
+Two details make those last checks mean what they say rather than pass for
+free:
+
+- **The dispatch check has a control.** Called with `{}`, most skills refuse,
+  because a module loaded as a *plugin* has no way to receive a `std::function`
+  port across the boundary. That refusal is the skill's own —
+  `{"error":"no account to read: …"}` — and is the proof the call arrived. Only
+  the registry's `no skill named '…' is registered` means it did not. The
+  harness asserts both directions: no listed skill may produce the registry's
+  refusal, and a name nobody registered must.
+- **It fails on the artefact this repository shipped in `333e7a8`.** Run against
+  that `agent.lgx` — packaged before the skills were registered, and otherwise
+  identical in manifest, type and load behaviour — the same harness reports
+  `skills(): 0 entries`, `[]`, and three failures, while still passing every
+  check up to and including "the module is in the runtime's loaded set". The
+  checks are not describing the code; they discriminate between two builds of
+  it, and they discriminate exactly where the difference is.
 
 Environment for run 2: **LogosBasecamp 0.2.2**, official macOS arm64 `.dmg`,
-`/Applications/LogosBasecamp.app`, portable build, bundling **Qt 6.9.2**.
+`/Applications/LogosBasecamp.app`, portable build, bundling **Qt 6.9.2**. The
+package under test was the committed `module/agent.lgx`, unpacked into the user
+modules directory by the procedure below — not the build tree.
 
 ## What was NOT verified
 
@@ -77,11 +135,17 @@ Stated plainly, because a reviewer will check.
 - **No owner-facing UI plugin.** What loads is the `core` module. The owner
   reaches it over the owner channel and through the module's method table; there
   is no Basecamp `ui` app in this repository yet, the way LP-0002 ships one.
-- **No skills are registered in the plugin path.** `skills()` returns `[]` from a
-  freshly loaded module and `invoke("wallet.balance", …)` returns
-  `{"ok":false,"error":"no skill named … is registered"}`. The skill classes
-  exist and are unit-tested; nothing in the plugin constructs and registers them
-  yet. The harness asserts the honest failure rather than papering over it.
+- **The registered skills have no ports wired.** All 21 are registered and
+  dispatchable — that much is asserted above — but a host that loads this as a
+  plugin cannot wire them, because a port is a `std::function` and there is no
+  wire format for one. So each answers as itself and refuses:
+  `invoke("wallet.balance", "{}")` returns `{"ok":false,"error":"no account to
+  read: the agent has none configured and none was given"}`, and
+  `meta.status` reports `balance: null` with `balance_error` rather than `0`.
+  Wiring real transports means linking the module and calling
+  `registerBuiltinSkills` before `start` — which is an in-process C++ API, not
+  something Basecamp can do. What loads in Basecamp is therefore a complete,
+  honest card of skills that will refuse until something wires them.
 - **The module links neither Logos Delivery nor Logos Storage.** The skills
   reach them through `DeliveryPort` / `StoragePort` function objects, and no
   translation unit in `module/src/` includes `liblogosdelivery.h` or
@@ -140,15 +204,65 @@ host's bundled copy. `QtRemoteObjects` is required (the module transport) and is
 not in the default archive set, so ask for it:
 
 ```sh
-python3 -m venv /tmp/aqt && /tmp/aqt/bin/pip install aqtinstall
-/tmp/aqt/bin/python -m aqt install-qt mac desktop 6.9.2 clang_64 \
-    -m qtremoteobjects --archives qtbase --outputdir /tmp/Qt
+python3 -m venv ~/logos/aqt && ~/logos/aqt/bin/pip install aqtinstall
+~/logos/aqt/bin/python -m aqt install-qt mac desktop 6.9.2 clang_64 \
+    -m qtremoteobjects --archives qtbase --outputdir ~/logos/Qt
 ```
 
-`--archives qtbase` keeps it to ~1 GB and avoids an extraction bug in aqt 3.3.0
-that trips over `QtSvg`'s symlinks. On Linux, `install-qt linux desktop 6.9.2
-linux_gcc_64 -m qtremoteobjects --archives qtbase`; a distribution Qt at or below
-6.9 works too (Debian bookworm's 6.4.2 is fine).
+That lands 209 MB in `~/logos/Qt/6.9.2/macos` and takes about six seconds.
+`--archives qtbase` is what keeps it that small, and it also avoids an
+extraction bug in aqt 3.3.0 that trips over `QtSvg`'s symlinks. On Linux,
+`install-qt linux desktop 6.9.2 linux_gcc_64 -m qtremoteobjects --archives
+qtbase`; a distribution Qt at or below 6.9 works too (Debian bookworm's 6.4.2
+is fine).
+
+**Not `/tmp`.** Earlier revisions of this document said `--outputdir /tmp/Qt`,
+and that is how an afternoon was lost. What was found there later was
+`/tmp/Qt/6.9.2/macos/lib` holding 63 frameworks and the directory holding
+nothing else: no `lib/cmake/`, no `include/`, no `bin/`, no `libexec/`, no
+`mkspecs/`, and no `QtRemoteObjects.framework`. The `aqt` virtualenv beside it
+had been reduced to a `bin/` with no `lib/`. That is macOS's periodic `/tmp`
+cleaner, which deletes files by age and takes out precisely the ones a finished
+build stops touching. The result reads as a partially extracted download and is
+not one, which is why the symptom is so hard to place.
+
+CMake's behaviour on that directory is the expensive part: it does not fail. It
+cannot find `Qt6Config.cmake`, falls through to the system Qt without a word,
+and produces a Homebrew-linked 6.11 plugin. Install Qt somewhere durable. The
+check is two lines:
+
+```sh
+ls ~/logos/Qt/6.9.2/macos/lib/cmake/Qt6/Qt6Config.cmake   # must exist
+ls -d ~/logos/Qt/6.9.2/macos/lib/QtRemoteObjects.framework # and this
+```
+
+A complete install has `bin include lib libexec mkspecs plugins` and more; one
+that has only `lib` is the trap above, and re-running the `aqt install-qt`
+command repairs it.
+
+What a 6.11 plugin then does in Basecamp is worth stating exactly, because it
+is not "fails to load" and it is the reason `package-basecamp.sh` refuses to
+build one. Harness 2, run against a module directory holding the Homebrew
+build, reports:
+
+```
+  ok    logos_core_load_module() reports success
+  ok    the module is in the runtime's loaded set
+  FAIL  configure() is accepted across the transport: no LogosResult came back (got nothing)
+```
+
+`logos_core_load_module` returns success and the module joins the loaded set.
+The truth is 250 ms earlier, in the runtime's log, and nothing surfaces it:
+
+```
+[error] [logos] [agent] LogosModule: Failed to load plugin: ".../agent_plugin.dylib"
+  Error: "The plugin '.../agent_plugin.dylib' uses incompatible Qt library. (6.11.0) [release]"
+```
+
+After that the module's `logos_host` is gone, nothing is published, and every
+call spends 20 seconds on `Timeout waiting for replica: "agent"` before giving
+back an empty QVariant. A harness that stopped at "loaded" would have called
+that a pass.
 
 `nlohmann/json.hpp` is also needed — `brew install nlohmann-json`, or
 `apt install nlohmann-json3-dev`.
@@ -161,7 +275,7 @@ export LOGOS_MODULE_ROOT=$HOME/logos/src/logos-module
 export LOGOS_CPP_SDK_ROOT=$HOME/logos/src/logos-cpp-sdk
 
 cmake -S module -B build-basecamp \
-      -DCMAKE_PREFIX_PATH=/tmp/Qt/6.9.2/macos \
+      -DCMAKE_PREFIX_PATH=$HOME/logos/Qt/6.9.2/macos \
       -DCMAKE_CXX_FLAGS=-I/opt/homebrew/include
 cmake --build build-basecamp -j8
 ```
@@ -179,9 +293,12 @@ otool -L build-basecamp/modules/agent_plugin.dylib | head -4
 
 `@rpath` and `6.9.2`. An absolute `/opt/homebrew/...` path or a `6.11.x` means
 CMake found the wrong Qt: check `Qt6Core_DIR` in `build-basecamp/CMakeCache.txt`
-and that `/tmp/Qt/6.9.2/macos/lib/cmake/Qt6/Qt6Config.cmake` exists — a partially
-extracted aqt install has the frameworks but not the CMake config, and CMake
-then silently falls through to the system Qt.
+— it must read `…/logos/Qt/6.9.2/macos/lib/cmake/Qt6Core`, not
+`/opt/homebrew/opt/qt/lib/cmake/Qt6Core` — and that `Qt6Config.cmake` exists at
+all. An incomplete Qt has the frameworks but not the CMake config, and CMake
+then silently falls through to the system Qt. `module/package-basecamp.sh`
+refuses to package a plugin that got this wrong, so the mistake cannot reach the
+committed artefact, but it is cheaper to catch here.
 
 ### The generated glue is committed
 
@@ -224,7 +341,24 @@ the manifest's `author`/`description`/`type`/`category` afterwards, because
 that matters: Basecamp installs a `core` module into its modules directory and a
 `ui` one into its plugins directory, and an unset type lands in neither.
 
-The committed package is `module/agent.lgx` (543 KB, one `darwin-arm64`
+It then refuses to hand back a package with either of the two defects that
+produce a module which installs and loads nowhere, both of which are silent:
+
+```
+  ok    main[darwin-arm64] = agent_plugin.dylib is in the package
+  ok    Qt is referenced through @rpath, version(s): 6.9.2
+```
+
+The first is not what `lgx verify` checks. `verify` compares the contents
+against the manifest's hashes, which a manifest naming a file the package does
+not contain passes perfectly well — the host resolves `main` inside the module
+directory, finds nothing, and logs nothing. This repository shipped that defect
+once, with `main` naming `agent_module_plugin` while the builder emits
+`agent_plugin`. The second catches a plugin built against Homebrew's Qt: it
+fails on the absolute `/opt/homebrew/...` paths before the version even matters,
+because those resolve on the build machine and on no other.
+
+The committed package is `module/agent.lgx` (589 KB, one `darwin-arm64`
 variant). Check it against itself rather than trusting this document:
 
 ```sh
@@ -233,8 +367,11 @@ lgx manifest module/agent.lgx     # type: core, main: agent_plugin.dylib
 ```
 
 At the time of writing that prints root hash
-`e08ea5c6d3ca86f581e1c6b90773690a93152cb5f741b894f2b9271bfdbc0578`. Rebuilding
-the module changes it; none of the checks below depend on the value.
+`bc14ead7f71a5db3bb30e3fc4378071f1a264730970ecd418f4a8bcd117f328e`. Rebuilding
+the module changes it; none of the checks below depend on the value. (The
+archive's own sha256 changes on every repackage even when the root hash does
+not — gzip records a timestamp. The root hash is the one that describes the
+contents.)
 
 ## Installing it into Basecamp
 
@@ -271,25 +408,62 @@ stop being built.
 
 ```sh
 SDK=$HOME/logos/src/logos-cpp-sdk
-QT=/tmp/Qt/6.9.2/macos
+QT=$HOME/logos/Qt/6.9.2/macos
 APP=/Applications/LogosBasecamp.app
+# An array, not a string: zsh does not word-split an unquoted variable, so a
+# string here reaches clang as one enormous argument and every Qt header goes
+# missing at once. "${QTINC[@]}" is right in both shells.
+QTINC=(-F$QT/lib -I$QT/lib/QtCore.framework/Headers
+       -I$QT/lib/QtRemoteObjects.framework/Headers
+       -I$QT/lib/QtNetwork.framework/Headers)
 
 # 1. the Qt plugin contract
 clang++ -std=c++17 -o /tmp/plugin_load_test \
     module/tests/plugin_load_test.cpp $SDK/cpp/logos_types.cpp \
-    -I$SDK/cpp -I$SDK/cpp/generated -I$SDK/core -I/opt/homebrew/include \
-    -F$QT/lib -I$QT/lib/QtCore.framework/Headers \
-    -I$QT/lib/QtRemoteObjects.framework/Headers \
-    -I$QT/lib/QtNetwork.framework/Headers \
+    -I$SDK/cpp -I$SDK/core -I/opt/homebrew/include "${QTINC[@]}" \
     -framework QtCore -framework QtRemoteObjects -framework QtNetwork \
     -Wl,-rpath,$QT/lib
-/tmp/plugin_load_test build-basecamp/modules/agent_plugin.dylib
+# the artefact, not the build tree — install it first, per the section above
+/tmp/plugin_load_test \
+    "$HOME/Library/Application Support/Logos/LogosBasecamp/modules/agent/agent_plugin.dylib"
+```
+
+Harness 2 needs the SDK, because calling the loaded module is the point of it
+and `liblogos_core`'s C API has no "call a method" entry point — a core module
+runs in its own process and is reached over the transport. So build the SDK
+translation units `LogosModule.cmake` compiles into the module itself, minus
+`token_manager.cpp` (which is the trap described below) and plus
+`logos_types.cpp` for the `LogosResult` metatype that crosses the wire. Run
+`moc` over the headers that declare `Q_OBJECT`, and link the lot:
+
+```sh
+mkdir -p /tmp/sdkobj && cd /tmp/sdkobj
+for h in logos_api logos_api_client logos_api_consumer logos_api_provider \
+         module_proxy qt_provider_object; do
+    $QT/libexec/moc $SDK/cpp/$h.h -o moc_$h.cpp -I$SDK/cpp -I$SDK/core
+done
+# module_proxy.cpp and qt_provider_object.cpp #include their own moc output, so
+# `-I.` is what finds it and their moc_*.cpp is not a translation unit of its
+# own — compiling it as one is a duplicate-symbol link error. logos_provider_object.h
+# declares Q_OBJECT but moc emits nothing for it ("No relevant classes found").
+for f in $SDK/cpp/logos_api.cpp $SDK/cpp/logos_api_client.cpp \
+         $SDK/cpp/logos_api_consumer.cpp $SDK/cpp/logos_api_provider.cpp \
+         $SDK/cpp/module_proxy.cpp $SDK/cpp/logos_provider_object.cpp \
+         $SDK/cpp/qt_provider_object.cpp $SDK/cpp/logos_types.cpp \
+         moc_logos_api.cpp moc_logos_api_client.cpp \
+         moc_logos_api_consumer.cpp moc_logos_api_provider.cpp; do
+    clang++ -std=c++17 -c -I. -I$SDK/cpp -I$SDK/core -I/opt/homebrew/include \
+        "${QTINC[@]}" "$f" -o "$(basename ${f%.cpp}).o"
+done
+cd -
 
 # 2. Logos Core, from the installed app
 clang++ -std=c++17 -o /tmp/logos_core_load_test \
-    module/tests/logos_core_load_test.cpp \
-    -I$QT/lib/QtCore.framework/Headers -I$QT/include \
-    -F$QT/lib -framework QtCore -Wl,-rpath,"$APP/Contents/Frameworks"
+    module/tests/logos_core_load_test.cpp /tmp/sdkobj/*.o \
+    -I$SDK/cpp -I$SDK/core -I/opt/homebrew/include "${QTINC[@]}" \
+    -framework QtCore -framework QtRemoteObjects -framework QtNetwork \
+    -Wl,-undefined,dynamic_lookup \
+    -Wl,-rpath,"$APP/Contents/Frameworks"
 
 LOGOS_HOST_PATH="$APP/Contents/MacOS/logos_host" \
 QT_PLUGIN_PATH="$APP/Contents/Resources/qt/plugins" \
@@ -302,8 +476,8 @@ QT_PLUGIN_PATH="$APP/Contents/Resources/qt/plugins" \
 
 Harness 2 links Qt for headers and stubs but adds an rpath pointing at the
 **app's** frameworks, so exactly one QtCore is in the process and it is the one
-the runtime resolves. Two traps, both of which look like a hang rather than an
-error:
+the runtime resolves. Four traps, and the first three look like a hang or a
+permission error rather than a mistake in the build:
 
 - Without a `QCoreApplication` constructed **before** `logos_core_init`, the
   module transport reports `QEventLoop: Cannot be used without QCoreApplication`
@@ -312,6 +486,27 @@ error:
 - Without `LOGOS_HOST_PATH`, the runtime logs `logos_host_qt (or logos_host) not
   found` and `Failed to load module: agent`. Core modules are process-isolated
   and the host binary is what runs them.
+- **`token_manager.cpp` is deliberately absent from that list**, and building it
+  in is the mistake that costs the most time. `TokenManager::instance()` is a
+  singleton, and the capability tokens the harness needs to call the module are
+  the ones `liblogos_core` minted into *its* copy. Compile a second one into
+  the executable and it wins the symbol, starts empty, and every call comes back
+  `ModuleProxy: rejecting unauthorized call to "requestModule" — auth token not
+  recognized`, which reads like a permissions problem and is not. Leaving it out
+  lets `-Wl,-undefined,dynamic_lookup` resolve the singleton to the runtime's,
+  which is what Basecamp gets for free by linking `liblogos_core` rather than
+  the SDK.
+- That same `dynamic_lookup` is what resolves `LogosTransportFactory` and the
+  rest of the transport layer, which the module does not carry either — the
+  host provides them. It is the configuration the plugin itself runs in, not a
+  shortcut around one.
+
+The persistence directory can be left in place between runs. `configure()` may
+be called only once, but only per module *instance*: the flag lives in memory,
+and the runtime starts a fresh `logos_host` for the module on every run, so the
+second `configure()` of the day is the first one that process has seen. Checked
+by running the harness twice against the same `/tmp/agent-persistence` — both
+green.
 
 ## Watching Basecamp itself
 
@@ -333,8 +528,13 @@ module to a loaded one, and harness 2 is that call.
 
 Honest list, in the order that matters:
 
-1. The plugin has to construct and register the skill objects, so that
-   `skills()` answers with something and `invoke()` reaches real code.
+1. The skills need their ports wired from inside the loaded module. This item
+   used to read "the plugin has to construct and register the skill objects";
+   it does now, and the shipped package is the one that does — all 21 are
+   registered and every one dispatches. What remains is narrower and harder:
+   `registerBuiltinSkills` takes `std::function` ports that cannot cross a
+   plugin boundary, so what a reviewer sees is a full card whose entries refuse
+   for want of a transport rather than for want of a skill.
 2. The owner channel has to be driven from inside the loaded module rather than
    from tests, so that "the owner can interact with the agent in real time from
    a separate Logos app instance" is demonstrable.

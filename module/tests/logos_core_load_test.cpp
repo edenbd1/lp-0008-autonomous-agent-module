@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT OR Apache-2.0
  *
- * Does Logos Core itself load the agent module?
+ * Does Logos Core itself load the agent module — and does the module it loaded
+ * offer its skills?
  *
  * `plugin_load_test.cpp` proves the plugin satisfies the Qt side of the
  * contract. This proves the other side: it drives the real `liblogos_core`
@@ -20,14 +21,41 @@
  * this exact call when the user enables it, so this is that step, not an
  * imitation of it.
  *
- * `liblogos_core` is dlopen'd from the installed app rather than linked, so
- * what runs is the shipped binary, not a rebuild of it. The one thing this
- * harness must bring itself is a QCoreApplication: the runtime assumes the
- * host application already created one before `logos_core_init` (Logos
- * Basecamp constructs its QApplication first), and without it the module
- * transport's event loop cannot start and the load hangs. So the harness
- * links the app's *own* bundled QtCore — one QtCore in the process, the same
- * one the runtime resolves through @rpath.
+ * Then it keeps going, because "loaded" was never the claim worth making. A
+ * module that loads and answers `skills()` with `[]` is worse than one that
+ * fails to load: an empty Agent Card is a valid Agent Card, so a reviewer sees
+ * a module that installed, enabled, and does nothing, with no error anywhere
+ * to say why. That is the state this repository shipped in until the skills
+ * were registered, and this harness asserted it — honestly, and uselessly.
+ * What it asserts now is the thing a reviewer actually wants to know:
+ *
+ *   - the installed manifest's `main` names a file that is really there
+ *     (a `main` naming a file the package does not contain is an invisible
+ *     load failure — the host resolves it, finds nothing, and says nothing);
+ *   - `configure()` and `start()` are accepted across the runtime's own
+ *     transport, not merely in-process;
+ *   - `skills()` lists every one of the module's documented skills, each with
+ *     a parameter schema;
+ *   - `invoke()` reaches every one of them. An unwired port makes a skill
+ *     refuse *as itself* ("no sequencer connection is wired"); only an
+ *     unregistered name is refused by the registry ("no skill named …"). The
+ *     harness asserts both directions, so "dispatched" cannot be confused with
+ *     "swallowed".
+ *
+ * Everything after the load goes over the wire, through `LogosAPI` /
+ * `LogosAPIClient` — the same SDK facade Basecamp's `main.cpp` constructs
+ * (`LogosAPI logosAPI("core", nullptr)`) and the only way to reach a core
+ * module, which the runtime runs in its own `logos_host` process. So these are
+ * calls into the loaded module, not into a copy of it linked here.
+ *
+ * `liblogos_core` is dlopen'd from the installed app rather than linked for
+ * the C API, so what runs is the shipped binary, not a rebuild of it. The one
+ * thing this harness must bring itself is a QCoreApplication: the runtime
+ * assumes the host application already created one before `logos_core_init`
+ * (Logos Basecamp constructs its QApplication first), and without it the
+ * module transport's event loop cannot start and the load hangs. So the
+ * harness links the app's *own* bundled QtCore — one QtCore in the process,
+ * the same one the runtime resolves through @rpath.
  *
  * Usage:
  *   logos_core_load_test <liblogos_core> <embedded-modules-dir>
@@ -37,6 +65,19 @@
  */
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QString>
+#include <QStringList>
+#include <QVariant>
+
+#include "logos_api.h"
+#include "logos_api_client.h"
+#include "logos_types.h"
 
 #include <dlfcn.h>
 #include <stdbool.h>
@@ -47,12 +88,17 @@
 
 static int failures = 0;
 
-static void check(int ok, const char *what)
+static void check(bool ok, const QString &what)
 {
-    fprintf(stderr, "  %s  %s\n", ok ? "ok  " : "FAIL", what);
+    fprintf(stderr, "  %s  %s\n", ok ? "ok  " : "FAIL", qPrintable(what));
     if (!ok) {
         ++failures;
     }
+}
+
+static void note(const QString &what)
+{
+    fprintf(stderr, "  <-    %s\n", qPrintable(what));
 }
 
 /* The list getters hand back a malloc'd, NULL-terminated char* array. */
@@ -91,6 +137,129 @@ static Fn must_sym(void *lib, const char *name)
     return reinterpret_cast<Fn>(sym);
 }
 
+namespace {
+
+/// Every skill this module ships with, spelled out rather than counted, so a
+/// skill that stops being registered fails this harness *by name*. Same table
+/// as `plugin_load_test.cpp`, asserted here against the module the *runtime*
+/// loaded rather than the one `QPluginLoader` opened.
+const char *const kSkills[] = {
+    "messaging.send",      "messaging.join",   "messaging.create_group",
+    "storage.upload",      "storage.download", "storage.list",
+    "storage.share",       "wallet.balance",   "wallet.send",
+    "wallet.history",      "program.query",    "program.call",
+    "program.deploy",      "agent.card",       "agent.discover",
+    "agent.task",          "agent.subscribe",  "agent.cancel",
+    "meta.status",         "meta.configure",   "agent.evaluate_task",
+};
+constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
+
+/// The registry's refusal, spelled exactly as `AgentModuleImpl::invoke` emits
+/// it — `no skill named '<name>' is registered`. Its absence is what "the call
+/// reached the skill" means: a skill that refuses because nobody wired its port
+/// answers as itself and never produces this. Matching a phrase that the module
+/// does not actually emit would make the dispatch check below pass for free,
+/// which is why the control at the end asserts this string *does* appear for a
+/// name nobody registered.
+const char *const kUnregistered = "no skill named";
+
+/// The installed layout is the package flattened: `manifest.json` beside the
+/// binary it names, plus a `variant` file saying which variant was unpacked.
+/// `main` is resolved by the host against that directory, and a `main` that
+/// names a file which is not there fails the load before Qt is ever reached —
+/// silently, because nothing logs a filename it could not find.
+void checkInstalledManifest(const QString &moduleDir)
+{
+    QFile manifestFile(moduleDir + "/manifest.json");
+    if (!manifestFile.open(QIODevice::ReadOnly)) {
+        check(false, "the installed module directory has a manifest.json: "
+                         + moduleDir);
+        return;
+    }
+
+    QJsonParseError parseError{};
+    const QJsonDocument doc =
+        QJsonDocument::fromJson(manifestFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        check(false, "the installed manifest.json parses: " + parseError.errorString());
+        return;
+    }
+    const QJsonObject manifest = doc.object();
+
+    // Which variant was installed. The `variant` file is what the host reads;
+    // falling back to the sole key keeps the check meaningful on a package
+    // unpacked by hand without writing it.
+    QString variant;
+    QFile variantFile(moduleDir + "/variant");
+    if (variantFile.open(QIODevice::ReadOnly)) {
+        variant = QString::fromUtf8(variantFile.readAll()).trimmed();
+    }
+    const QJsonObject mains = manifest.value("main").toObject();
+    if (variant.isEmpty() && mains.size() == 1) {
+        variant = mains.keys().first();
+    }
+
+    check(!variant.isEmpty(), "the installed module names the variant it is");
+    if (variant.isEmpty()) {
+        return;
+    }
+
+    const QString main = mains.value(variant).toString();
+    note(QStringLiteral("installed manifest: main[%1] = %2")
+             .arg(variant, main.isEmpty() ? QStringLiteral("(unset)") : main));
+    check(!main.isEmpty(),
+          QStringLiteral("the manifest declares a `main` for %1").arg(variant));
+    if (main.isEmpty()) {
+        return;
+    }
+
+    // The whole point: the name in the manifest, against the directory as it
+    // actually is. `agent_module_plugin` vs `agent_plugin` is one character
+    // class apart and costs the entire module.
+    const QFileInfo mainFile(moduleDir + "/" + main);
+    check(mainFile.isFile(),
+          QStringLiteral("`main` (%1) names a file that is really in the module "
+                         "directory")
+              .arg(main));
+
+    // And that the metadata the host reads before opening the binary agrees
+    // with it — modulo the extension, which the manifest carries and
+    // metadata.json does not.
+    QFile metaFile(moduleDir + "/metadata.json");
+    if (metaFile.open(QIODevice::ReadOnly)) {
+        const QJsonObject meta =
+            QJsonDocument::fromJson(metaFile.readAll()).object();
+        const QString declared = meta.value("main").toString();
+        check(!declared.isEmpty()
+                  && (declared == main
+                      || main.startsWith(declared + QLatin1Char('.'))),
+              QStringLiteral("metadata.json's `main` (%1) agrees with the "
+                             "manifest's (%2)")
+                  .arg(declared.isEmpty() ? QStringLiteral("(unset)") : declared,
+                       main));
+    }
+}
+
+/// A `LogosResult` that came back across the transport, reduced to a bool and
+/// a reason. Returned as a QVariant carrying the struct; a QVariant that is
+/// not one means the call never got there.
+bool resultOk(const QVariant &value, QString *why)
+{
+    if (!value.canConvert<LogosResult>()) {
+        *why = QStringLiteral("no LogosResult came back (got %1)")
+                   .arg(QString::fromUtf8(value.typeName() ? value.typeName()
+                                                           : "nothing"));
+        return false;
+    }
+    const LogosResult result = value.value<LogosResult>();
+    if (!result.success) {
+        *why = result.error.toString();
+    }
+    return result.success;
+}
+
+} // namespace
+
 int main(int argc, char **argv)
 {
     if (argc < 6) {
@@ -119,7 +288,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "  FAIL  dlopen(%s): %s\n", libPath, dlerror());
         return 1;
     }
-    check(1, "the app's liblogos_core loads");
+    check(true, "the app's liblogos_core loads");
 
     auto core_init = must_sym<void (*)(int, char **)>(lib, "logos_core_init");
     auto core_add_modules_dir = must_sym<void (*)(const char *)>(lib, "logos_core_add_modules_dir");
@@ -129,7 +298,7 @@ int main(int argc, char **argv)
     auto core_known = must_sym<char **(*)()>(lib, "logos_core_get_known_modules");
     auto core_loaded = must_sym<char **(*)()>(lib, "logos_core_get_loaded_modules");
     auto core_load = must_sym<int (*)(const char *, bool)>(lib, "logos_core_load_module");
-    check(1, "it exports the module-loading C API");
+    check(true, "it exports the module-loading C API");
 
     char *fakeArgv[] = {(char *)"logos_core_load_test", NULL};
     core_init(1, fakeArgv);
@@ -138,12 +307,18 @@ int main(int argc, char **argv)
     core_set_persistence(persistence);
     core_set_policy(NULL);
     core_start();
-    check(1, "the core starts with both module directories added");
+    check(true, "the core starts with both module directories added");
 
     char **known = core_known();
     show("known modules", known);
     check(contains(known, moduleName),
           "the runtime discovers the module in the user modules directory");
+
+    // What the host is about to resolve, checked against what is on disk. This
+    // runs before the load so a `main` that names nothing is reported as that,
+    // rather than as a load which failed for no stated reason.
+    checkInstalledManifest(QString::fromUtf8(userDir) + "/"
+                           + QString::fromUtf8(moduleName));
 
     int loaded = core_load(moduleName, true);
     check(loaded == 1, "logos_core_load_module() reports success");
@@ -152,6 +327,139 @@ int main(int argc, char **argv)
     show("loaded modules", running);
     check(contains(running, moduleName),
           "the module is in the runtime's loaded set");
+
+    // ---- the loaded module, over the runtime's own transport ---------------
+    //
+    // A core module runs in its own `logos_host` process, so there is no
+    // in-process pointer to call and nothing here can accidentally be talking
+    // to a locally linked copy. `LogosAPI("core")` is what Basecamp's main.cpp
+    // constructs; `getClient` fetches a capability token for the target from
+    // `capability_module` on the first call.
+    const QString target = QString::fromUtf8(moduleName);
+    LogosAPI logosAPI(QStringLiteral("core"));
+    LogosAPIClient *client = logosAPI.getClient(target);
+    check(client != nullptr, "the SDK hands out a client for the loaded module");
+    if (!client) {
+        fprintf(stderr, "\nSOME CHECKS FAILED (%d failure(s))\n", failures);
+        fflush(stderr);
+        _exit(1);
+    }
+
+    // `configure` binds the agent to an owner and to the 32-byte policy anchor,
+    // exactly once. Without it `start()` refuses, and without `start()` the
+    // module answers `skills()` with `{"error":"agent is not started"}` rather
+    // than a card — deliberately, so an unstarted agent is never mistaken for
+    // an empty one.
+    QString why;
+    const QVariant configured = client->invokeRemoteMethod(
+        target, QStringLiteral("configure"),
+        QVariant(QStringLiteral("0x00000000000000000000000000000000000000a9")),
+        QVariant(QString(64, QLatin1Char('a'))));
+    check(resultOk(configured, &why),
+          QStringLiteral("configure() is accepted across the transport%1")
+              .arg(why.isEmpty() ? QString() : QStringLiteral(": ") + why));
+
+    why.clear();
+    const QVariant started = client->invokeRemoteMethod(
+        target, QStringLiteral("start"), QVariantList());
+    check(resultOk(started, &why),
+          QStringLiteral("start() is accepted across the transport%1")
+              .arg(why.isEmpty() ? QString() : QStringLiteral(": ") + why));
+
+    // ---- the card ---------------------------------------------------------
+    const QVariant card = client->invokeRemoteMethod(
+        target, QStringLiteral("skills"), QVariantList());
+    const QJsonDocument cardDoc = QJsonDocument::fromJson(card.toString().toUtf8());
+    check(cardDoc.isArray(),
+          QStringLiteral("skills() answers with a JSON array, not an error "
+                         "object: %1")
+              .arg(card.toString().left(120)));
+
+    const QJsonArray entries = cardDoc.array();
+    note(QStringLiteral("skills(): %1 entries").arg(entries.size()));
+
+    QStringList listed;
+    QStringList unschemad;
+    for (const QJsonValue &entry : entries) {
+        const QJsonObject skill = entry.toObject();
+        const QString name = skill.value("name").toString();
+        listed << name;
+        // A skill that answers with a name and nothing callable is a card entry
+        // a caller cannot act on; `skills()` records that as an `error` key
+        // rather than dropping the skill, so check for the schema itself.
+        if (!skill.value("parameters").isObject()) {
+            unschemad << name;
+        }
+    }
+
+    QStringList missing;
+    for (int i = 0; i < kSkillCount; ++i) {
+        if (!listed.contains(QString::fromUtf8(kSkills[i]))) {
+            missing << QString::fromUtf8(kSkills[i]);
+        }
+    }
+    check(missing.isEmpty(),
+          missing.isEmpty()
+              ? QStringLiteral("the loaded module lists all %1 documented skills")
+                    .arg(kSkillCount)
+              : QStringLiteral("the loaded module is missing %1 skill(s): %2")
+                    .arg(missing.size())
+                    .arg(missing.join(QStringLiteral(", "))));
+    check(entries.size() == kSkillCount,
+          QStringLiteral("it lists exactly %1 — no more, no fewer (got %2)")
+              .arg(kSkillCount)
+              .arg(entries.size()));
+    // The count is in the message on purpose: "every listed skill carries a
+    // schema" is also true of a card with nothing on it, and a check that
+    // passes for an empty answer is the failure mode this whole harness exists
+    // to catch.
+    check(unschemad.isEmpty(),
+          unschemad.isEmpty()
+              ? QStringLiteral("every listed skill carries a parameter schema "
+                               "(%1 checked)")
+                    .arg(entries.size())
+              : QStringLiteral("%1 skill(s) list no parameter schema: %2")
+                    .arg(unschemad.size())
+                    .arg(unschemad.join(QStringLiteral(", "))));
+
+    // ---- and that the card is not a list of names nothing answers to -------
+    //
+    // Called with `{}`: most of these refuse, because a module loaded as a
+    // plugin has no way to wire a `std::function` port across the boundary.
+    // That refusal is the skill's own and is the proof the call arrived. Only
+    // the registry's "no skill named … is registered" means it did not.
+    QStringList undispatched;
+    for (int i = 0; i < kSkillCount; ++i) {
+        const QString name = QString::fromUtf8(kSkills[i]);
+        const QString answer =
+            client
+                ->invokeRemoteMethod(target, QStringLiteral("invoke"),
+                                     QVariant(name), QVariant(QStringLiteral("{}")))
+                .toString();
+        if (answer.isEmpty() || answer.contains(QString::fromUtf8(kUnregistered))) {
+            undispatched << name;
+        }
+    }
+    check(undispatched.isEmpty(),
+          undispatched.isEmpty()
+              ? QStringLiteral("invoke() dispatches to every one of the %1")
+                    .arg(kSkillCount)
+              : QStringLiteral("invoke() reached no skill for %1 name(s): %2")
+                    .arg(undispatched.size())
+                    .arg(undispatched.join(QStringLiteral(", "))));
+
+    // The control. Without it, "dispatched" would only mean "answered
+    // something", and a module that answered everything the same way would
+    // pass the check above.
+    const QString stranger =
+        client
+            ->invokeRemoteMethod(target, QStringLiteral("invoke"),
+                                 QVariant(QStringLiteral("wallet.definitely_not")),
+                                 QVariant(QStringLiteral("{}")))
+            .toString();
+    check(stranger.contains(QString::fromUtf8(kUnregistered)),
+          QStringLiteral("a name nobody registered is refused as unregistered: %1")
+              .arg(stranger.left(120)));
 
     fprintf(stderr, "\n%s (%d failure(s))\n",
             failures ? "SOME CHECKS FAILED" : "all steps confirmed", failures);
