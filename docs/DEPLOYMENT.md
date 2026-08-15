@@ -53,6 +53,16 @@ cargo risczero build --manifest-path crates/agent-verifier-spel/methods/guest/Ca
 # ImageID: 26ed15808f7b27d5d51096cbaf72730fac1b86698c01dec1144bd1be0bad50be
 ```
 
+**Editing a comment in the guest changes the ImageID.** Not a figure of speech:
+`#[lez_program]` generates a `panic!` for a refused instruction, and a Rust panic
+carries `core::panic::Location` — file, line, column — into the binary. The
+executor prints it, `agent_verifier.rs:176:1`, which is the line the macro sits
+on. Add a line to the header comment and that becomes 177, the ELF changes, the
+ImageID changes, every policy PDA moves, and the committed binary no longer
+hashes to the deploy transaction. The guest source is frozen between
+deployments for that reason, and this note exists because it was nearly
+discovered the expensive way.
+
 ### The second program
 
 `spend` moves no balance itself. LEZ rule 5 (`UnauthorizedBalanceDecrease`)
