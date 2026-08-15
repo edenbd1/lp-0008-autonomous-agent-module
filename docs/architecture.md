@@ -363,8 +363,8 @@ exactly that in [`skills.md`](skills.md), never as "works".
 
 ```mermaid
 flowchart LR
-    G["guest crate<br/>(own workspace)"] -->|cargo risczero build| ELF["agent_verifier.bin<br/>ImageID 26ed1580…"]
-    ELF -->|wallet deploy-program| TX["deploy tx 8c87cc9b…<br/>= SHA256(u32le(len) ‖ bytes)"]
+    G["guest crate<br/>(own workspace)"] -->|cargo risczero build| ELF["agent_verifier.bin<br/>ImageID: see DEPLOYMENT.md"]
+    ELF -->|wallet deploy-program| TX["deploy tx<br/>= SHA256(u32le(len) ‖ bytes)"]
     ELF -->|committed| ART["artifacts/programs/"]
     ART -->|demo.sh recomputes| TX
     IDL["idl/agent_verifier.idl.json"] -->|spel --idl| CALL["create_policy / spend"]
@@ -375,6 +375,14 @@ committed binary hashes to exactly its own deployment — which is what lets
 `scripts/demo.sh` prove, from a clean clone with no keys and no funded account,
 that the program on chain is the program in this repository. Deployment is
 idempotent for the same reason.
+
+Neither the ImageID nor the deploy hash is written into that diagram. Both move
+on every guest rebuild, and this diagram carried a pair from two deployments ago
+while claiming to describe the build that produces the shipped binary — a
+picture of a topology that was right and of a program that was gone.
+[`docs/DEPLOYMENT.md`](DEPLOYMENT.md) records them once, and
+`scripts/verify-deployment.sh` is what checks that the record still matches the
+bytes and the chain.
 
 `vendor/spel` is a pinned copy of the SPEL framework repinned to LEZ v0.2.4
 (`47eba25`); the published spel releases lag the testnet, so the framework types

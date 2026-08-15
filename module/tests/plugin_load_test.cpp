@@ -173,13 +173,22 @@ int main(int argc, char **argv)
 
     // ---- the module's real behaviour, through callMethod ------------------
     const QString owner = QStringLiteral("lez1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
-    // A real anchored policy hash — the blockchain agent's, from
-    // artifacts/anchored.tsv under the current program 8c87cc9b…. Any 64-hex
-    // string exercises the same path, but using the live one means a reader who
-    // greps for it lands on the policy account this module would actually
-    // configure against, rather than on a deploy transaction that never was one.
+    // The blockchain agent's account id, which is the 32-byte seed the current
+    // program derives its policy account from — `PDA(program, ["agent-policy/v1",
+    // agent_id])`. Read it out of artifacts/agents.tsv (`agent_id`, base58
+    // A7UBoMbSo…) rather than out of this comment.
+    //
+    // Any 64-hex string exercises the same path. Using a live one means a reader
+    // who greps for it lands on something the chain really holds — but it also
+    // means this constant goes stale on a redeploy, and it did: it used to be a
+    // policy hash from `artifacts/anchored.tsv` "under the current program
+    // 8c87cc9b…", two programs after that stopped being the current program, and
+    // under a scheme where the limits were part of the seed at all. Nothing here
+    // could fail on that, because `configure()` only checks the shape.
+    // `scripts/verify-deployment.sh` is what checks the identifiers against the
+    // chain; this is a well-formed input, and that is all it has to be.
     const QString policy =
-        QStringLiteral("1a317aae885143298b3b033539273a02ff9c0c4f55e586f979a22b15c6e7c356");
+        QStringLiteral("8761681eb6bdf2cc7bb2341a58b9c3213f3a0112c2195aa634db12c780c0fa90");
 
     QVariant status = provider->callMethod(QStringLiteral("status"), {});
     note("status(): " + status.toString());

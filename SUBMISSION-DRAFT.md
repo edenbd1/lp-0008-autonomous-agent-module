@@ -28,9 +28,9 @@
 >
 > Resolved while this was written, and no longer blockers: the
 > `spend`-does-not-bind-the-policy defect and the caller-supplied period total are
-> both fixed, redeployed and re-anchored; a **third settlement has landed under the
-> fixed program** (`5a488f28…`, block 8677), so the anchors and the settlement
-> evidence are now under the *same* program; CI went green after the `<cstdint>`
+> both fixed, redeployed and re-anchored; **two settlements have landed under the
+> shipped program** (`4e3a3454…` block 8740, `7cad4fbd…` block 8747), so the
+> anchors and the settlement evidence are now under the *same* program; CI went green after the `<cstdint>`
 > fix; the Agent Card is signed (BIP-340 Schnorr, `scripts/sign-agent-card.py`,
 > which self-verifies before emitting); `docs/a2a-binding.md` specifies the
 > transport binding; and `docs/DEPLOYMENT.md` has been regenerated.
@@ -358,14 +358,23 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   could not produce for most of its life. Verified independently for this document
   against `https://testnet.lez.logos.co`:
 
-  | | first | second | third |
-  |---|---|---|---|
-  | settlement tx | `c45d3f2441cf1d19d69ae4cc70cfd50308fc2f0ed89ec40310c5ea2a94cf7275` | `8d7aba60786d812d6e596624518a38813e7b9f4573d20b6efe802ac4bb7502fb` | `5a488f287857e7f77204547360c710b295bfd1a269ea26f89bb34021aa00c554` |
-  | block (from `getTransaction`) | 8605 | 8624 | 8677 |
-  | size | 270,566 bytes | 270,566 bytes | 270,718 bytes |
-  | policy program | superseded | superseded | **current** |
-  | skill / price | `storage.upload` at 25 LEZ | same | same |
-  | payee balance (`getAccount`) | 0 → 25 | 25 → 50 | 50 → 75 |
+  | | first | second |
+  |---|---|---|
+  | settlement tx | `4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1` | `7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019` |
+  | block (from `getTransaction`) | 8740 | 8747 |
+  | size | 271,471 bytes | 271,471 bytes |
+  | policy program | **shipped** | **shipped** |
+  | skill / price | `storage.upload` at 25 LEZ | same |
+  | payee balance (`getAccount`) | 45 → 70 | 70 → 95 |
+
+  Both rows are the `settlement_tx` column of
+  [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv) and both are checked against
+  the chain by `./scripts/verify-deployment.sh`. Four earlier settlements exist
+  under the two superseded programs — `c45d3f24…` and `8d7aba60…` (blocks 8605,
+  8624), `5a488f28…` and `f780df62…` (blocks 8677, 8686). They are still on
+  chain and they all moved balance; what they do not do is say anything about the
+  binary this repository ships, and this table listed one of them as "current"
+  after it had stopped being so.
 
   Each transaction's bytes were checked to be **inside** the block it names and
   **absent** from both adjacent blocks, so the block attribution is not taken on the
@@ -653,10 +662,11 @@ failed rather than blaming the wrong one.
   [`artifacts/anchored.tsv`](artifacts/anchored.tsv),
   [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv),
   [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Read the TSVs **by column name**.
-- **Settlements:** `c45d3f24…94cf7275` (block 8605), `8d7aba60…bb7502fb`
-  (block 8624) and `5a488f28…aa00c554` (block 8677, under the current program),
-  payee `5Sa13NyN…dHtjnZ` at balance 75.
-  [explorer](https://explorer.testnet.lez.logos.co/transaction/c45d3f2441cf1d19d69ae4cc70cfd50308fc2f0ed89ec40310c5ea2a94cf7275)
+- **Settlements:** `4e3a3454…a490ddb1` (block 8740) and `7cad4fbd…7168f019`
+  (block 8747), both under the shipped program, payee `5Sa13NyN…dHtjnZ` going
+  45 → 70 → 95. Read them from
+  [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv) rather than from this line.
+  [explorer](https://explorer.testnet.lez.logos.co/transaction/4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1)
   — note the explorer indexes roughly an hour and three quarters behind the
   sequencer, so a recent hash reads "not found" there while `getTransaction`
   already returns it. The RPC is the immediate source of truth.
