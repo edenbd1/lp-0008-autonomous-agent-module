@@ -12,17 +12,51 @@
 //! So the policy is anchored the way LP-0002 anchors a member set: the policy
 //! account's *address* is derived from the policy itself. Changing a limit
 //! changes the address, which resolves to an account nobody created, and the
-//! spend is rejected before the program body runs. The agent cannot raise its
-//! own ceiling, because the ceiling is not data it can write — it is the name of
-//! the account it must present.
+//! spend is rejected before the program body runs.
+//!
+//! THAT ALONE IS NOT ENOUGH, AND SAYING IT WAS IS HOW THIS BROKE
+//!
+//! An address that encodes limits stops an agent *editing* its policy. It does
+//! not stop it *anchoring a different one*, and until the deployment that this
+//! comment was written for, nothing did: `create_policy` took the owner as a
+//! caller-supplied 32 bytes and never compared it to the account that signed,
+//! and `spend` never compared the paying account to the agent the policy names.
+//! Both holes were demonstrated against the deployed binary, not argued from the
+//! source: a `create_policy` signed by an agent's own key, naming an invented
+//! owner and `per_tx = u128::MAX`, was accepted, and a `spend` of that agent's
+//! whole balance under it was accepted too. Halt 0 both times.
+//!
+//! So three bindings, not one, are what makes the ceiling a ceiling, and all
+//! three live in the guest because only the guest sees who signed:
+//!
+//! 1. `create_policy` — the signer must BE the owner the policy commits to.
+//! 2. `spend` / `spend_approved` — the paying account must BE the agent it names.
+//! 3. `approve_spend` — the signer must be that same owner.
+//!
+//! Without (1) an attacker anchors a fresh unlimited policy under an owner id it
+//! made up. With (1) but without (2) it anchors one under an owner id it really
+//! controls and points the agent at it. With both but without (3) it signs its
+//! own approvals and walks past the threshold. Each is three lines; any one of
+//! them missing costs the whole property.
 //!
 //! WHAT THE OWNER SIGNS
 //!
 //! An above-threshold spend needs the owner. Rather than a signature the agent
 //! could replay, the approval is a marker account seeded by the *exact* spend it
 //! authorises — recipient, amount, and a nonce. Approving one payment cannot
-//! approve another, and the marker is created with `init`, so it cannot be spent
-//! twice.
+//! approve another. `init` stops the same marker being created twice, and
+//! `spend_approved` stamps the marker's data on the way through, so a marker
+//! that exists is not the same thing as a marker that is still unspent.
+//!
+//! WHERE THE RUNNING TOTAL LIVES
+//!
+//! The per-period limit needs a total, and a total supplied by the caller is not
+//! a limit — this crate previously said the on-chain program "re-derives it
+//! rather than trusting the agent", and the program did no such thing: both
+//! callers passed zero. The total now lives in the policy account's own data,
+//! written by the program that owns that account, and [`SpendPolicy::authorize`]
+//! below is the whole of the decision. The guest is an adapter around it, which
+//! is what makes the tests at the bottom of this file worth reading.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -51,21 +85,145 @@ pub struct SpendPolicy {
     pub period_blocks: u64,
 }
 
+/// The running total, and the period it belongs to.
+///
+/// This is the entire contents of the policy account's data. It is written by
+/// the policy program, which owns that account — LEZ rule 6
+/// (`UnauthorizedDataModification`) is what stops anyone else touching it — and
+/// read back on the next spend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpendLedger {
+    /// First block of the period this total covers. Always a multiple of
+    /// `period_blocks`.
+    pub window_start: u64,
+    /// Total moved unattended since `window_start`.
+    pub spent: u128,
+}
+
+/// Why a spend was refused. Each maps to one on-chain error code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpendRefusal {
+    /// `period_blocks` is zero, so there is no period to align to.
+    PeriodZero,
+    /// The declared window does not start on a period boundary. Unaligned
+    /// windows would let the agent slide the window forward one block at a time
+    /// and never accumulate anything.
+    WindowMisaligned,
+    /// The declared window is older than the one the ledger already records —
+    /// an attempt to spend against a period that has already closed.
+    WindowRegressed,
+    /// One transfer over the per-transaction limit.
+    OverPerTx,
+    /// The period total would pass the per-period limit.
+    OverPerPeriod,
+}
+
 impl SpendPolicy {
-    /// Is this spend inside the autonomous envelope?
+    /// The period containing `block`: the largest multiple of `period_blocks`
+    /// that is not greater than it.
     ///
-    /// `spent_this_period` is what the agent has already moved in the current
-    /// window. The caller supplies it; the on-chain program re-derives it rather
-    /// than trusting the agent, which is why this is a pure function here.
-    ///
-    /// That split is also the limit of what this crate can be tested for. Nothing
-    /// in here accumulates: the running total, and the block window it resets on,
-    /// live in the guest. So the unit tests below can only show that the
-    /// comparison is right for a total handed to it — they cannot show that the
-    /// total handed to it is right.
+    /// The chain has no clock a program can read — `ProgramInput` carries the
+    /// program id, the caller, the pre-states and the instruction, and nothing
+    /// else — so the *caller* names the period and the guest makes the naming
+    /// binding by refusing anything unaligned and pinning the transaction's
+    /// block validity window to exactly that period. A caller that names a later
+    /// period gets a transaction that no block in this period will accept; one
+    /// that names an earlier period is refused by [`SpendPolicy::authorize`].
+    /// Neither can reset the total early, which is the only thing the window has
+    /// to prevent.
     #[must_use]
-    pub fn is_autonomous(&self, amount: u128, spent_this_period: u128) -> bool {
-        amount <= self.per_tx && spent_this_period.saturating_add(amount) <= self.per_period
+    pub fn window_start_for(&self, block: u64) -> u64 {
+        if self.period_blocks == 0 {
+            return 0;
+        }
+        (block / self.period_blocks) * self.period_blocks
+    }
+
+    /// The block range a spend declared in `window_start` may be included in:
+    /// `[window_start, window_start + period_blocks)`.
+    #[must_use]
+    pub fn window_bounds(&self, window_start: u64) -> Option<(u64, u64)> {
+        let end = window_start.checked_add(self.period_blocks)?;
+        Some((window_start, end))
+    }
+
+    /// May the agent move `amount` unattended, given what it has already moved?
+    ///
+    /// Returns the ledger to write back on success. This is the whole decision:
+    /// the guest re-derives the policy hash, checks who signed, and then calls
+    /// this — so what the tests below cover is what the chain enforces, not a
+    /// comparison performed on a number the agent chose.
+    pub fn authorize(
+        &self,
+        ledger: &SpendLedger,
+        window_start: u64,
+        amount: u128,
+    ) -> Result<SpendLedger, SpendRefusal> {
+        if self.period_blocks == 0 {
+            return Err(SpendRefusal::PeriodZero);
+        }
+        if window_start % self.period_blocks != 0 {
+            return Err(SpendRefusal::WindowMisaligned);
+        }
+        if window_start < ledger.window_start {
+            return Err(SpendRefusal::WindowRegressed);
+        }
+        // A later window is a fresh budget; the same window continues the one
+        // already recorded.
+        let spent = if window_start == ledger.window_start {
+            ledger.spent
+        } else {
+            0
+        };
+        if amount > self.per_tx {
+            return Err(SpendRefusal::OverPerTx);
+        }
+        // Saturating, so a total near the top of the range cannot wrap into
+        // "plenty left".
+        let total = spent.saturating_add(amount);
+        if total > self.per_period {
+            return Err(SpendRefusal::OverPerPeriod);
+        }
+        Ok(SpendLedger {
+            window_start,
+            spent: total,
+        })
+    }
+}
+
+/// The policy account's data was not written by this program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MalformedLedger;
+
+impl SpendLedger {
+    /// `window_start` little-endian, then `spent` little-endian.
+    pub const ENCODED_LEN: usize = 24;
+
+    /// Decode the policy account's data. Empty data is a policy that has been
+    /// anchored and never spent against — `create_policy` writes nothing.
+    pub fn decode(data: &[u8]) -> Result<Self, MalformedLedger> {
+        if data.is_empty() {
+            return Ok(Self::default());
+        }
+        if data.len() != Self::ENCODED_LEN {
+            return Err(MalformedLedger);
+        }
+        let mut w = [0u8; 8];
+        w.copy_from_slice(&data[..8]);
+        let mut s = [0u8; 16];
+        s.copy_from_slice(&data[8..Self::ENCODED_LEN]);
+        Ok(Self {
+            window_start: u64::from_le_bytes(w),
+            spent: u128::from_le_bytes(s),
+        })
+    }
+
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::ENCODED_LEN] {
+        let mut out = [0u8; Self::ENCODED_LEN];
+        out[..8].copy_from_slice(&self.window_start.to_le_bytes());
+        out[8..].copy_from_slice(&self.spent.to_le_bytes());
+        out
     }
 }
 
@@ -121,20 +279,27 @@ mod tests {
 
     // WHAT THESE TESTS DO NOT COVER
     //
-    // Two of the properties the design leans on are out of reach from here, and
-    // the tests below should not be read as covering them.
+    // The accumulation these tests drive is the accumulation the chain performs:
+    // `authorize` returns the ledger the guest writes into the policy account,
+    // and the guest does nothing to it but encode it. What is still out of reach
+    // from here is everything about *who is asking* — that the signer is the
+    // owner the policy names, that the payer is the agent it names, that the
+    // policy account was created by this program and not merely funded at the
+    // right address. Those are checks on account metadata, they are in the
+    // guest, and only an on-chain run reaches them.
     //
-    // 1. "A per-transaction cap is drained by repetition." `is_autonomous` takes
-    //    `spent_this_period` as a parameter and this crate never accumulates
-    //    anything, so that case is covered here as arithmetic only: given a total,
-    //    the comparison is right. Whether the total is the real sum over the real
-    //    window is the guest's job, and only a guest-level test reaches it.
+    // Two more, likewise on-chain:
     //
-    // 2. "An approval cannot be spent twice." The marker names one spend, which is
-    //    what `compute_approval_marker` is tested for — but single use comes from
-    //    creating that account with `init`, so the second attempt fails at account
-    //    creation. That is an on-chain property; no unit test in this crate can
-    //    reach it.
+    // 1. "A declared period cannot be a future one." That is enforced by the
+    //    block validity window the guest pins to the transaction, which the
+    //    state machine checks (`OutOfValidityWindow`). `window_start_for` and
+    //    `window_bounds` are tested here as arithmetic; the enforcement is not
+    //    arithmetic.
+    //
+    // 2. "An approval cannot be spent twice." The marker names one spend, which
+    //    is what `compute_approval_marker` is tested for. Single use comes from
+    //    `init` refusing to create the marker twice and from `spend_approved`
+    //    stamping it on the way through — both on-chain properties.
 
     const OWNER: [u8; 32] = [1; 32];
     const AGENT: [u8; 32] = [2; 32];
@@ -142,6 +307,11 @@ mod tests {
 
     fn policy() -> SpendPolicy {
         SpendPolicy { per_tx: 100, per_period: 250, period_blocks: 1000 }
+    }
+
+    /// The ledger as it is when a policy has just been anchored.
+    fn fresh() -> SpendLedger {
+        SpendLedger::decode(&[]).expect("empty data is a fresh ledger")
     }
 
     /// SHA-256 over `separator || parts…`, spelled out so a test can ask what a
@@ -158,29 +328,106 @@ mod tests {
     }
 
     #[test]
-    fn a_small_spend_with_room_left_is_autonomous() {
-        assert!(policy().is_autonomous(100, 0));
-        assert!(policy().is_autonomous(50, 200));
+    fn a_small_spend_with_room_left_is_allowed() {
+        let after = policy().authorize(&fresh(), 1000, 100).expect("inside the envelope");
+        assert_eq!(after, SpendLedger { window_start: 1000, spent: 100 });
     }
 
     #[test]
     fn a_spend_over_the_per_transaction_limit_needs_the_owner() {
-        assert!(!policy().is_autonomous(101, 0));
+        assert_eq!(
+            policy().authorize(&fresh(), 1000, 101),
+            Err(SpendRefusal::OverPerTx)
+        );
     }
 
     #[test]
-    fn repetition_under_the_per_transaction_limit_still_hits_the_period_cap() {
+    fn repetition_under_the_per_transaction_limit_hits_the_period_cap() {
         // The reason a per-transaction limit alone is not a limit: three spends
-        // of 100 are each individually allowed, and together exceed 250.
-        assert!(policy().is_autonomous(100, 0));
-        assert!(policy().is_autonomous(100, 100));
-        assert!(!policy().is_autonomous(100, 200));
+        // of 100 are each individually allowed, and together exceed 250. The
+        // total is not handed in — it is carried from one call to the next, the
+        // way the policy account carries it from one transaction to the next.
+        let p = policy();
+        let l = p.authorize(&fresh(), 1000, 100).expect("first");
+        let l = p.authorize(&l, 1000, 100).expect("second");
+        assert_eq!(l.spent, 200);
+        assert_eq!(p.authorize(&l, 1000, 100), Err(SpendRefusal::OverPerPeriod));
+        // And the one that fits still does.
+        assert_eq!(p.authorize(&l, 1000, 50).expect("third").spent, 250);
+    }
+
+    #[test]
+    fn the_next_period_starts_the_total_again() {
+        let p = policy();
+        let spent_out = SpendLedger { window_start: 1000, spent: 250 };
+        assert_eq!(p.authorize(&spent_out, 1000, 1), Err(SpendRefusal::OverPerPeriod));
+        assert_eq!(p.authorize(&spent_out, 2000, 100).expect("new period").spent, 100);
+    }
+
+    #[test]
+    fn an_exhausted_period_cannot_be_reset_by_naming_an_older_one() {
+        // The window the caller names is not free: a *later* one is pinned into
+        // the transaction's block validity window and cannot be reached early,
+        // and an *earlier* one is refused here. Without this an agent that
+        // exhausted period 2000 would replay period 1000 for a fresh 250.
+        let p = policy();
+        let spent_out = SpendLedger { window_start: 2000, spent: 250 };
+        assert_eq!(p.authorize(&spent_out, 1000, 10), Err(SpendRefusal::WindowRegressed));
+    }
+
+    #[test]
+    fn a_window_that_does_not_start_on_a_period_boundary_is_refused() {
+        // Sliding the window forward by one block each time would reset the
+        // budget every block and make the period cap meaningless. Only multiples
+        // of `period_blocks` are windows.
+        let p = policy();
+        assert_eq!(p.authorize(&fresh(), 1001, 10), Err(SpendRefusal::WindowMisaligned));
+        assert_eq!(p.authorize(&fresh(), 1999, 10), Err(SpendRefusal::WindowMisaligned));
+        assert!(p.authorize(&fresh(), 2000, 10).is_ok());
     }
 
     #[test]
     fn the_period_total_cannot_be_overflowed_past_the_cap() {
-        // A hostile `spent_this_period` must not wrap around into "plenty left".
-        assert!(!policy().is_autonomous(1, u128::MAX));
+        // A ledger holding a hostile total must not wrap around into "plenty
+        // left". It cannot be reached through `authorize`, which caps every
+        // total at `per_period` — but the guest decodes this value from account
+        // data, so the arithmetic has to hold for anything 24 bytes can say.
+        let p = policy();
+        let maxed = SpendLedger { window_start: 1000, spent: u128::MAX };
+        assert_eq!(p.authorize(&maxed, 1000, 1), Err(SpendRefusal::OverPerPeriod));
+    }
+
+    #[test]
+    fn a_policy_with_no_period_can_authorise_nothing() {
+        // `create_policy` refuses to anchor one, so this is unreachable on
+        // chain; it is here because the alternative to returning an error is a
+        // division by zero inside the guest.
+        let p = SpendPolicy { per_tx: 100, per_period: 250, period_blocks: 0 };
+        assert_eq!(p.authorize(&fresh(), 0, 1), Err(SpendRefusal::PeriodZero));
+        assert_eq!(p.window_start_for(12345), 0);
+    }
+
+    #[test]
+    fn the_ledger_survives_the_round_trip_through_account_data() {
+        let l = SpendLedger { window_start: 8000, spent: 1234567890123456789 };
+        assert_eq!(SpendLedger::decode(&l.encode()).expect("round trip"), l);
+        // A never-spent policy has empty data, and that is not an error.
+        assert_eq!(SpendLedger::decode(&[]).expect("fresh"), SpendLedger::default());
+        // Anything else was not written by this program.
+        assert!(SpendLedger::decode(&[0u8; 23]).is_err());
+        assert!(SpendLedger::decode(&[0u8; 25]).is_err());
+    }
+
+    #[test]
+    fn the_window_a_block_falls_in_is_the_one_the_chain_will_accept() {
+        let p = policy();
+        assert_eq!(p.window_start_for(8629), 8000);
+        assert_eq!(p.window_start_for(8000), 8000);
+        assert_eq!(p.window_start_for(7999), 7000);
+        // `is_valid_for` on chain is [from, to): the last block of the period is
+        // start + period_blocks - 1, and the exclusive bound is the next period.
+        assert_eq!(p.window_bounds(8000), Some((8000, 9000)));
+        assert_eq!(p.window_bounds(u64::MAX), None);
     }
 
     #[test]
