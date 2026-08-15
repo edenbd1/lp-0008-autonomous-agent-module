@@ -20,6 +20,8 @@ shadowing another's `wallet.send` is not a hypothetical.
 | Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
 | Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
+| Meta | `meta.status` | answers in the loaded module, including its `durability` block — the task snapshot's path and what the last recovery found |
+| Meta | `meta.configure` | answers in the loaded module. `approval_timeout_ms` and `approval_resend_ms` are the only keys it reports as `effective`: `wallet.send`'s owner wait reads them back on the next above-threshold spend. Everything else it accepts is a local mirror of something anchored on chain, and it says so |
 
 The last two rows are the honest part. The messaging skills are written against
 Delivery's real signatures — `send(contentTopic, payload)`, `subscribe`,

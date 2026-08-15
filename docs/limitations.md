@@ -134,6 +134,43 @@ refresh in place, against freshly fetched chain state, and still did not land.
 Re-importing the signer into a completely fresh wallet home does not help
 either. The gate reads the signer's on-chain state, not the wallet's.
 
+### Exactly where this limitation begins, and what is above it
+
+This is worth drawing a line through, because the module half and the chain half
+of the approval path fail in different places and only one of them is broken.
+
+The prize's Reliability criterion asks that "above-threshold transactions that
+fail to reach the owner for approval are not executed — the agent retries
+notification before timing out and reports the failure". **All three clauses are
+module behaviour, and all three hold in the shipped module.** `wallet.send`
+publishes the request under a correlation id, re-publishes the byte-identical
+request every `approval_resend_ms` until `approval_timeout_ms`, and then answers
+`{"submitted":false,"outcome":"owner_unreachable","attempts":N,…}` without ever
+calling the wallet. Measured through Logos Core's own transport, against the
+packaged module loaded into Basecamp 0.2.2's runtime:
+
+```
+wallet.send above threshold: {"attempts":8,"delivered":8,"outcome":"owner_unreachable",
+  "submitted":false,"error":"the owner did not answer within 1500ms: 8 notification
+  attempt(s), 8 of which the channel accepted; the spend was not submitted", …}
+```
+
+with eight `emitEvent: "ownerApprovalRequested"` lines in the runtime's log
+between the call and the answer.
+
+What is **not** available is the step after a *successful* approval. An approved
+above-threshold spend is submitted through the policy program's `spend_approved`,
+which requires an approval account that only the owner's own `approve_spend`
+signature can create — and that is the transaction the constraint above makes
+impossible for the account that anchored the policy. So the module deliberately
+does not submit on approval either: it reports `{"outcome":"approved",
+"submitted":false}` and names `spend_approved` as the path that would have to
+carry it. That is a refusal to claim a payment that did not happen, not a bug in
+the wait.
+
+In one line: **the agent's side of the approval exchange works and is tested;
+the chain's side is unreachable on testnet today for the reason above.**
+
 Three things that used to be in this file are gone from it, because they were
 fixed rather than reworded: `spend` moved no balance at all, a second
 `create_policy` from one signer was silently dropped, and a repeat A2A

@@ -264,6 +264,64 @@ carrying `per_tx`, `per_period`, `period_blocks` or `policy` is refused outright
 — "an approval names a payment, it cannot change a limit"
 (`owner_channel.cpp:155-158`).
 
+That is the channel a host which **links** this module wires. A host that
+**loads** it as a plugin cannot: an `OwnerChannelPort` is a struct of
+`std::function`s and there is no wire format for one. So the retry discipline
+itself does not live in `OwnerChannel` — it lives on the `wallet.send` path,
+where the decision not to execute is made, and any transport wired underneath
+inherits it:
+
+```mermaid
+flowchart TD
+    SEND["wallet.send<br/><i>amount outside the envelope</i>"]
+    ASK["notify the owner<br/>OwnerApprovalPort::requestApproval"]
+    POLL["poll for an answer<br/>OwnerApprovalPort::pollDecision"]
+    OUT{"answer?"}
+    DONE["approved / denied<br/><b>submitted: false</b>"]
+    GONE["owner_unreachable<br/>attempts, delivered, waited_ms<br/><b>submitted: false</b>"]
+    SEND --> ASK --> POLL --> OUT
+    OUT -- "yes" --> DONE
+    OUT -- "no, and resend interval elapsed" --> ASK
+    OUT -- "no, and the deadline passed" --> GONE
+```
+
+Every exit from that loop leaves the spend unsubmitted; `WalletPort::spend` is
+not reached on any of them. `approval_timeout_ms` and `approval_resend_ms` are
+settable at runtime through `meta.configure`, and are the only two keys that
+skill reports as `effective` — everything else it accepts is a mirror of
+something anchored on chain.
+
+**The owner channel a loaded plugin actually has** is built out of the runtime's
+own surface, because that is what crosses the boundary: the module emits
+`ownerApprovalRequested(requestJson, attempt, timestamp)` — once per attempt,
+byte-identical, under one correlation id — and the owner answers with the module
+method `approveSpend(requestId, verdict)`. Neither half needs an intermediary
+server, and neither half is Logos Messaging, so this is not yet the "separate
+Logos app instance over Logos Messaging" the Usability criterion asks for. It is
+the notification and answer path the shipped artefact has, and it is exercised
+against Basecamp 0.2.2's runtime in `module/tests/logos_core_load_test.cpp`.
+
+### Pending task state, across a restart
+
+`TaskStore` holds the A2A lifecycle in memory. `TaskPersistence`
+(`module/src/task_persistence.{h,cpp}`) renders it to one file, atomically —
+temp file, flush, rename, flush the parent — and reads it back with three
+outcomes rather than two, so "the file could not be read" is never mistaken for
+"there were no tasks".
+
+`AgentModuleImpl` is what connects them, and that connection is the recent part:
+`onContextReady` opens the snapshot under the host's `instancePersistencePath()`,
+`start` recovers from it, and `invoke` checkpoints whenever the store moved. The
+recovery decision is the load-bearing one — a snapshot that cannot be read
+**refuses the start**, because coming up with an empty task list on top of an
+unreadable one is how a paid task gets paid twice.
+
+Before that connection existed, all 121 assertions in `task_persistence_test`
+passed against a class the plugin never constructed. `meta.status` now carries a
+`durability` block naming the file, the recovery outcome and the count of
+payments the restart could not resolve, so "this agent writes nothing down" and
+"this agent had nothing to write" are distinguishable from outside.
+
 ## Where the A2A layer sits
 
 A2A is deliberately transport-agnostic and deliberately silent about payment.

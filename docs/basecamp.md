@@ -85,9 +85,38 @@ module, which the runtime runs in its own `logos_host` process:
   ok    it lists exactly 21 — no more, no fewer (got 21)
   ok    every listed skill carries a parameter schema (21 checked)
   ok    invoke() dispatches to every one of the 21
+  <-    meta.status durability: {"path":".../agent-persistence/agent/a45bddb77136/tasks.json","recovered_active":0,"recovered_tasks":0,"recovery":"absent","recovery_ran":true,"settled_payments":0,"uncertain_payments":0}
+  ok    the loaded module reports a durability record, not null: it was given a persistence directory and opened a task snapshot in it
+  ok    and the snapshot lives under the persistence base the host set
+  ok    recovery ran before the agent started serving, and reported 'absent'
+  ok    approval_timeout_ms is settable on the running module, and effective: {"effective":true,"key":"approval_timeout_ms","ok":true,"stored":"1500","value":"1500"}
+  ok    approval_resend_ms is settable on the running module, and effective
+  <-    wallet.send above threshold: {"amount":"100","answer_path":true,"attempts":8,"delivered":8,"error":"the owner did not answer within 1500ms: 8 notification attempt(s), 8 of which the channel accepted; the spend was not submitted","ok":false,"outcome":"owner_unreachable","submitted":false, …}
+  ok    an above-threshold spend nobody approved is not submitted by the loaded module
+  ok    and the outcome is the terminal owner-unreachable one, not a fallback to acting alone
+  ok    the notification was retried before the timeout: 8 attempts
+  ok    and the failure is reported against the correlation id the owner was asked under
+  ok    approveSpend is reachable, and refuses a request nobody is waiting on: no spend is waiting on 'spend-nobody-asked': there is nothing here for this answer to release
   ok    a name nobody registered is refused as unregistered: {"error":"no skill named 'wallet.definitely_not' is registered","ok":false}
 all steps confirmed (0 failure(s))
 ```
+
+Two of those lines are the Reliability criteria, and both were previously
+demonstrable only against classes the shipped plugin never constructed:
+
+- `meta.status` reports a **durability** record, which means the host really did
+  hand this module a per-instance directory and the module really did open a
+  task snapshot under it. The negative control is worth running: put a
+  half-written file at that path and the same harness reports
+  `FAIL start() is accepted across the transport: pending task state could not
+  be recovered from …: the snapshot … is truncated or corrupt. Refusing to
+  start with an empty task list on top of a snapshot that could not be read`,
+  followed by `skills(): 0 entries` — the agent serves nothing rather than
+  coming up believing it owes nobody anything. Executed; exit 1, 13 failures.
+- `wallet.send` above the envelope was published to the owner **eight times over
+  1500 ms** and then reported as unreachable with nothing submitted. The
+  runtime's own log carries the eight `emitEvent: "ownerApprovalRequested"`
+  lines between the call and the answer.
 
 The runtime's own log during that run prints `Module loaded: agent` — the same
 line it prints for `capability_module` — then spawns `logos_host` for it,
@@ -367,7 +396,7 @@ lgx manifest module/agent.lgx     # type: core, main: agent_plugin.dylib
 ```
 
 At the time of writing that prints root hash
-`bc14ead7f71a5db3bb30e3fc4378071f1a264730970ecd418f4a8bcd117f328e`. Rebuilding
+`c08af98fc24ea8cbcbca301c1938fa2f9cef0d6eceb137692f4105a06edf65ed`. Rebuilding
 the module changes it; none of the checks below depend on the value. (The
 archive's own sha256 changes on every repackage even when the root hash does
 not — gzip records a timestamp. The root hash is the one that describes the
@@ -535,9 +564,30 @@ Honest list, in the order that matters:
    `registerBuiltinSkills` takes `std::function` ports that cannot cross a
    plugin boundary, so what a reviewer sees is a full card whose entries refuse
    for want of a transport rather than for want of a skill.
-2. The owner channel has to be driven from inside the loaded module rather than
-   from tests, so that "the owner can interact with the agent in real time from
-   a separate Logos app instance" is demonstrable.
+2. The owner channel over **Logos Messaging** has to be driven from inside the
+   loaded module, so that "the owner can interact with the agent in real time
+   from a separate Logos app instance using Logos Messaging" is demonstrable.
+   This item has moved but is not closed. What the loaded module has now is an
+   owner channel built out of the *runtime's* surface rather than Delivery's:
+   the module emits `ownerApprovalRequested(requestJson, attempt, timestamp)`
+   once per notification attempt, and the owner answers with the module method
+   `approveSpend(requestId, verdict)`. Harness 2 exercises both across the
+   transport, and the runtime's own log carries the emissions:
+
+   ```
+   [logos] [agent] [LogosProviderObject] emitEvent: "ownerApprovalRequested"
+   [logos] [agent] [LogosProviderObject] ModuleProxy: forwarding event as Qt signal
+   ... eight times, 200 ms apart ...
+     ok    an above-threshold spend nobody approved is not submitted by the loaded module
+     ok    the notification was retried before the timeout: 8 attempts
+     ok    approveSpend is reachable, and refuses a request nobody is waiting on
+   ```
+
+   That closes the Reliability half — a spend that does not reach its owner is
+   retried, timed out, reported and not executed. It does not close the
+   Usability half, which names Logos Messaging and a second app instance
+   specifically, and `OwnerChannel` (which does speak Delivery) still needs a
+   `DeliveryPort` the plugin cannot be handed.
 3. A `linux-amd64` variant, since a reviewer may be on Linux and a package with
    only `darwin-arm64` is unopenable for them.
 4. A Basecamp `ui` app for the owner console, if the owner-facing surface is to
