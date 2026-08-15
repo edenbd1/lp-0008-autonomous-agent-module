@@ -1,16 +1,16 @@
 // Exercise the wallet skills through their port, with no node and no wallet.
 //
-// The point of the WalletPort indirection is that none of the behaviour worth
-// checking here needs a chain. A sequencer is needed to prove that money moved;
-// it is not needed to prove that `wallet.send` refuses a negative amount, holds
-// an over-envelope spend for the owner *without submitting anything*, or that
-// `wallet.balance` refuses to read a default account record as "you have zero".
-// Those are the behaviours a reviewer cannot see from a screenshot, and they are
-// precisely what a stub gets wrong — a stub returns ok:true.
+// That is what the WalletPort indirection is for. A sequencer is needed to prove
+// that money moved; it is not needed to prove that `wallet.send` refuses a
+// negative amount, that it holds an over-envelope spend for the owner *without
+// submitting anything*, or that `wallet.balance` refuses to read the chain's
+// default account record back as "you have zero". Those are the behaviours a
+// reviewer cannot see from a screenshot, and they are exactly what a stub gets
+// wrong — a stub returns ok:true.
 //
-// Every check below is written so that deleting the corresponding line of
-// wallet_skills.cpp turns the suite red. The mutations that were actually run
-// against it are listed at the bottom of this file.
+// Every check here is written to fail if the corresponding line of
+// wallet_skills.cpp is deleted. The mutations that were actually applied, built
+// and run against this suite are listed at the bottom of the file.
 #include "../src/wallet_skills.h"
 
 #include <nlohmann/json.hpp>
@@ -50,19 +50,24 @@ static bool mentions(const std::string &haystack, const char *needle)
     return haystack.find(needle) != std::string::npos;
 }
 
-// Real-shaped ids: 44 characters of base58, the same alphabet the scripts match
-// with [1-9A-HJ-NP-Za-km-z]{32,}.
+/// Nothing was submitted, and the reply says so — the distinction a caller has
+/// to be able to make without reading prose.
+static bool notSubmitted(const std::string &r) { return parsed(r).value("submitted", true) == false; }
+
+// Real-shaped ids: 44 characters of base58, the alphabet the scripts match with
+// [1-9A-HJ-NP-Za-km-z]{32,}.
 static const std::string kAgent = "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r";
 static const std::string kBob = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb72Ntu8bT";
 static const std::string kTx1(64, 'a');
 static const std::string kTx2(64, 'b');
 static const std::string kTx3(64, 'c');
+static const std::string kU128Max = "340282366920938463463374607431768211455";
 
 /// The shape `getAccount` really returns: {program_owner, balance, data, nonce}.
 static std::string accountJson(long long balance, bool programOwned, long long nonce)
 {
     json owner = json::array();
-    for (int i = 0; i < 32; ++i) owner.push_back(programOwned ? (i == 0 ? 7 : 0) : 0);
+    for (int i = 0; i < 32; ++i) owner.push_back(programOwned && i == 0 ? 7 : 0);
     return json{{"jsonrpc", "2.0"},
                 {"id", 1},
                 {"result", json{{"program_owner", owner},
@@ -72,27 +77,56 @@ static std::string accountJson(long long balance, bool programOwned, long long n
         .dump();
 }
 
-static SpendPolicy policyOf(unsigned long long perTx, unsigned long long perPeriod)
+static SpendEnvelope envelopeOf(const std::string &perTx, const std::string &perPeriod)
 {
-    SpendPolicy p;
-    p.perTx = perTx;
-    p.perPeriod = perPeriod;
-    p.periodBlocks = 1000;
-    return p;
+    SpendEnvelope e;
+    e.perTx = perTx;
+    e.perPeriod = perPeriod;
+    e.periodBlocks = 1000;
+    return e;
+}
+
+/// A port whose spend path always succeeds, so that anything which does *not*
+/// reach it did so because a check stopped it.
+static WalletPort willingPort(int &spends, SpendRequest &seen, const std::string &spentThisPeriod)
+{
+    WalletPort port;
+    port.spentThisPeriod = [spentThisPeriod] { return spentThisPeriod; };
+    port.spend = [&spends, &seen](const SpendRequest &req) {
+        ++spends;
+        seen = req;
+        SpendReceipt r;
+        r.submitted = true;
+        r.txHash = kTx1;
+        return r;
+    };
+    return port;
+}
+
+static OwnerApprovalPort reachableOwner(int &asked, std::string &request, std::uint64_t nonce)
+{
+    OwnerApprovalPort owner;
+    owner.requestApproval = [&asked, &request](const std::string &j) {
+        ++asked;
+        request = j;
+        return true;
+    };
+    owner.nextNonce = [nonce] { return nonce; };
+    return owner;
 }
 
 int main()
 {
     std::printf("wallet.balance\n");
     {
-        // A node that is not reachable must refuse. The empty string is what a
+        // A node that cannot be reached must refuse. The empty string is what a
         // curl that timed out hands back, and it is the realistic failure.
         WalletPort down;
         down.getAccount = [](const std::string &) { return std::string(); };
         WalletBalanceSkill b(down, "Public/" + kAgent);
         const auto r = b.invoke("{}");
         check(!okOf(r), "balance refuses when the sequencer does not answer");
-        check(mentions(errOf(r), "did not answer"), "and says the node did not answer");
+        check(mentions(errOf(r), "did not answer"), "and says the node is the reason");
     }
     {
         WalletPort garbage;
@@ -102,7 +136,8 @@ int main()
 
         WalletPort rpcError;
         rpcError.getAccount = [](const std::string &) {
-            return std::string(R"({"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad account id"}})");
+            return std::string(
+                R"({"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad account id"}})");
         };
         WalletBalanceSkill e(rpcError, "Public/" + kAgent);
         const auto r = e.invoke("{}");
@@ -121,9 +156,9 @@ int main()
         check(mentions(errOf(r), "default account"), "and is named as the default record it is");
     }
     {
-        // The other half of that conjunction: a funded account that no program
-        // has claimed yet is a real account, and refusing it would be its own
-        // kind of wrong.
+        // The other half of that conjunction: an account no program has claimed
+        // is still a real account, and refusing it would be its own kind of
+        // wrong.
         WalletPort unclaimed;
         unclaimed.getAccount = [](const std::string &) { return accountJson(500, false, 3); };
         WalletBalanceSkill b(unclaimed, "Public/" + kAgent);
@@ -202,21 +237,13 @@ int main()
     {
         // Nothing may reach the spend path until every parameter has been
         // accepted. The counter is the assertion: an implementation that
-        // validates after submitting would still pass an ok/!ok check.
+        // validated after submitting would still pass an ok/!ok check.
         int spends = 0;
-        WalletPort port;
-        port.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
-        port.spend = [&](const SpendRequest &) {
-            ++spends;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [](const std::string &) { return true; };
-        owner.nextNonce = [] { return std::uint64_t{1}; };
-        WalletSendSkill s(port, owner, policyOf(100, 500));
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+        int asked = 0;
+        std::string request;
+        WalletSendSkill s(port, reachableOwner(asked, request, 1), envelopeOf("100", "500"));
 
         check(!okOf(s.invoke("not json")), "malformed parameters are refused, not thrown");
         check(!okOf(s.invoke(R"({"amount":10})")), "a missing recipient is refused");
@@ -232,8 +259,12 @@ int main()
               "a fractional amount is refused rather than rounded");
         check(!okOf(s.invoke(R"({"recipient":")" + kBob + R"(","amount":"0"})")),
               "zero written as a string is still zero");
+        check(!okOf(s.invoke(R"({"recipient":")" + kBob + R"(","amount":"000"})")),
+              "and so is zero written with leading zeros");
         check(!okOf(s.invoke(R"({"recipient":")" + kBob + R"(","amount":"12x"})")),
               "an amount that is not a number is refused");
+        check(!okOf(s.invoke(R"({"recipient":")" + kBob + R"(","amount":"9)" + kU128Max + R"("})")),
+              "and one the chain's u128 amount could not hold");
         check(!okOf(s.invoke(R"({"recipient":"nope","amount":10})")),
               "a recipient that is not a base58 id is refused");
 
@@ -242,93 +273,66 @@ int main()
         check(mentions(errOf(priv), "public account"), "with the reason a payer can act on");
 
         check(spends == 0, "none of the above reached the policy path");
-        for (const auto &r : {zero, priv}) {
-            check(parsed(r).value("submitted", true) == false, "and each refusal says nothing was submitted");
-        }
+        check(asked == 0, "and none of them woke the owner either");
+        check(notSubmitted(zero) && notSubmitted(priv), "each refusal says nothing was submitted");
     }
     {
-        // The autonomous path. What matters is not only that it succeeds but
+        // The autonomous path. What matters is not only that it succeeds, but
         // that the policy path is handed exactly the spend that was checked.
+        int spends = 0;
         SpendRequest seen;
-        WalletPort port;
-        port.spentThisPeriod = [] { return static_cast<unsigned __int128>(40); };
-        port.spend = [&](const SpendRequest &req) {
-            seen = req;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [](const std::string &) { return true; };
-        owner.nextNonce = [] { return std::uint64_t{1}; };
-        WalletSendSkill s(port, owner, policyOf(100, 500));
+        WalletPort port = willingPort(spends, seen, "40");
+        int asked = 0;
+        std::string request;
+        WalletSendSkill s(port, reachableOwner(asked, request, 1), envelopeOf("100", "500"));
 
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":50})");
         check(okOf(r) && parsed(r)["submitted"] == true, "a spend inside the envelope is submitted");
-        check(strOf(r, "outcome") == "autonomous", "unattended");
+        check(strOf(r, "outcome") == "autonomous" && asked == 0, "unattended");
         check(strOf(r, "tx") == kTx1, "and returns the transaction hash");
-        check(seen.recipient == "Public/" + kBob, "the policy path is given the qualified recipient");
-        check(seen.amount == 50, "the amount that was checked, unaltered");
-        check(seen.spentThisPeriod == 40, "and the period total the check was made against");
+        check(seen.recipient == "Public/" + kBob, "the policy path gets the qualified recipient");
+        check(seen.amount == "50", "the amount that was checked, unaltered");
+        check(seen.spentThisPeriod == "40", "and the period total the check was made against");
         check(strOf(r, "amount") == "50", "and the reply echoes the amount");
+
+        // A bare id and a qualified one name the same account.
+        const auto q = s.invoke(R"({"recipient":"Public/)" + kBob + R"(","amount":50})");
+        check(okOf(q) && seen.recipient == "Public/" + kBob, "'Public/<id>' is accepted as well");
     }
     {
         // 2^64 exactly: an implementation that carries amounts in a uint64
         // truncates this to zero, and one that goes through a double loses the
-        // low bits. The value has to survive the whole way to the port.
+        // low bits. The value has to survive intact all the way to the port.
         const std::string big = "18446744073709551616";
+        int spends = 0;
         SpendRequest seen;
-        WalletPort port;
-        port.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
-        port.spend = [&](const SpendRequest &req) {
-            seen = req;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx2;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [](const std::string &) { return true; };
-        owner.nextNonce = [] { return std::uint64_t{1}; };
-        SpendPolicy wide;
-        wide.perTx = ~static_cast<unsigned __int128>(0);
-        wide.perPeriod = ~static_cast<unsigned __int128>(0);
-        wide.periodBlocks = 1000;
-        WalletSendSkill s(port, owner, wide);
+        WalletPort port = willingPort(spends, seen, "0");
+        int asked = 0;
+        std::string request;
+        WalletSendSkill s(port, reachableOwner(asked, request, 1), envelopeOf(kU128Max, kU128Max));
 
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":")" + big + R"("})");
         check(okOf(r), "an amount above 2^64 is accepted as a decimal string");
         check(strOf(r, "amount") == big, "and survives the round trip intact");
-        check(seen.amount == (static_cast<unsigned __int128>(1) << 64), "as the value it names");
+        check(seen.amount == big, "as the value it names");
+        check(spends == 1 && asked == 0, "and is inside a wide envelope, so it is autonomous");
     }
     {
         // Over the per-transaction limit: held, and — the part that matters —
         // not submitted. The request the owner receives must name this exact
         // spend, or an approval could be replayed against a different one.
         int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+        int asked = 0;
         std::string request;
-        WalletPort port;
-        port.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
-        port.spend = [&](const SpendRequest &) {
-            ++spends;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [&](const std::string &j) {
-            request = j;
-            return true;
-        };
-        owner.nextNonce = [] { return std::uint64_t{77}; };
-        WalletSendSkill s(port, owner, policyOf(100, 500));
+        WalletSendSkill s(port, reachableOwner(asked, request, 77), envelopeOf("100", "500"));
 
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":101})");
-        check(parsed(r).value("submitted", true) == false, "an over-limit spend is not submitted");
+        check(notSubmitted(r), "an over-limit spend is not submitted");
         check(spends == 0, "and the policy path is never called");
-        check(strOf(r, "outcome") == "awaiting_owner_approval", "it waits for the owner");
+        check(strOf(r, "outcome") == "awaiting_owner_approval" && asked == 1,
+              "it waits for the owner");
         check(mentions(strOf(r, "reason"), "per-transaction"), "and says which limit it crossed");
         const json ask = parsed(request);
         check(ask.value("recipient", std::string{}) == "Public/" + kBob &&
@@ -336,173 +340,156 @@ int main()
               "the owner is asked about this recipient and this amount");
         check(ask.value("nonce", 0ULL) == 77ULL,
               "and the request carries a nonce, so approving it approves one spend only");
+
+        // The boundary itself is inside the envelope, as it is in
+        // agent-policy-core: `amount <= per_tx`.
+        const auto edge = s.invoke(R"({"recipient":")" + kBob + R"(","amount":100})");
+        check(okOf(edge) && spends == 1, "a spend at exactly the limit is still autonomous");
     }
     {
         // Under the per-transaction limit, over the period cap. A per-transaction
         // limit alone is drained by repetition, so this check is not redundant.
         int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "470");
         int asked = 0;
-        WalletPort port;
-        port.spentThisPeriod = [] { return static_cast<unsigned __int128>(470); };
-        port.spend = [&](const SpendRequest &) {
-            ++spends;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [&](const std::string &) {
-            ++asked;
-            return true;
-        };
-        owner.nextNonce = [] { return std::uint64_t{2}; };
-        WalletSendSkill s(port, owner, policyOf(100, 500));
+        std::string request;
+        WalletSendSkill s(port, reachableOwner(asked, request, 2), envelopeOf("100", "500"));
 
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":50})");
         check(spends == 0 && asked == 1, "a spend that would break the period cap goes to the owner");
         check(mentions(strOf(r, "reason"), "per-period"), "and the reason names the period limit");
         check(mentions(strOf(r, "reason"), "470"), "and how much of it is already spent");
+
+        const auto fits = s.invoke(R"({"recipient":")" + kBob + R"(","amount":30})");
+        check(okOf(fits) && spends == 1, "while one that fits exactly is still autonomous");
     }
     {
         // A hostile or merely stale period total must not wrap around into
         // "plenty of room left". agent-policy-core saturates for the same
-        // reason; a naive addition here would make this spend autonomous.
+        // reason; an implementation that added these as machine integers would
+        // make this spend autonomous.
         int spends = 0;
-        WalletPort port;
-        port.spentThisPeriod = [] { return ~static_cast<unsigned __int128>(0); };
-        port.spend = [&](const SpendRequest &) {
-            ++spends;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [](const std::string &) { return true; };
-        owner.nextNonce = [] { return std::uint64_t{3}; };
-        WalletSendSkill s(port, owner, policyOf(100, 500));
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, kU128Max);
+        int asked = 0;
+        std::string request;
+        WalletSendSkill s(port, reachableOwner(asked, request, 3), envelopeOf("100", "500"));
 
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":1})");
         check(spends == 0, "a period total at the u128 ceiling does not wrap into autonomy");
         check(strOf(r, "outcome") == "awaiting_owner_approval", "it goes to the owner instead");
     }
     {
-        // An unknown period total is not zero. An agent that cannot say how much
-        // it has already moved cannot say a spend is inside the envelope.
+        // An unknown period total is not zero, and an unknown envelope is not a
+        // wide one. An agent that cannot say how much it has moved, or what its
+        // limits are, cannot say a spend is inside them.
         int spends = 0;
+        SpendRequest seen;
         int asked = 0;
-        WalletPort port; // spentThisPeriod deliberately unwired
-        port.spend = [&](const SpendRequest &) {
-            ++spends;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel owner;
-        owner.requestApproval = [&](const std::string &) {
-            ++asked;
-            return true;
-        };
-        owner.nextNonce = [] { return std::uint64_t{4}; };
-        WalletSendSkill s(port, owner, policyOf(100, 500));
+        std::string request;
 
+        WalletPort noTotal = willingPort(spends, seen, "0");
+        noTotal.spentThisPeriod = nullptr; // never wired
+        WalletSendSkill s(noTotal, reachableOwner(asked, request, 4), envelopeOf("100", "500"));
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":1})");
-        check(spends == 0 && asked == 1, "an unknown period total is not treated as zero");
+        check(spends == 0 && asked == 1, "an unwired period total is not treated as zero");
         check(mentions(strOf(r, "reason"), "unknown"), "and the owner is told that is why");
+
+        WalletPort blankTotal = willingPort(spends, seen, "");
+        WalletSendSkill b(blankTotal, reachableOwner(asked, request, 4), envelopeOf("100", "500"));
+        const auto br = b.invoke(R"({"recipient":")" + kBob + R"(","amount":1})");
+        check(strOf(br, "outcome") == "awaiting_owner_approval" && spends == 0,
+              "an empty period total is unknown too, and still holds the spend");
+
+        WalletPort port = willingPort(spends, seen, "0");
+        WalletSendSkill u(port, reachableOwner(asked, request, 4), envelopeOf("", ""));
+        const auto ur = u.invoke(R"({"recipient":")" + kBob + R"(","amount":1})");
+        check(spends == 0, "an unknown envelope does not become a permissive one");
+        check(mentions(strOf(ur, "reason"), "envelope"), "and the reason says so");
     }
     {
         // The prize is explicit: an above-threshold transaction that fails to
         // reach the owner must not execute. Not "execute anyway", and not
         // "report success and hope".
         int spends = 0;
-        WalletPort port;
-        port.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
-        port.spend = [&](const SpendRequest &) {
-            ++spends;
-            SpendReceipt r;
-            r.submitted = true;
-            r.txHash = kTx1;
-            return r;
-        };
-        OwnerChannel unreachable;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+
+        OwnerApprovalPort unreachable;
         unreachable.requestApproval = [](const std::string &) { return false; };
         unreachable.nextNonce = [] { return std::uint64_t{5}; };
-        WalletSendSkill s(port, unreachable, policyOf(100, 500));
-
+        WalletSendSkill s(port, unreachable, envelopeOf("100", "500"));
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
         check(!okOf(r), "an unreachable owner fails the spend");
         check(spends == 0, "and above all does not submit it anyway");
-        check(strOf(r, "outcome") == "owner_unreachable" && parsed(r)["submitted"] == false,
+        check(strOf(r, "outcome") == "owner_unreachable" && notSubmitted(r),
               "and says so in a form a caller can branch on");
 
-        OwnerChannel none; // no channel at all
-        WalletSendSkill s2(port, none, policyOf(100, 500));
+        OwnerApprovalPort none; // no channel at all
+        WalletSendSkill s2(port, none, envelopeOf("100", "500"));
         const auto r2 = s2.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
         check(!okOf(r2) && spends == 0, "no owner channel is a refusal, not a licence to spend");
 
-        OwnerChannel noNonce;
+        OwnerApprovalPort noNonce;
         noNonce.requestApproval = [](const std::string &) { return true; };
-        WalletSendSkill s3(port, noNonce, policyOf(100, 500));
+        WalletSendSkill s3(port, noNonce, envelopeOf("100", "500"));
         const auto r3 = s3.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
         check(!okOf(r3) && mentions(errOf(r3), "replayed"),
-              "an approval that cannot name one spend is refused, because it could be replayed");
+              "an approval that cannot name one spend is refused: it could be replayed");
         check(spends == 0, "and still nothing was submitted");
     }
     {
         // The chain is the enforcer, so its refusal has to survive intact rather
         // than being reworded into something reassuring.
         WalletPort refused;
-        refused.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
+        refused.spentThisPeriod = [] { return std::string("0"); };
         refused.spend = [](const SpendRequest &) {
             SpendReceipt r;
             r.submitted = false;
             r.error = "SpendOverPolicy: the anchored account rejected it";
             return r;
         };
-        OwnerChannel owner;
-        owner.requestApproval = [](const std::string &) { return true; };
-        owner.nextNonce = [] { return std::uint64_t{6}; };
-        WalletSendSkill s(refused, owner, policyOf(100, 500));
+        int asked = 0;
+        std::string request;
+        WalletSendSkill s(refused, reachableOwner(asked, request, 6), envelopeOf("100", "500"));
         const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":50})");
         check(!okOf(r), "a spend the chain refuses is a failure here too");
         check(mentions(errOf(r), "SpendOverPolicy"), "and the chain's own reason survives");
-        check(parsed(r)["submitted"] == false, "and nothing is claimed to have been submitted");
+        check(notSubmitted(r), "and nothing is claimed to have been submitted");
 
         // A success flag with no transaction hash is not a payment. This exact
         // shape — a policy that permits an amount and moves nothing — has been
         // produced on chain in this repository before.
         WalletPort hollow;
-        hollow.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
+        hollow.spentThisPeriod = [] { return std::string("0"); };
         hollow.spend = [](const SpendRequest &) {
             SpendReceipt r;
             r.submitted = true;
-            r.txHash = "";
             return r;
         };
-        WalletSendSkill h(hollow, owner, policyOf(100, 500));
+        WalletSendSkill h(hollow, reachableOwner(asked, request, 6), envelopeOf("100", "500"));
         const auto hr = h.invoke(R"({"recipient":")" + kBob + R"(","amount":50})");
         check(!okOf(hr), "success without a transaction hash is not accepted as a payment");
         check(mentions(errOf(hr), "without a transaction hash"), "and is named for what it is");
 
         WalletPort junkHash;
-        junkHash.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
+        junkHash.spentThisPeriod = [] { return std::string("0"); };
         junkHash.spend = [](const SpendRequest &) {
             SpendReceipt r;
             r.submitted = true;
             r.txHash = "0xdeadbeef";
             return r;
         };
-        WalletSendSkill jh(junkHash, owner, policyOf(100, 500));
+        WalletSendSkill jh(junkHash, reachableOwner(asked, request, 6), envelopeOf("100", "500"));
         check(!okOf(jh.invoke(R"({"recipient":")" + kBob + R"(","amount":50})")),
               "nor is a hash that is not 32 bytes of hex");
 
         WalletPort noPath; // no spend function wired at all
-        noPath.spentThisPeriod = [] { return static_cast<unsigned __int128>(0); };
-        WalletSendSkill np(noPath, owner, policyOf(100, 500));
-        const auto npr = np.invoke(R"({"recipient":")" + kBob + R"(","amount":50})");
-        check(!okOf(npr), "with no policy path wired there is no other way to move funds");
+        noPath.spentThisPeriod = [] { return std::string("0"); };
+        WalletSendSkill np(noPath, reachableOwner(asked, request, 6), envelopeOf("100", "500"));
+        check(!okOf(np.invoke(R"({"recipient":")" + kBob + R"(","amount":50})")),
+              "with no policy path wired there is no other way to move funds");
     }
 
     std::printf("wallet.history\n");
@@ -517,11 +504,11 @@ int main()
     {
         WalletPort garbage;
         garbage.journal = [] { return std::string("{oh dear"); };
-        WalletHistorySkill h(garbage);
-        check(!okOf(h.invoke("{}")), "a journal that does not parse is refused, not thrown");
+        WalletHistorySkill g(garbage);
+        check(!okOf(g.invoke("{}")), "a journal that does not parse is refused, not thrown");
 
         WalletPort wrongShape;
-        wrongShape.journal = [] { return std::string(R"({"tx":"…"})"); };
+        wrongShape.journal = [] { return std::string(R"({"tx":"..."})"); };
         WalletHistorySkill w(wrongShape);
         check(!okOf(w.invoke("{}")), "and so is one that is not an array");
 
@@ -543,15 +530,18 @@ int main()
         std::vector<std::string> queried;
         WalletPort port;
         port.journal = [] {
-            return json::array({json{{"tx", kTx1}, {"recipient", "Public/" + kBob}, {"amount", "25"}},
-                                json{{"tx", kTx2}},
-                                json{{"tx", kTx3}}})
+            return json::array(
+                       {json{{"tx", kTx1}, {"recipient", "Public/" + kBob}, {"amount", "25"}},
+                        json{{"tx", kTx2}},
+                        json{{"tx", kTx3}}})
                 .dump();
         };
         port.getTransaction = [&](const std::string &tx) {
             queried.push_back(tx);
-            if (tx == kTx3) return std::string(R"({"result":[{"block":91}]})");
+            // The two ways the RPC says "I have nothing for this hash", and the
+            // one way it says otherwise.
             if (tx == kTx2) return std::string(R"({"jsonrpc":"2.0","id":1,"result":null})");
+            if (tx == kTx1) return std::string(R"({"result":[]})");
             return std::string(R"({"result":[{"block":42}]})");
         };
         WalletHistorySkill h(port);
@@ -565,6 +555,8 @@ int main()
               "a hash the chain knows is confirmed");
         check(rows[1].value("status", std::string{}) == "not-yet-included",
               "a hash it has no record of is not");
+        check(rows[2].value("status", std::string{}) == "not-yet-included",
+              "and neither is one it answers for with an empty result");
         check(rows[2].value("recipient", std::string{}) == "Public/" + kBob,
               "and the journal's own fields survive");
         check(parsed(r)["complete"] == false && parsed(r)["confirmedAgainstChain"] == true,
@@ -573,10 +565,12 @@ int main()
               "and names payments received as the thing it cannot show");
         check(queried.size() == 3, "each hash was actually asked about");
 
+        queried.clear();
         const auto two = h.invoke(R"({"limit":2})");
         const json trimmed = parsed(two)["transactions"];
         check(trimmed.size() == 2 && trimmed[0].value("tx", std::string{}) == kTx3,
               "a limit takes the most recent, not the first written");
+        check(queried.size() == 2, "and confirms only what it returns");
         check(!okOf(h.invoke(R"({"limit":0})")), "a limit of zero is refused");
         check(!okOf(h.invoke(R"({"limit":-1})")), "and so is a negative one");
         check(!okOf(h.invoke(R"({"limit":"lots"})")), "and one that is not a number");
@@ -602,14 +596,15 @@ int main()
         const auto ur = u.invoke("{}");
         check(parsed(ur)["transactions"][0].value("status", std::string{}) == "unverified",
               "with no RPC wired at all, entries are marked unverified");
-        check(parsed(ur)["confirmedAgainstChain"] == false, "and nothing is claimed to be confirmed");
+        check(parsed(ur)["confirmedAgainstChain"] == false, "and nothing is claimed as confirmed");
     }
     {
         WalletPort empty;
         empty.journal = [] { return std::string("[]"); };
         WalletHistorySkill h(empty);
         const auto r = h.invoke("{}");
-        check(okOf(r) && parsed(r)["count"] == 0, "an empty journal is an empty history, not an error");
+        check(okOf(r) && parsed(r)["count"] == 0,
+              "an empty journal is an empty history, not an error");
     }
 
     std::printf("\n%s\n", failures ? "FAILURES" : "all wallet behaviours hold");
@@ -618,23 +613,38 @@ int main()
 
 // MUTATIONS RUN AGAINST THIS SUITE
 //
-// Each of these was applied to module/src/wallet_skills.cpp, compiled, and the
-// suite run; every one of them turns it red. They are listed because a test
-// nobody has tried to break is a test nobody has checked.
+// Each line below was applied to module/src/wallet_skills.cpp on its own, built
+// with the same command as this file, and run. Every one of them turns the suite
+// red; the number is how many checks noticed. They are recorded because a test
+// nobody has tried to break is a test nobody has checked — and the first version
+// of this file left the last one green.
 //
-//   1. drop the default-account check in wallet.balance
-//   2. let a shielded read fall back to getAccount when no wallet is wired
-//   3. pass the qualified id (Public/<x>) to getAccount instead of the bare one
-//   4. accept a balance field of any type
-//   5. skip base58 validation of the account id
-//   6. treat a missing spentThisPeriod as zero rather than unknown
-//   7. use a plain + instead of the saturating add for the period total
-//   8. drop the per-period comparison and keep only the per-transaction one
-//   9. drop the per-transaction comparison and keep only the per-period one
-//  10. submit anyway when the owner cannot be reached
-//  11. accept a spend receipt whose txHash is empty or malformed
-//  12. accept a zero amount, and accept a negative one
-//  13. carry the amount in a uint64 instead of u128
-//  14. report every history entry as confirmed regardless of getTransaction
-//  15. leave the history in journal order instead of newest first
-//  16. accept a journal entry with no transaction hash
+//   balance   drop the default-account check ...........................  3
+//   balance   read a shielded account over the RPC like any other ......  4
+//   balance   hand getAccount the qualified id instead of the bare one .  2
+//   balance   accept a balance field of any type .......................  3
+//   both      skip base58 validation of an account id .................  6
+//   send      treat an unknown period total as zero ....................  5
+//   send      treat an unknown envelope as permissive ..................  2
+//   send      add the period total as a machine integer ................  3
+//   send      drop the per-period comparison ............................ 7
+//   send      drop the per-transaction comparison ....................... 14
+//   send      skip the envelope and let the chain sort it out ........... 25
+//   send      submit anyway when the owner cannot be reached ............  3
+//   send      drop the approval-nonce requirement ............ (terminates)
+//   send      accept a receipt with no transaction hash ................   4
+//   send      accept any amount at all ................................. 32
+//   send      accept a zero amount ......................................  7
+//   send      carry the amount through a uint64 .........................  3
+//   history   claim confirmation even with no RPC wired .................  2
+//   history   never ask getTransaction anything .........................  8
+//   history   report every entry as confirmed ...........................  2
+//   history   leave the journal in its own order ........................  7
+//   history   accept an entry with no transaction hash ..................  6
+//   history   accept any limit ..........................................  2
+//
+// One caveat, since it is the sort of thing this list exists to admit: deleting
+// the *negative number* branch of parseAmount does NOT turn the suite red,
+// because a negative JSON number then falls through to the final `else` and is
+// refused there anyway. The behaviour is unchanged, so there is nothing for a
+// test to catch — the branch buys a better error message, not a stronger check.

@@ -21,11 +21,11 @@
  *   private account is a commitment in the private state, and `getAccount`
  *   answers for it with the default account — zero owner, zero nonce, zero
  *   balance — which is indistinguishable from an id nobody has ever used. So
- *   the shielded read goes through the wallet, which holds the viewing key,
- *   and the two paths are kept separate rather than one silently falling back
- *   to the other and reporting an empty record as "balance: 0".
+ *   the shielded read goes through the wallet, which holds the viewing key, and
+ *   the two paths are kept apart rather than one silently falling back to the
+ *   other and reporting an empty record as "balance: 0".
  * - `wallet.send` has a real path, and it is not `sendTransaction`. It goes
- *   through the anchored policy program (see `SpendPort::spend` below).
+ *   through the anchored policy program (see `WalletPort::spend`).
  * - `wallet.history` has NO endpoint. There is no "transactions for account X"
  *   method, and there cannot easily be one: `getBlock` walks the chain by id
  *   and `getLastBlockId` gives the tip, so a full backwards scan is possible in
@@ -34,19 +34,29 @@
  *   can report truthfully is its own submission journal — what this process
  *   recorded when it submitted — with each entry confirmed against the real
  *   `getTransaction`. Payments *received*, and anything submitted by another
- *   instance of the agent, are not in it, and the result says so.
+ *   instance of the agent, are not in it, and the result says so rather than
+ *   presenting a partial list as a complete one.
  *
  * WHERE THE SPENDING LIMIT LIVES
  *
  * Not here. The owner's envelope is anchored on chain as a policy account whose
  * *address* is derived from the limits themselves (`crates/agent-policy-core`),
  * so raising a limit renames the account and the spend is rejected before the
- * program body runs. `wallet.send` therefore never builds a transfer itself; it
- * hands the spend to the same policy path the demo scripts drive, and the local
- * comparison against `SpendPolicy` is a courtesy — it avoids paying proving
- * cost for a transaction the chain would refuse, and it decides when to ask the
- * owner *before* spending anything. It is not the enforcer. An attacker holding
- * this process can delete every line of it and change nothing on chain.
+ * program body runs. `wallet.send` never builds a transfer itself; it hands the
+ * spend to the same policy path the demo scripts drive, and the comparison
+ * against `SpendEnvelope` below is a *courtesy* — it avoids paying proving cost
+ * for a transaction the chain would refuse, and it decides when to ask the owner
+ * before spending anything. It is not the enforcer. An attacker holding this
+ * process can delete every line of it and change nothing on chain.
+ *
+ * WHY AMOUNTS ARE DECIMAL STRINGS
+ *
+ * On-chain amounts are u128 and C++17 has no portable spelling for one —
+ * `unsigned __int128` is a GCC/Clang extension, absent on MSVC and on 32-bit
+ * targets, and this is a header third parties are told to include. A `double`
+ * would silently round a payment. So amounts travel as decimal digits and the
+ * arithmetic this file needs (one comparison, one addition) is done on them,
+ * which also removes any question of a period total wrapping around.
  */
 namespace logos::agent {
 
@@ -64,11 +74,26 @@ struct SpendReceipt {
 struct SpendRequest {
     /// Qualified account id, e.g. `Public/<base58>`.
     std::string recipient;
-    unsigned __int128 amount = 0;
-    /// What the agent has already moved in the current period. The program
-    /// re-derives this rather than trusting it; it is passed so the local check
-    /// and the on-chain check are computed over the same number.
-    unsigned __int128 spentThisPeriod = 0;
+    /// Base units, in decimal.
+    std::string amount;
+    /// What the agent has already moved in the current period, in decimal. The
+    /// program re-derives this rather than trusting it; it is passed so the
+    /// local check and the on-chain check are computed over the same number.
+    std::string spentThisPeriod;
+};
+
+/// A display mirror of the anchored envelope: a cache of an on-chain fact, never
+/// the source of it.
+///
+/// Deliberately declared here and not in `agent_module_interface.h`. A type in
+/// the shared interface header reads as part of the module's contract, and this
+/// is not one — nothing outside `wallet.send` may treat these numbers as a
+/// permission. Limits are decimal strings; an empty or malformed one means the
+/// envelope is unknown, which sends every spend to the owner.
+struct SpendEnvelope {
+    std::string perTx;
+    std::string perPeriod;
+    std::uint64_t periodBlocks = 0;
 };
 
 /// What the skills need from the wallet and the chain. Injected so the skills
@@ -86,19 +111,19 @@ struct WalletPort {
     /// `getTransaction(txHash)` — the sequencer's raw answer, or empty if the
     /// node could not be reached. A dropped, a pending and a never-submitted
     /// hash are indistinguishable to it, which is why "not confirmed" is
-    /// reported as such rather than as "failed".
+    /// reported as such and never as "failed".
     std::function<std::string(const std::string &txHash)> getTransaction;
     /// The agent's own record of what it has submitted, as a JSON array, oldest
-    /// first. This exists because the chain has no history endpoint.
+    /// first. It exists because the chain has no history endpoint.
     std::function<std::string()> journal;
     /// Hand a spend to the anchored policy program. This is the whole point of
     /// the indirection: there is no path from `wallet.send` to a transfer that
     /// does not go through here.
     std::function<SpendReceipt(const SpendRequest &)> spend;
-    /// How much the agent has already moved this period. Absent means *unknown*,
-    /// which is not the same as zero — an unknown period total sends the spend
-    /// to the owner rather than through the autonomous path.
-    std::function<unsigned __int128()> spentThisPeriod;
+    /// How much the agent has already moved this period, in decimal. An absent
+    /// function, or an empty answer, means *unknown* — which is not zero, and
+    /// sends the spend to the owner rather than through the autonomous path.
+    std::function<std::string()> spentThisPeriod;
 };
 
 /// How an above-threshold spend reaches the owner for approval.
@@ -106,7 +131,7 @@ struct WalletPort {
 /// Separate from `WalletPort` for the same reason `SharePort` is separate from
 /// `StoragePort`: it is a messaging act, over the owner channel, and a failure
 /// to reach the owner must be reported as that and not as a chain failure.
-struct OwnerChannel {
+struct OwnerApprovalPort {
     /// Deliver an approval request. False means the owner was not reached — and
     /// the prize is explicit that such a spend must not execute.
     std::function<bool(const std::string &requestJson)> requestApproval;
@@ -127,8 +152,8 @@ public:
 
 private:
     WalletPort port_;
-    /// Qualified, e.g. `Private/<base58>`: which read path to use is part of
-    /// the account's identity, not a guess made at call time.
+    /// Qualified, e.g. `Private/<base58>`: which read path an account needs is
+    /// part of its identity, not a guess made at call time.
     std::string agentAccount_;
 };
 
@@ -136,17 +161,16 @@ private:
 /// held for the owner when it falls outside the envelope.
 class WalletSendSkill final : public ISkill {
 public:
-    WalletSendSkill(WalletPort port, OwnerChannel owner, SpendPolicy policy)
-        : port_(std::move(port)), owner_(std::move(owner)), policy_(policy) {}
+    WalletSendSkill(WalletPort port, OwnerApprovalPort owner, SpendEnvelope envelope)
+        : port_(std::move(port)), owner_(std::move(owner)), envelope_(std::move(envelope)) {}
     std::string name() const override { return "wallet.send"; }
     std::string parameterSchema() const override;
     std::string invoke(const std::string &paramsJson) override;
 
 private:
     WalletPort port_;
-    OwnerChannel owner_;
-    /// A cache of an on-chain fact, never the source of it.
-    SpendPolicy policy_;
+    OwnerApprovalPort owner_;
+    SpendEnvelope envelope_;
 };
 
 /// `wallet.history()` — optionally `{"limit": n}`, newest first.
