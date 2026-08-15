@@ -2,6 +2,29 @@
 
 What does not work, stated before anyone has to discover it.
 
+## deploy-agents.sh is not idempotent, and looks broken when it is right
+
+Agent identities are stable once funded — `fund_agent` reuses the account that
+already holds the balance rather than buying a new one. So a second run derives
+the *same* policy hash, and `create_policy` refuses it, because the instruction
+is declared `#[account(init, …)]` and `init` will not overwrite. That is the
+single-use guarantee the design depends on, working exactly as intended.
+
+It reads as three failed anchors. Two of them are an already-anchored policy
+being correctly refused; only the third is a real failure. Until the script
+checks whether a policy is already anchored and records it instead of retrying,
+its output cannot be read as a status.
+
+The anchors that are genuinely live under the current program:
+
+| category | agent | policy | create_policy |
+|---|---|---|---|
+| messaging | `25LLt4Zx…` | `79e84924…` | `28930c0a…` |
+| blockchain | `9KdQSJ2t…` | `6cc36c91…` | `1075e47d…` |
+
+Storage is funded (`7o9PT8uE…`, 10) but its policy `c93ae4b6…` never landed, so
+criterion 1 is two of three.
+
 ## Paying another agent needs its keys, not its account id
 
 `spend` now declares the recipient and moves balance (program `6e4a2000…`,
