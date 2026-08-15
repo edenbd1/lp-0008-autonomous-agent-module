@@ -387,20 +387,113 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
 
 - [ ] **UNMET — The owner can deploy the agent and configure it with a single CLI
   command on any machine using Logos Core headless.**
-  `scripts/deploy-agents.sh` deploys and anchors all three agents reproducibly and
-  is the source of the manifests, but it drives `spel` and the LEZ wallet — not
-  Logos Core headless. No headless Logos Core deployment has been run.
+  Measured rather than estimated. `SIGNER=… ./scripts/deploy-agents.sh` *is* one
+  command, and it deploys and anchors all three agents reproducibly. Two things
+  are wrong with it against this criterion, and the second is the fatal one.
 
-- [ ] **UNMET — The owner can interact with the agent in real time from a separate
-  Logos app instance using Logos Messaging, with no intermediary server.**
-  `module/src/owner_channel.{h,cpp}` implements the channel against Delivery's
-  real reliable-channel API, and its suite covers the cases that decide whether
-  money moves: a node that has not reported `nodeStarted` refuses to open, a
-  channel that will not open is reported rather than pretended, an answer to a
-  different request cannot settle this one, an approval naming different terms is
-  refused, and an owner who never replies is terminal rather than a quiet fallback
-  to acting alone. All of that is against a **fake** port. No message has been sent
-  between two Logos app instances.
+  **It is not one command on a machine that has none of this set up.** Run on
+  this repository with nothing else present it reports, in order: `SIGNER: set
+  SIGNER to a funded public account id` (exit 1); then, with `SIGNER` set and no
+  LEZ toolchain, `[storage] new shielded account / FAILED to create an account`
+  three times and `3 of 3 agents did not deploy`. Four things have to exist
+  first — a `wallet` built from LEZ at the pinned revision, `spel` from
+  `vendor/spel`, a wallet home holding `SIGNER`'s key, and testnet balance to
+  cover the three funding floors (5 + 55 + 5). So it is one command **plus four
+  setup steps**, and the last of them cannot be scripted at all: it needs a
+  faucet.
+
+  **Nothing in the deployment path touches Logos Core.** `grep -rn 'logos_core'
+  scripts/` returns nothing; the only file in this repository that drives Logos
+  Core is `module/tests/logos_core_load_test.cpp`. The criterion names Logos
+  Core headless, and this deploys to a chain with a wallet and a prover. The two
+  are not the same act, and calling one the other would be the whole criterion
+  wished away.
+
+  What closing it would cost: the *headless* half is small — the harness above
+  already does `logos_core_init` → add module dirs → `logos_core_start` →
+  `logos_core_load_module` → `configure()` → `start()` without a GUI, so a
+  script wrapping install-plus-that is about thirty lines. What that would not
+  buy is "on any machine": it needs an installed Basecamp for `liblogos_core`,
+  Qt 6.9.2, and three pinned SDK checkouts, all of which
+  [`docs/basecamp.md`](docs/basecamp.md) documents and none of which a single
+  command installs. Written down rather than half-built, because a script that
+  still failed the criterion would only make the gap harder to see.
+
+- [ ] **UNMET as the prize asks it, and demonstrated on the transport it names —
+  The owner can interact with the agent in real time from a separate Logos app
+  instance using Logos Messaging, with no intermediary server.**
+
+  There are two paths and they must not be blurred.
+
+  **Path B — two processes over real public Delivery nodes. This works, and it
+  is the transport the criterion names.** `./scripts/owner-channel-live.sh`
+  starts two processes, each creating its own Delivery node on the `logos.dev`
+  preset, sharing nothing but a content topic on the public network. One runs
+  `logos::agent::OwnerChannel` — the module's own class, unmodified, with its
+  port wired to `liblogosdelivery` instead of to a fake. The other is the owner:
+  it joins the same reliable channel from its own node, reads the request, and
+  answers it. Measured:
+
+  ```
+  owner:  <- request: {"agent":"agent…","amount":"250","id":"req-…","marker_seed":"a…",
+                       "nonce":85109,"policy_hash":"…","protocol":"/lp-0008/1/owner-channel",
+                       "recipient":"payee…","type":"spend_approval_request"}
+          ok  the channel sender id is the agent's, not this process's own
+          ok  it names the amount / the nonce / the approval marker seed
+  agent:  <- decision: {"altered":0,"approved":true,"attempts":1,
+                        "detail":"the owner approved these exact terms",
+                        "owner_unreachable":false,"verdict":"approved"}
+          ..  312 ms, 1 attempt(s) on the wire
+  ```
+
+  `approved` is not a report that a send succeeded. `OwnerChannel` only returns
+  it for a frame that names *this* request's id, policy hash, recipient, amount,
+  nonce and marker seed, so it is an assertion about the bytes that crossed the
+  network. **312 ms, which is what "in real time" has to mean here.** The nodes'
+  own logs name the relays they went through — `138.68.122.137`,
+  `174.138.106.244` (DigitalOcean), `34.123.201.25` (Google Cloud),
+  `47.242.130.189` — third-party public relays, none of them ours. That is the
+  "no intermediary server" clause: the thing in the middle is the public relay
+  mesh, not a broker either side operates.
+
+  **That figure was 12.6 seconds over two attempts, and the fix is the finding.**
+  A Delivery node keeps the reliable channel's state in `sds.db`, under a `data` directory it
+  creates *in the working directory*, so two nodes started from one directory share it. Nothing
+  reports a conflict — the first frame is simply not delivered (five channel
+  sends, four deliveries, in a bare probe), and the agent's retry silently covers
+  for it, which reads as an unreliable network and is not one. Each process now
+  gets a directory of its own, and the exchange completes on the first attempt.
+  Worth recording because it is the difference between "the owner channel needs
+  seconds and a retry" and "the owner channel answers in a third of a second",
+  and only one of those is true.
+
+  Run `./scripts/owner-channel-live.sh --negatives` and the same harness fails
+  three ways, each watched: a node that never started makes `open()` refuse
+  (`{"error":"delivery node is not started"}`); with nobody listening the agent
+  reports `unreachable` after 5 attempts and exits 1 — which matters because a
+  node receives its own published messages, so this is the proof the agent
+  cannot settle its own request; and an owner answering `251` where `250` was
+  asked produces `{"verdict":"refused","altered":6,…"the reply names a different
+  amount"}` and exit 1, with all six altered frames arriving and every one
+  refused.
+
+  **Path A — the same conversation inside Basecamp. Not on Logos Messaging.**
+  What a Basecamp-loaded plugin has is an owner channel built out of the
+  *runtime's* surface: `ownerApprovalRequested` forwarded as a Qt signal,
+  answered by the module method `approveSpend`. That is real and exercised
+  across the transport, and it is not Logos Messaging. `OwnerChannel` needs a
+  `DeliveryPort`, a `std::function` that cannot cross a plugin boundary, so the
+  class Path B just drove over the public network is exactly the one the plugin
+  cannot be handed.
+
+  Marked UNMET on the conjunction the criterion actually states. It says *from a
+  separate Logos app instance*, and the owner process in Path B is a Delivery
+  node this repository starts, not Basecamp. Two Logos apps have not talked to
+  each other. What is now true, and was not before, is that the claim has moved
+  from "no message has been sent between two instances" to "the module's owner
+  channel completes a correlated approval round trip between two independent
+  nodes on the public network, and refuses when the terms are altered". The
+  remaining gap is a host, not a transport.
 
 - [ ] **UNMET — The spending threshold holds above-threshold transactions for owner
   approval and executes below-threshold transactions autonomously.**
@@ -608,15 +701,40 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
 - [ ] **UNMET — The owner-facing interface is accessible from the Logos app
   (Basecamp) via the owner channel; local build instructions and loadable assets
   provided.**
-  The loadable asset ships (`module/agent.lgx`) and is verified to load — both by
-  `QPluginLoader` against the exact packaged artefact and by real `liblogos_core`
-  from an installed Basecamp, with the build instructions in
-  [`docs/basecamp.md`](docs/basecamp.md). But the criterion says *via the owner
-  channel*, and the owner channel is **not reachable from Basecamp**: wiring it
-  needs `registerBuiltinSkills`, which takes `std::function` ports that cannot cross
-  a remoteable boundary (`docs/basecamp.md`). A Basecamp-loaded module registers its
-  built-ins itself with empty ports, so it offers the full card and the owner channel
-  has nothing behind it.
+  The criterion is a conjunction and the two halves have different answers.
+
+  **The assets and instructions half holds up, and was re-checked by following
+  the document rather than by reading it.** `module/agent.lgx` ships;
+  `lgx verify` reports the structure valid and `lgx manifest` reports
+  `type: core`, `main[darwin-arm64] = agent_plugin.dylib`. Installed by hand
+  with the four commands [`docs/basecamp.md`](docs/basecamp.md) gives, into a
+  modules directory that had never seen it, both harnesses were rebuilt from the
+  document's own `clang++` lines and both came back green — `QPluginLoader`
+  against the packaged artefact (22 skills, every one dispatching, exit 0) and
+  the installed Basecamp's real `liblogos_core` driving it over the module
+  transport (exit 0). Two defects in the document were found this way and fixed:
+  its `lgx verify` line assumed `lgx` on `PATH` when the packaging section says
+  it is found at `~/logos/src/logos-package/build/lgx`, and the root hash it
+  quoted was one repackage stale.
+
+  **The "accessible from the Logos app" half does not hold, and the reason is
+  not the one usually given.** It is *not* that Basecamp 0.2.2 ships no wallet,
+  storage or messaging module — that blocks a different criterion, not this one.
+  It is that there is no surface. Measured: with the module installed at the
+  exact path the document names, Basecamp 0.2.2 was launched from a terminal and
+  reported `Total modules: 3`, loading only `capability_module`,
+  `package_manager` and `package_downloader`; the string `agent` appears
+  **nowhere** in its output. Its Package Manager installs from a configured
+  repository only, so a reviewer cannot install a local `.lgx` through the GUI
+  either, and this repository ships no Basecamp `ui` app, so a `core` module has
+  no owner-facing window. Everything that has ever reached this module inside
+  Logos Core reached it through a harness that drives `liblogos_core` directly.
+  A harness is not the Logos app.
+
+  What closing it would cost: a Basecamp `ui` app — a QML plugin against
+  `logos-qt-sdk`, packaged with `type: ui` into the plugins directory — which is
+  new work rather than wiring. The `core` half it would talk to already exists
+  and already answers.
 
 ### Reliability
 

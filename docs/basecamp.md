@@ -96,6 +96,7 @@ module, which the runtime runs in its own `logos_host` process:
   ok    the loaded module lists all 22 documented skills
   ok    it lists exactly 22 — no more, no fewer (got 22)
   ok    every listed skill carries a parameter schema (22 checked)
+  ok    and it answered as a running agent, not as a stopped one
   ok    invoke() dispatches to every one of the 22
   <-    meta.status durability: {"path":".../agent-persistence/agent/a45bddb77136/tasks.json","recovered_active":0,"recovered_tasks":0,"recovery":"absent","recovery_ran":true,"settled_payments":0,"uncertain_payments":0}
   ok    the loaded module reports a durability record, not null: it was given a persistence directory and opened a task snapshot in it
@@ -402,13 +403,20 @@ because those resolve on the build machine and on no other.
 The committed package is `module/agent.lgx` (589 KB, one `darwin-arm64`
 variant). Check it against itself rather than trusting this document:
 
+`lgx` is not on `PATH` after building `logos-package` — it stays in that
+checkout's `build/`, which is where `package-basecamp.sh` looks for it. Written
+out here, because the two lines below used to say `lgx …` and a reader following
+them got `command not found: lgx` and no hint that the tool was sitting in a
+directory this document had already named:
+
 ```sh
-lgx verify   module/agent.lgx     # contents match the manifest hashes
-lgx manifest module/agent.lgx     # type: core, main: agent_plugin.dylib
+LGX="${LGX_BIN:-$HOME/logos/src/logos-package/build/lgx}"
+$LGX verify   module/agent.lgx    # contents match the manifest hashes
+$LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 At the time of writing that prints root hash
-`c08af98fc24ea8cbcbca301c1938fa2f9cef0d6eceb137692f4105a06edf65ed`. Rebuilding
+`cf07408ea4d97a0efa11d32fea6ab7487c05faa522bce9c2077f05d7aa246c8b`. Rebuilding
 the module changes it; none of the checks below depend on the value. (The
 archive's own sha256 changes on every repackage even when the root hash does
 not — gzip records a timestamp. The root hash is the one that describes the
@@ -565,6 +573,37 @@ prints `Total modules: 3` and auto-loads only its own three. That is the
 expected state, not a failure: `logos_core_load_module` is what promotes a known
 module to a loaded one, and harness 2 is that call.
 
+Measured again, with the module sitting at the exact path above and Basecamp
+0.2.2 launched twice — once with `LOGOS_USER_DIR` pointing at a scratch base and
+once against the real one:
+
+```
+[info] [logos] Module loaded: capability_module
+[info] [logos] Module loaded: package_manager
+[info] [logos] Module loaded: package_downloader
+Total modules: 3
+```
+
+and `grep -ci agent` over the whole of that output returns **0**. So Basecamp
+does not merely leave the module unloaded — it never names it anywhere a person
+watching the app can see. Whether its App Manager pane *lists* it is not settled
+here either way: the app presented no window in this environment, so that pane
+was never read. What is settled is that nothing in Basecamp's own output
+acknowledges the module, and that the only things which have ever reached it
+inside Logos Core are the two harnesses above, which drive `liblogos_core`
+directly.
+
+That is the whole of the "accessible from the Logos app" problem, and it is
+worth being exact about the cause, because the easy answer is the wrong one. It
+is **not** that Basecamp 0.2.2 ships no wallet, storage or messaging module —
+that is why a *different* criterion, about loading alongside them, cannot be
+met. Here the blockers are narrower and both are about surface: its Package
+Manager installs from a configured repository only, so a local `.lgx` cannot be
+installed through the GUI at all; and this repository ships no Basecamp `ui`
+app, so a `core` module has no window. A `ui` plugin against `logos-qt-sdk`,
+packaged `type: ui` into the plugins directory, is what would close it. The
+`core` half it would talk to already exists and already answers.
+
 ## What still has to be built for the criterion to be met
 
 Honest list, in the order that matters:
@@ -600,6 +639,18 @@ Honest list, in the order that matters:
    Usability half, which names Logos Messaging and a second app instance
    specifically, and `OwnerChannel` (which does speak Delivery) still needs a
    `DeliveryPort` the plugin cannot be handed.
+
+   What *has* since been settled is the other side of that sentence: the class
+   the plugin cannot be handed a port for now runs over the public network,
+   outside Basecamp. `./scripts/owner-channel-live.sh` puts two processes on two
+   Delivery nodes, one running `OwnerChannel` unmodified and one acting as the
+   owner from its own node, and completes a correlated approval round trip on
+   the owner content topic in **312 ms, on the first attempt**. So the
+   transport half of "using Logos Messaging, with no intermediary server" is
+   demonstrated and the *host* half is what is left: the owner in that exercise
+   is a Delivery node this repository starts, not a second Basecamp. Keep the
+   two apart when reading this list — item 2 is a plugin-boundary problem, and
+   the live exercise does not make it go away.
 3. A `linux-amd64` variant, since a reviewer may be on Linux and a package with
    only `darwin-arm64` is unopenable for them.
 4. A Basecamp `ui` app for the owner console, if the owner-facing surface is to

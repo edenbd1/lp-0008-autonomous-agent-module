@@ -437,6 +437,17 @@ jobs:
       #     this is the packaged-artifact check and it stays manual.
       #     docs/basecamp.md carries the invocation and the recorded output.
       #
+      #   module/tests/owner_channel_live.cpp
+      #     Two processes, two Delivery nodes, the public network. Blocked by
+      #     exactly the same thing as delivery_node_drive.c below — there is no
+      #     prebuilt liblogosdelivery for Linux to download — and by one more
+      #     besides: it needs *two* nodes to find each other through public
+      #     relays, so it is subject to the health of a network this repository
+      #     does not run. That is a bad shape for a required job and a fine one
+      #     for a command a reviewer runs: `./scripts/owner-channel-live.sh`,
+      #     with `--negatives` for the three failures that show the pass is not
+      #     free. README §7b carries the recorded output.
+      #
       #   module/tests/storage_node_drive.c
       #     Runs here now — see the `storage-node` job below. The earlier note
       #     in this block said it needed a from-source Nim build. That was
