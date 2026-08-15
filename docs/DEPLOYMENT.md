@@ -279,8 +279,14 @@ window_start  8000
 spent         50
 ```
 
-`spent 50` is the two settlements below — 0 → 25 → 50 against a `per_period` of
-250 — and it is the per-period defect's fix measured rather than described.
+`spent` is the sum of every price this ledger has been charged, against a
+`per_period` of 250, and it is the per-period defect's fix measured rather than
+described. **The number in that block is a snapshot, and it moves every time an
+agent settles** — it read 50 when this decode was first pasted here and it reads
+more now. That is the field working, not the document rotting, and it is why
+`./scripts/verify-deployment.sh` reads the running total off the chain and prints
+it (`window … spent …`) instead of this page asserting one. Run that rather than
+believing this block; the shape is the point, the value is today's.
 `owner` is the account that signed `create_policy`, and it is the account the
 messaging agent itself named in `claim_agent` before any policy existed: read
 `Qg4NvAVrZ4fMwTAomeX7q8sbvnTHmuF9BvBsxUJ7hoW` and compare. The storage and
@@ -466,11 +472,14 @@ curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json'
   -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ"]}'
 ```
 
-**This will not print 95.** It prints whatever that account holds now, and the
-account has kept moving since the settlements — the ledger below is what
-reconciles the two. `95` is the balance immediately after block 8747, which is
-what `a2a-task.tsv` records and what the settlement transaction's own post-state
-contains.
+**This will not print any of the balances quoted on this page.** It prints
+whatever that account holds now, and the account has kept moving since — up and
+also *down* — so a balance here is a statement about a block, never about today.
+Each `balance_after` in `a2a-task.tsv` is the figure that settlement's own
+committed post-state contains, which is why it stays true after the account has
+moved on; `95`, for instance, is the balance immediately after block 8747, one of
+the two settlements made under the **superseded** program. The ledger below is
+what reconciles the two.
 
 Only the credit side is publicly readable: the payer is a shielded account and
 `getAccount` answers with the default account for those. The debit is
@@ -565,10 +574,17 @@ not "has been paid at".
 
 ### What the ledger says about the evidence
 
-- The two settlements in `artifacts/a2a-task.tsv` are on chain, at blocks 8740
-  and 8747, and moved the balance by exactly the price each time.
-- Four earlier settlements, under two earlier programs, are also on chain. They
-  are why the storage account had 100 before this deployment started.
+- **Every settlement in `artifacts/a2a-task.tsv` is on chain and moved the
+  balance by exactly the price.** The count and the blocks are deliberately not
+  written here: settlements are added by `scripts/a2a-task.sh`, so any number on
+  this line is wrong the next time one lands — and this line did go stale, saying
+  "the two settlements … at blocks 8740 and 8747" after four more had landed, at
+  which point the two it named were the ones made under a **superseded** program.
+  `./scripts/verify-deployment.sh` prints the current list with each block, and
+  marks which rows are under the shipped program and which are earlier history.
+- Earlier settlements, under earlier programs, are also on chain. They are why
+  the storage account had a balance before this deployment started, and they are
+  real transactions rather than evidence for what ships.
 - The four transactions at 8749, 8757, 8785 and 8794 are the anchoring-bypass
   demonstration, and they are evidence rather than debris:
   [`artifacts/adversarial.tsv`](../artifacts/adversarial.tsv) records each one

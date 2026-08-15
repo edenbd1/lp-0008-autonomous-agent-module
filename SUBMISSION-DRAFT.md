@@ -50,7 +50,14 @@
 > | # | Blocker | State |
 > |---|---|---|
 > | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the one blocker with real work left in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
-> | 2 | **`HEAD` is ahead of `origin/main` and unpushed.** A reviewer cloning right now gets the published branch, which does not have the regenerated evidence sections or the CI steps that keep them honest, and CI has not run on the commits that are only here. No count is written in this row on purpose — `git rev-list --left-right --count origin/main...HEAD` answers it, and any number typed here is wrong the moment either side moves, which is how the previous two versions of this row came to be wrong. | `git push`, then confirm CI. |
+> | 2 | **The end-to-end run against a real local sequencer is not green on `main`.** The workflow is in CI, has no skip path, and runs at `RISC0_DEV_MODE=0` — and the run it last completed on this branch failed at `create_policy`, because the script anchored the way the program used to require rather than the way it does now. The script has since been ported to the two-signature anchor; what has not yet happened is a completed green run **on `main`**. No run id is written in this row on purpose: `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1` answers it, and the last two versions of this row were wrong because a number was typed into them. | Dispatch it on `main` and read the conclusion. Two criteria turn on it. |
+>
+> Blocker 2 used to read "`HEAD` is ahead of `origin/main` and unpushed", and it
+> is worth saying why that is gone rather than quietly deleting it: it stopped
+> being true, and a stale blocker is more corrosive than a stale claim. It tells
+> a reviewer that the tree they cloned is not the tree being described, which
+> invites them to distrust everything else in the document — including the parts
+> that are checkable. `HEAD` **is** `origin/main`.
 >
 > Resolved while this was written, and no longer blockers: the
 > `spend`-does-not-bind-the-policy defect, the caller-supplied period total and
@@ -58,11 +65,22 @@
 > **settlements have landed under the shipped program**, so the anchors and the
 > settlement evidence are under the *same* program — the generated table says
 > which, and how many, and this line deliberately does not, because the last
-> three versions of it named transactions that had stopped being current; CI
-> went green after the `<cstdint>`
-> fix; the Agent Card is signed (BIP-340 Schnorr, `scripts/sign-agent-card.py`,
+> three versions of it named transactions that had stopped being current; the
+> Agent Card is signed (BIP-340 Schnorr, `scripts/sign-agent-card.py`,
 > which self-verifies before emitting); `docs/a2a-binding.md` specifies the
-> transport binding; and `docs/DEPLOYMENT.md` has been regenerated.
+> transport binding; `docs/DEPLOYMENT.md` has been regenerated; the agent module
+> has a **window** in the Logos app and an owner has approved a spend from it;
+> and a module Logos Core **loads** now builds its own Logos Delivery ports, so
+> two of them discovered each other's signed Agent Cards on the public network
+> and an owner approved and denied a spend over Logos Messaging.
+>
+> CI is **not** on that list, and it was, twice. It is green on `main` as this is
+> written, and it has been red on `main` twice today — once because a job could
+> not build `spel`, once because a coverage floor added by one piece of work read
+> a line of output added by another. Both were gates catching something real, and
+> neither is a reason to write "CI is green" into a document that outlives the
+> run. Ask: `gh run list --repo edenbd1/lp-0008-autonomous-agent-module
+> --branch main --limit 1`.
 >
 > The Success Criteria Checklist marks unmet criteria **UNMET**, including
 > criteria for which working, tested code exists. Code existing is not the
@@ -109,25 +127,44 @@ the whole account.
 
 Three agents — one per default skill category — are anchored on the public LEZ
 testnet, each with its own shielded account and its own envelope. Two of them
-have run an A2A task to completion and settled it in LEZ, unattended, with the
-per-period total accumulating on chain.
+have **paid each other for a priced skill, unattended**, with the per-period
+total accumulating on chain. That sentence used to read "have run an A2A task to
+completion and settled it in LEZ", which implied one flow where there are two:
+the lifecycle is driven through the real `TaskStore` and the settlement is a
+separate step in the same script, and the difference is the whole of what the
+agent-coordination criterion still asks for.
+
 Agent-to-agent coordination is A2A-shaped: cards carry the A2A schema plus an
 `x-logos` extension for the price and payment address that vanilla A2A has no
-field for.
+field for. Two modules that a host **loaded** have published those cards to a
+public Logos Messaging topic and discovered each other's — each configured to
+accept only a card naming the *other* account, because a Delivery node receives
+its own published messages and a one-process demonstration of discovery is not
+one.
 
 **What is not delivered** is stated in the checklist and in
 [`docs/limitations.md`](docs/limitations.md), and it is substantial: the owner
-can never approve an above-threshold spend after anchoring a policy, the
-messaging and storage skills have never been run against a live node, no model
-has ever been run against the inference port, and there is no video.
+can never approve an above-threshold spend after anchoring a policy; the
+**storage** skills have never been run against a live node, because nothing has
+put a Logos Storage node inside the module's own process; no agent has yet
+*served* another agent's task through to a terminal state, so discovery, the
+lifecycle and the payment are three exercises rather than one; no model has ever
+been run against the inference port; and there is no video.
+
+The messaging half of that sentence used to be in it and has been taken out,
+because it stopped being true: `messaging.send`, `messaging.join`,
+`messaging.receive`, `agent.discover`, `agent.task` and `agent.subscribe` all run
+from a loaded plugin against real Logos Delivery nodes on the public network
+(`./scripts/delivery-in-plugin.sh`).
 
 ## Repository
 
 - **Repo:** <https://github.com/edenbd1/lp-0008-autonomous-agent-module>
 - **License:** dual MIT / Apache-2.0
-- **Default branch:** `main` (public). ⚠️ See blocker 2 for how this tree
-  relates to `origin/main`, and run the command there rather than believing a
-  count written down here.
+- **Default branch:** `main` (public), and what you cloned is what this document
+  describes — there is no unpushed tail. Everything below is checkable from that
+  clone plus the public sequencer; where a fact moves (CI, the e2e run, the
+  per-period total) the command to ask is given instead of a number.
 
 Everything asserted below is verifiable from a clean clone plus the public
 sequencer. No claim in this document depends on trusting the author.
@@ -361,154 +398,175 @@ instead of a rejection.
 Legend: **MET** — demonstrated, with evidence anyone can re-check.
 **UNMET** — not demonstrated, whatever code exists.
 
+Every MET below names a command that was run and the output it produced. Nothing
+here is upgraded on the strength of reading code: this repository has shipped
+three separate claims that were true of the source and false of the binary, and
+one of them — `meta.skills` — was documented in three headers before it existed.
+
 ### Functionality
 
 - [ ] **UNMET — Module loads and runs inside Logos Core alongside the wallet,
   storage, and messaging modules without modifying them.**
-  Half of this is demonstrated and half is not. `module/tests/logos_core_load_test.cpp`
-  `dlopen`s the real `liblogos_core` out of an installed `LogosBasecamp.app` and
-  drives it through the same C API, in the same order, as Basecamp's own
-  `app/main.cpp`, ending in `logos_core_load_module("agent", true)` — the call
-  that runs when a user enables a module. The module loads and answers `skills()`
-  with 22 entries rather than `[]`, which was the failure mode worth testing
-  against: a module that loads and offers nothing looks identical to one that
-  works. What is **not** demonstrated is co-residency — the wallet, storage and
-  messaging modules were never loaded alongside it, because the storage and
-  delivery node libraries have never been run here at all (below). Recorded
-  output: [`docs/basecamp.md`](docs/basecamp.md).
+  Half of this is demonstrated and half cannot be, on this host.
+
+  **Loads and runs: yes, in the real runtime.** `./scripts/logos-core-headless.sh`
+  (exit 0) `dlopen`s the real `liblogos_core` out of an installed
+  `LogosBasecamp.app` and drives it through the same C API, in the same order, as
+  Basecamp's own `app/main.cpp` — `logos_core_init` → `add_modules_dir` →
+  `set_persistence_base_path` → `set_access_policy` → `logos_core_start` →
+  `logos_core_load_module("agent", true)` — then `configure()` and `start()` over
+  the runtime's transport:
+
+  ```
+  <- known modules: package_manager package_downloader capability_module agent
+  ok logos_core_load_module() reports success
+  <- loaded modules: capability_module agent
+  ok configure() is accepted across the transport
+  <- skills(): 23 entries
+  ok it lists exactly 23 — no more, no fewer (got 23)
+  ```
+
+  A module that loads and offers nothing looks identical to one that works, which
+  is why the skill count is asserted rather than the load. Basecamp itself is also
+  running it: `ps` shows a `logos_host --name agent` whose parent is
+  `LogosBasecamp.bin`.
+
+  **Alongside those three: not possible here.** `ls
+  /Applications/LogosBasecamp.app/Contents/modules/` returns `capability_module`,
+  `package_downloader`, `package_manager`. Basecamp 0.2.2 ships no wallet, storage
+  or messaging module, so there is nothing to load alongside — a statement about
+  the host, checked by listing a directory, not an inference from a failed lookup.
+  No submission can close this against this host.
 
 - [ ] **UNMET — The agent has its own shielded LEZ account and can send and
   receive tokens independently of the owner's wallet.**
-  *Send* is demonstrated: both settlements are privacy-preserving transactions
-  signed by the agent's own shielded account, not the owner's. *Receive* at that
-  same shielded account is impossible with the current `spel`, which fails with
-  `KeyNotFoundError` before building anything. Each agent keeps a separate public
-  account to be paid at. The criterion as written is not met.
+  *Send* is demonstrated: `./scripts/verify-deployment.sh` (exit 0) re-decodes 4
+  settlements under the shipped program from the chain's own copy, each a
+  privacy-preserving transaction signed by the agent's own shielded account, not
+  the owner's. *Receive* at that same shielded account is impossible with the
+  current `spel`, which fails with `KeyNotFoundError` before building anything, so
+  each agent keeps a separate **public** account to be paid at — the `pay_account`
+  column of [`artifacts/agents.tsv`](artifacts/agents.tsv) and the
+  `server_pay_account` column of [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv),
+  read by name. The criterion as written is not met, and closing it needs a
+  `spel`/LEZ release rather than anything in this repository.
+  See [`docs/limitations.md`](docs/limitations.md).
 
 - [ ] **UNMET — The owner can deploy the agent and configure it with a single CLI
   command on any machine using Logos Core headless.**
-  Measured rather than estimated. `SIGNER=… ./scripts/deploy-agents.sh` *is* one
-  command, and it deploys and anchors all three agents reproducibly. Two things
-  are wrong with it against this criterion, and the second is the fatal one.
+  This has moved a long way and is still two commands, not one.
 
-  **It is not one command on a machine that has none of this set up.** Run on
-  this repository with nothing else present it reports, in order: `SIGNER: set
-  SIGNER to a funded public account id` (exit 1); then, with `SIGNER` set and no
-  LEZ toolchain, `[storage] new shielded account / FAILED to create an account`
-  three times and `3 of 3 agents did not deploy`. Four things have to exist
-  first — a `wallet` built from LEZ at the pinned revision, `spel` from
-  `vendor/spel`, a wallet home holding `SIGNER`'s key, and testnet balance to
-  cover the three funding floors (5 + 55 + 5). So it is one command **plus four
-  setup steps**, and the last of them cannot be scripted at all: it needs a
-  faucet.
+  **The Logos Core half now exists and is one command.**
+  `./scripts/logos-core-headless.sh` (exit 0) installs `module/agent.lgx` into the
+  user modules directory the way Basecamp's own installer does, builds the harness
+  if it is not built, and runs load → `configure()` → `start()` headless — no GUI,
+  no window, no display — binding the agent to the owner and policy account
+  [`artifacts/agents.tsv`](artifacts/agents.tsv) actually records, then reading both
+  back out of `meta.status`. So what is asserted is that the runtime is running
+  *this* agent under *that* envelope, not merely that a module loaded. An earlier
+  draft of this entry said `grep -rn 'logos_core' scripts/` returns nothing; it no
+  longer does.
 
-  **Nothing in the deployment path touches Logos Core.** `grep -rn 'logos_core'
-  scripts/` returns nothing; the only file in this repository that drives Logos
-  Core is `module/tests/logos_core_load_test.cpp`. The criterion names Logos
-  Core headless, and this deploys to a chain with a wallet and a prover. The two
-  are not the same act, and calling one the other would be the whole criterion
-  wished away.
+  **It is still two commands.** `SIGNER=… ./scripts/deploy-agents.sh` puts the
+  identity and the spending envelope on chain; `./scripts/logos-core-headless.sh`
+  runs the module in Logos Core. The criterion asks for one.
 
-  What closing it would cost: the *headless* half is small — the harness above
-  already does `logos_core_init` → add module dirs → `logos_core_start` →
-  `logos_core_load_module` → `configure()` → `start()` without a GUI, so a
-  script wrapping install-plus-that is about thirty lines. What that would not
-  buy is "on any machine": it needs an installed Basecamp for `liblogos_core`,
-  Qt 6.9.2, and three pinned SDK checkouts, all of which
-  [`docs/basecamp.md`](docs/basecamp.md) documents and none of which a single
-  command installs. Written down rather than half-built, because a script that
-  still failed the criterion would only make the gap harder to see.
+  **And still not "on any machine".** It needs an installed Basecamp for
+  `liblogos_core` — there is no headless distribution of it to fetch — plus Qt
+  6.9.2 and a `logos-cpp-sdk` checkout. Every one of those is checked before
+  anything is compiled and named in the error when it is missing, so a machine
+  that cannot run this says which piece it lacks instead of failing inside a
+  compile. The on-chain half additionally needs a funded account, and a faucet
+  cannot be scripted.
 
-- [ ] **UNMET as the prize asks it, and demonstrated on the transport it names —
-  The owner can interact with the agent in real time from a separate Logos app
-  instance using Logos Messaging, with no intermediary server.**
+- [ ] **UNMET — The owner can interact with the agent in real time from a separate
+  Logos app instance using Logos Messaging, with no intermediary server.**
 
-  There are two paths and they must not be blurred.
+  Four clauses. Three are now demonstrated and the fourth is not, and they must
+  not be blurred.
 
-  **Path B — two processes over real public Delivery nodes. This works, and it
-  is the transport the criterion names.** `./scripts/owner-channel-live.sh`
-  starts two processes, each creating its own Delivery node on the `logos.dev`
-  preset, sharing nothing but a content topic on the public network. One runs
-  `logos::agent::OwnerChannel` — the module's own class, unmodified, with its
-  port wired to `liblogosdelivery` instead of to a fake. The other is the owner:
-  it joins the same reliable channel from its own node, reads the request, and
-  answers it. Measured:
+  **Using Logos Messaging, no intermediary server, in real time — demonstrated,
+  from a module Logos Core loads.** `./scripts/delivery-in-plugin.sh approval`
+  (exit 0) runs the composition that was wired and, until it existed, unwatched: a
+  plugin loaded through `QPluginLoader` holds an above-threshold `wallet.send`,
+  opens **its own** Logos Delivery node, publishes the request on the public
+  network to an owner process on a **separate** node, and acts on the answer.
 
   ```
-  owner:  <- request: {"agent":"agent…","amount":"250","id":"req-…","marker_seed":"a…",
-                       "nonce":85109,"policy_hash":"…","protocol":"/lp-0008/1/owner-channel",
-                       "recipient":"payee…","type":"spend_approval_request"}
-          ok  the channel sender id is the agent's, not this process's own
-          ok  it names the amount / the nonce / the approval marker seed
-  agent:  <- decision: {"altered":0,"approved":true,"attempts":1,
-                        "detail":"the owner approved these exact terms",
-                        "owner_unreachable":false,"verdict":"approved"}
-          ..  312 ms, 1 attempt(s) on the wire
+  --- owner ---
+  ok the owner opened the same reliable channel
+  ok and it comes from the agent this owner is waiting for
+  ok the owner can derive a marker seed for these terms
+  ok and it is the seed the agent named — two independent derivations of the
+     account `spend_approved` will look for, not one copied twice
+  --- agent ---
+  <- 439 ms
+  <- wallet.send: {"amount":"250","approved":true,"attempts":1,
+     "outcome":"approved","submitted":false,"waited_ms":438,…}
+  ok the owner was reached
+  ok and approved these exact terms: approved
   ```
 
-  `approved` is not a report that a send succeeded. `OwnerChannel` only returns
-  it for a frame that names *this* request's id, policy hash, recipient, amount,
-  nonce and marker seed, so it is an assertion about the bytes that crossed the
-  network. **312 ms, which is what "in real time" has to mean here.** The nodes'
-  own logs name the relays they went through — `138.68.122.137`,
-  `174.138.106.244` (DigitalOcean), `34.123.201.25` (Google Cloud),
-  `47.242.130.189` — third-party public relays, none of them ours. That is the
-  "no intermediary server" clause: the thing in the middle is the public relay
-  mesh, not a broker either side operates.
+  It is run **twice**, approve and deny, because a channel that answered
+  "approved" whatever came back would pass the first run and only the first. The
+  deny run returns `{"outcome":"denied","approved":false,"submitted":false}` in
+  661 ms.
 
-  **That figure was 12.6 seconds over two attempts, and the fix is the finding.**
-  A Delivery node keeps the reliable channel's state in `sds.db`, under a `data` directory it
-  creates *in the working directory*, so two nodes started from one directory share it. Nothing
-  reports a conflict — the first frame is simply not delivered (five channel
-  sends, four deliveries, in a bare probe), and the agent's retry silently covers
-  for it, which reads as an unreliable network and is not one. Each process now
-  gets a directory of its own, and the exchange completes on the first attempt.
-  Worth recording because it is the difference between "the owner channel needs
-  seconds and a retry" and "the owner channel answers in a third of a second",
-  and only one of those is true.
+  This corrects a conclusion this document held for months. A host cannot **pass**
+  a `std::function` across a plugin boundary — true — which was read as meaning a
+  module cannot **have** one. It can: the module links `liblogosdelivery` and
+  builds its ports on the far side of the boundary, and nothing crosses it but
+  `meta.configure("delivery","on")`.
 
-  Run `./scripts/owner-channel-live.sh --negatives` and the same harness fails
-  three ways, each watched: a node that never started makes `open()` refuse
-  (`{"error":"delivery node is not started"}`); with nobody listening the agent
-  reports `unreachable` after 5 attempts and exits 1 — which matters because a
-  node receives its own published messages, so this is the proof the agent
-  cannot settle its own request; and an owner answering `251` where `250` was
-  asked produces `{"verdict":"refused","altered":6,…"the reply names a different
-  amount"}` and exit 1, with all six altered frames arriving and every one
-  refused.
+  The same class also runs outside any plugin, with its negatives watched.
+  `./scripts/owner-channel-live.sh` (exit 0) puts two processes on two Delivery
+  nodes on the `logos.dev` preset and completes a correlated approval round trip
+  in **316 ms on the first attempt**; the relays in the middle are third-party
+  public ones, which is what "no intermediary server" has to mean.
+  `./scripts/owner-channel-live.sh --negatives` (exit 0) fails it three ways on
+  purpose: a node that never started, nobody listening (`unreachable` after 8
+  attempts — which matters, because a node receives its own published messages, so
+  this is the proof the agent cannot settle its own request), and an owner
+  answering `251` where `250` was asked (`{"verdict":"refused","altered":6}`).
 
-  **Path A — the same conversation inside Basecamp. Not on Logos Messaging.**
-  What a Basecamp-loaded plugin has is an owner channel built out of the
-  *runtime's* surface: `ownerApprovalRequested` forwarded as a Qt signal,
-  answered by the module method `approveSpend`. That is real and exercised
-  across the transport, and it is not Logos Messaging. `OwnerChannel` needs a
-  `DeliveryPort`, a `std::function` that cannot cross a plugin boundary, so the
-  class Path B just drove over the public network is exactly the one the plugin
-  cannot be handed.
-
-  Marked UNMET on the conjunction the criterion actually states. It says *from a
-  separate Logos app instance*, and the owner process in Path B is a Delivery
-  node this repository starts, not Basecamp. Two Logos apps have not talked to
-  each other. What is now true, and was not before, is that the claim has moved
-  from "no message has been sent between two instances" to "the module's owner
-  channel completes a correlated approval round trip between two independent
-  nodes on the public network, and refuses when the terms are altered". The
-  remaining gap is a host, not a transport.
+  **From a separate Logos app instance — no, and that is the whole of what is
+  left.** The owner in every run above is `module/tests/owner_responder.cpp`, a
+  program written for the purpose with its own Delivery node, and the agent end is
+  a harness rather than Basecamp. Two Logos apps have not talked to each other.
+  Closing it means giving the `app/` console a Delivery-backed owner channel — it
+  currently answers over Logos Core's own transport, which is the *other*
+  criterion, below — and running two instances. The remaining gap is a host, not a
+  transport, and the transport is no longer a claim: it is a script.
 
 - [ ] **UNMET — The spending threshold holds above-threshold transactions for owner
   approval and executes below-threshold transactions autonomously.**
-  The below-threshold half is demonstrated on the public testnet twice (see the
-  settlement evidence below): 25 LEZ sits inside the client's anchored
-  per-transaction limit, so `spend` takes the autonomous branch, and the chain
-  would have refused it otherwise. The above-threshold half **cannot currently
-  work**, and the reason is structural rather than a bug. The constraint measured
-  on chain is one program transaction per public signer account. `approve_spend`
-  requires the owner as signer, and the policy hash commits
-  `owner_id = sha256(owner account id)`, so the approval must come from the same
-  account that anchored the policy — which has already spent its one transaction on
-  `create_policy`. **The owner who anchored a policy is, by construction, unable to
-  approve anything under it.** Two ways out are identified and neither has been
-  tried. See `docs/limitations.md`.
+  The below-threshold half is demonstrated on the public testnet:
+  `./scripts/use-cases/02-services-marketplace.sh` (exit 0) decodes six
+  settlements from the chain's own copy, each price inside the paying agent's
+  anchored per-transaction limit, and
+  `./scripts/use-cases/03-spending-threshold.sh` (exit 0) reads the live ledger
+  back at 60 of 1000 for period 8000 — the sum of the prices charged to it.
+
+  The module's above-threshold half is demonstrated three ways: the loaded module
+  holds and asks and gives up cleanly when nobody answers
+  (`logos-core-headless.sh`, 7 attempts, terminal `owner_unreachable`,
+  `submitted:false`); the owner answers over Logos Messaging and is obeyed in both
+  directions (`delivery-in-plugin.sh approval`); and the owner answers from inside
+  Basecamp (Usability, below).
+
+  The **chain's** above-threshold half cannot currently work, and the reason is
+  structural rather than a bug. The constraint measured on chain is one program
+  transaction per public signer. `approve_spend` requires the owner as signer, and
+  the policy commits `owner_id = sha256(owner account id)`, so the approval must
+  come from the account that anchored the policy — which has already spent its one
+  transaction on `create_policy`. **The owner who anchored a policy is, by
+  construction, unable to approve anything under it.** Every approved spend above
+  therefore returns `{"outcome":"approved","submitted":false}` and names the path
+  it would take, rather than claiming a payment that did not happen. Refusal on
+  chain is real and was watched: `Program error 6005: the spend needs an owner
+  approval: use spend_approved`, with no transaction built. Two ways out are
+  identified in [`docs/limitations.md`](docs/limitations.md) and neither has been
+  tried.
 
 - [x] **MET — All default skills implemented and documented.**
   All twenty-one are implemented **and registered**, which are different claims:
@@ -534,40 +592,99 @@ Legend: **MET** — demonstrated, with evidence anyone can re-check.
   other skill — not special-cased in `invoke()` — and reads the same registry
   `agent.card` does, so the catalogue and the card are one answer.
 
-  Asserted by execution rather than by reading: `module/tests/plugin_load_test.cpp`
-  loads the packaged `module/agent.lgx` through `QPluginLoader` and
-  `module/tests/logos_core_load_test.cpp` loads it through the installed
-  Basecamp's own `liblogos_core`. Both report 22 entries, each with a parameter
-  schema, `invoke()` dispatching to every one, and `meta.skills` listing all 23
-  — including itself — over the boundary. Recorded output in `docs/basecamp.md`.
+  Asserted by execution against the **packaged artefact**, not a rebuild:
+  `module/tests/plugin_load_test.cpp` loads the committed `module/agent.lgx`
+  through `QPluginLoader` (exit 0) and `./scripts/logos-core-headless.sh` loads it
+  through the installed Basecamp's own `liblogos_core` (exit 0). Both report 23
+  entries, each with a parameter schema, `invoke()` dispatching to every one, and
+  `meta.skills` listing all 23 — including itself — over the boundary.
+  Documented in [`docs/skills.md`](docs/skills.md), and the count is gated:
+  `./scripts/check-docs.py` (exit 0) reports `checked 19 skill-count mention(s)
+  against the 23 the module registers`, and `examples/agent-console/run.sh`
+  asserts `docs/skills.md §7 lists exactly the 23 skills the module registers`.
 
-- [ ] **UNMET — A2A-compatible: cards follow the A2A schema, tasks follow the A2A
+- [x] **MET — A2A-compatible: cards follow the A2A schema, tasks follow the A2A
   lifecycle, documented as an A2A transport binding over Logos Messaging.**
-  Most of this is now in place. The card carries `protocolVersion 0.3.0`,
-  `preferredTransport`, `capabilities`, `defaultInputModes`/`defaultOutputModes`
-  and a `skills` array in A2A shape, plus an `x-logos` extension carrying the
-  payment account, price and settlement kind — the two fields A2A has no slot for.
-  It is **signed** as of `342997c`: `scripts/sign-agent-card.py` produces a JWS with
-  BIP-340 Schnorr over secp256k1, runs the published test vector as a self-test
-  (including a negative case, asserting a tampered digest does *not* verify), and
-  refuses to emit a signature it cannot itself verify. The lifecycle
-  (`working → input-required → completed/failed`) is implemented in
-  `module/src/agent_skills.h`, and the binding is specified in `docs/a2a-binding.md`
-  — which is candid that an off-the-shelf HTTP A2A client cannot talk to a Logos
-  agent, and that what interoperates is the *data*, not the transport.
-  Marked UNMET on the transport, which is the half the criterion names: **no A2A
-  task has ever crossed a live Logos Messaging node.** The settlements were driven
-  by `scripts/a2a-task.sh` over the chain; the messaging skills that would carry the
-  card and the task have never been run against a running node. The binding is
-  specified and not exercised, which the spec itself says.
+  Three conjuncts, each checked by running something.
 
-- [x] **MET — Two or more agents discover each other via Agent Cards, execute a
+  *Cards follow the A2A schema.* Validated against the authentic published schema
+  rather than a vendored copy — fetched with `gh api
+  repos/a2aproject/A2A/contents/specification/json/a2a.json?ref=v0.3.0`, whose
+  blob hash `7e0da25e…` was compared against GitHub's own. Both
+  `artifacts/agent-cards/storage.json` and the module's live `CardSkill` output
+  validate at `protocolVersion 0.3.0`, and the only non-schema member is the
+  declared `x-logos` extension carrying the payment account and price — the two
+  fields A2A has no slot for. Falsifiable: five mutations of the committed card
+  were all rejected (dropped `protocolVersion`, `capabilities.streaming` as a
+  string, dropped `skills[].tags`, malformed `signatures[]`, dropped `name`).
+  Cards are **signed**: `scripts/sign-agent-card.py` produces a JWS with BIP-340
+  Schnorr over secp256k1, runs the published test vector as a self-test including
+  a negative case, and refuses to emit a signature it cannot itself verify. CI
+  asserts the header the module emits is `{"alg":"secp256k1-bip340"}` over the
+  payment account, which is the pair that silently disagreed before.
+
+  *Tasks follow the A2A lifecycle.* The shipped `taskStateName` set is the A2A
+  v0.3.0 `TaskState` enum exactly — symmetric difference empty in both directions
+  — and `a2a_drive lifecycle` (exit 0) walks `submitted → working → working →
+  input-required → working → completed` through the real `TaskStore`, then is
+  refused when it tries to reopen a completed task.
+
+  *Documented as a transport binding.* [`docs/a2a-binding.md`](docs/a2a-binding.md),
+  which is candid that an off-the-shelf HTTP A2A client cannot talk to a Logos
+  agent, and that what interoperates is the *data*, not the transport.
+
+  Two caveats that belong here rather than in the verdict. The repository performs
+  **no JSON-Schema validation** in CI or in any script — the validation above is a
+  reviewer's, and a card declaring `protocolVersion: "9.9.9"` would pass every
+  check the repo itself has. And the 9×9 transition matrix is **the binding's
+  own**: A2A v0.3.0 publishes no transition table, `docs/a2a-binding.md` §5.2 says
+  so, and only 13 of the 81 cells are asserted anywhere.
+
+- [ ] **UNMET — Two or more agents discover each other via Agent Cards, execute a
   task following the A2A lifecycle, and transfer LEZ payment autonomously, without
   owner intervention.**
-  Settlements run with no special handling between them — the repeats matter as
-  much as the first, because a repeat settlement is what this repository could
-  not produce for most of its life. The table below is **generated**, not
-  transcribed; reproduce it with `./scripts/submission-evidence.py`.
+  This is a conjunction of four things. Three hold, on the public network and on
+  chain, and they have never yet held **in one flow** — which is what the sentence
+  says.
+
+  **Discovery: now real, and this is new.** `./scripts/delivery-in-plugin.sh peers`
+  (exit 0) starts two modules loaded through `QPluginLoader`, each with its own
+  Delivery node, its own LEZ account, its own wallet and its own working
+  directory, on one public topic:
+
+  ```
+  ok this agent published its own signed card on the topic
+  ok and discovered the OTHER agent's signed Agent Card over the public network
+  ok which is signed — `require_signed` was on, so an unsigned card would not be
+     in this list at all
+  ok this agent opened an A2A task addressed to the other one
+  ok and READ the other agent's A2A request off its own task topic
+  ```
+
+  The two-process shape is not decoration. A Delivery node receives its own
+  published messages, so a single process can satisfy any "a card arrived"
+  assertion with every other agent on earth switched off; each side here accepts
+  only a card naming the **other** account, so neither could satisfy its own
+  assertion. An earlier version of this entry claimed MET while the shipped plugin
+  answered `agent.discover` with *no discovery transport is configured*. That is
+  fixed, and the fix is the module building its own port rather than being handed
+  one.
+
+  **Payment: real, and independent of the owner.** The generated table below
+  decodes four settlements under the shipped program out of the transactions
+  themselves. `spend` takes no owner and no approval account; no agent wallet
+  holds its owner's key.
+
+  **What is still missing is the serving half.** The lifecycle transitions above
+  are driven **locally by the client** through the real `TaskStore`; no agent has
+  received a peer's request, moved it to a terminal state, published status back,
+  and triggered the settlement. Discovery, the request crossing, the lifecycle and
+  the payment are four exercises rather than one. `messaging.receive` — the skill
+  that reads a request off a task topic — landed for exactly this reason and is
+  the first half of it.
+
+  The settlement table is **generated**, not transcribed; reproduce it with
+  `./scripts/submission-evidence.py`.
 
 <!-- BEGIN GENERATED settlements -- scripts/submission-evidence.py; do not edit by hand -->
 
@@ -618,20 +735,49 @@ The explorer indexes roughly an hour and three quarters behind the sequencer, so
   The balances above come out of each transaction's own committed post-state
   instead, which is what makes them provable.
 
-- [ ] **UNMET — At least 3 illustrative use cases demonstrated end-to-end on LEZ
+- [x] **MET — At least 3 illustrative use cases demonstrated end-to-end on LEZ
   testnet.**
-  One is: the paid skill marketplace / agent services marketplace, above. The
-  storage-backed cases (personal file vault, privacy-preserving notary) and the
-  messaging-backed ones cannot be claimed, because **the storage and messaging
-  skills have never been exercised against a running node** — they are written
-  against the real Storage and Delivery ABIs, read off the module headers rather
-  than guessed, and they compile, but compiling is not working. `docs/skills.md`
-  says so in its own status table.
+  Three of the prize's own illustrative use cases, each with transactions on the
+  public testnet, each re-verified by execution against the chain rather than
+  against a cached file, and each with a control that must come back empty:
+
+  ```
+  ./scripts/use-cases/02-services-marketplace.sh    # exit 0 — agent services /
+                                                    #   paid skill marketplace
+    OK  6 settlement(s), each one decoded from the chain's own copy
+    OK  it moved 5: payee and ledger both advanced by the advertised price
+    OK  control: a transaction hash that cannot exist returns null
+
+  NOTARY_VERIFY_ONLY=1 ./scripts/use-cases/04-privacy-notary.sh    # exit 0
+    OK  1 notarisation(s), each verified from the chain against the document's own key
+    OK  control: a document nobody notarised derives a key that appears nowhere
+
+  ALERTER_VERIFY_ONLY=1 ./scripts/use-cases/05-event-alerter.sh    # exit 0
+    OK  1 alert(s), each re-verified from the chain
+    OK  control A: it reads as the default account, so the detector does not fire
+    OK  control B: a transaction hash that cannot exist returns null
+  ```
+
+  A fourth — the **personal file vault** — runs end to end against a real Logos
+  Storage node and a real Logos Messaging topic (`./scripts/use-cases/01-file-vault.sh`,
+  exit 0, returning a content address and a `message_propagated` event) but submits
+  no LEZ transaction, so it is **not** counted toward "on LEZ testnet". Its
+  drivers are purpose-built C programs against the node ABIs, not the module's own
+  `storage_skills.cpp`; what it proves is the round trip, not the skills.
+  The narrower statement that remains true, and is kept: `storage.*` has no
+  Storage node inside the module's own process. The messaging half of that
+  sentence is no longer true — `messaging.send`, `messaging.join`,
+  `messaging.receive`, `agent.discover`, `agent.task` and `agent.subscribe` all run
+  from a loaded plugin against real Delivery nodes.
 
 - [x] **MET — Three separate agents deployed on LEZ testnet, one per default skill
   category, each with a demonstrated, reproducible deployment and evidence.**
   Storage, messaging and blockchain, each with its own shielded account, its own
-  public receiving account and its own anchored envelope. The table below is
+  public receiving account and its own anchored envelope, confirmed today by
+  `./scripts/verify-deployment.sh` (exit 0) and independently by
+  `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md` (exit 0). The
+  limits below are the ones the state machine holds, not the ones the manifest
+  claims; the generator exits non-zero if they disagree. The table is
   **generated** from `artifacts/agents.tsv` and the chain, read by column name:
 
 <!-- BEGIN GENERATED agents -- scripts/submission-evidence.py; do not edit by hand -->
@@ -665,27 +811,49 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   Stronger than transaction presence: each policy account comes back owned by
   the policy program's own `ProgramId`, while the PDA of an agent nobody
   anchored comes back with the default owner, and the `dedede…` control returns
-  `null` on every pass. Reproduce with `./scripts/deploy-agents.sh`, which is
-  deliberately not idempotent — a second run derives the same address and
-  `create_policy` refuses it, because `#[account(init, …)]` will not take an
-  account that is not in its default state, which is the single-use guarantee
-  working. The script reports it as already-anchored via
-  `artifacts/anchored.tsv`, keyed on `(program, agent_id)`.
+  `null` on every pass.
+
+  **Reproducible by someone who is not the author, which it was not.** Reproduce
+  with `./scripts/deploy-agents.sh`, which is deliberately not idempotent — a
+  second run derives the same address and `create_policy` refuses it, because
+  `#[account(init, …)]` will not take an account that is not in its default state,
+  which is the single-use guarantee working. The script reports it as
+  already-anchored via `artifacts/anchored.tsv`, keyed on `(program, agent_id)`.
+  Until recently the three `deploy_agent` call sites carried three **hardcoded
+  account ids**, which made the `$SIGNER` fallback beside them unreachable:
+  setting `SIGNER` did nothing for anchoring, and to use the script at all you had
+  to edit it, while no prerequisite list said so. It failed in the worst possible
+  order — `claim_agent` is signed by the agent and lands whatever `--owner-id`
+  says, so a stranger's run funded an agent, landed an `#[account(init)]` claim
+  naming an owner they cannot sign for, and only then failed on `create_policy`.
+  That claim can never be rewritten and no policy can ever be anchored over that
+  agent, by anyone. The ids are gone: `resolve_signer` provisions one anchoring
+  signer per agent from `$SIGNER_<CATEGORY>`, else the signers manifest the script
+  writes beside [`artifacts/anchored.tsv`](artifacts/anchored.tsv), else a fresh
+  local public account — and records it **before** the claim is signed, so a run
+  that dies between the two steps resumes with the same owner rather than a new
+  one the claim will refuse.
 
 - [x] **MET — Full documentation and a clean public repository.**
   Skill interface spec [`docs/skills.md`](docs/skills.md), deployment guide
   [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), architecture
   [`docs/architecture.md`](docs/architecture.md), security model
   [`docs/security-model.md`](docs/security-model.md), owner/app integration
-  [`docs/basecamp.md`](docs/basecamp.md), CU accounting
-  [`docs/benchmarks/cu-budget.md`](docs/benchmarks/cu-budget.md), and
+  [`docs/basecamp.md`](docs/basecamp.md) and [`app/README.md`](app/README.md), CU
+  accounting [`docs/benchmarks/cu-budget.md`](docs/benchmarks/cu-budget.md),
   [`docs/limitations.md`](docs/limitations.md), which is where anything that does
-  not work is written down first, plus the A2A transport binding spec
-  [`docs/a2a-binding.md`](docs/a2a-binding.md). Public repo, dual MIT/Apache-2.0.
-  `docs/DEPLOYMENT.md` was regenerated against the current program at this commit,
-  after a window in which it and the manifests described two different deployments —
-  worth noting because that window is exactly what a redeploy costs, and it will
-  reopen if the settlements are re-run without regenerating it again.
+  not work is written down first, and the A2A transport binding spec
+  [`docs/a2a-binding.md`](docs/a2a-binding.md). Gated rather than asserted:
+  `./scripts/check-docs.py` (exit 0) reports `checked 334 paths, 142 link targets,
+  7 line citations, 69 symbol citations … across 13 documents / every path, link
+  target, line citation and symbol citation resolves`.
+
+  One caveat a reviewer will see before they read any of it: the repository is
+  dual MIT/Apache-2.0 and both full texts are present, but **GitHub's own licence
+  detector reports "Other"** — `gh api repos/edenbd1/lp-0008-autonomous-agent-module
+  --jq .license` returns `{"key":"other","spdx_id":"NOASSERTION"}` — because the
+  root `LICENSE` is a pointer to the two files rather than one full text. The
+  sidebar therefore does not say MIT or Apache-2.0.
 
 ### Usability
 
@@ -701,84 +869,187 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   drops the lock before dispatching and rejects a non-JSON return, so a skill
   cannot corrupt a document the caller splices its answer into.
 
-- [ ] **UNMET — The owner-facing interface is accessible from the Logos app
+  Demonstrated end to end by `./examples/agent-console/run.sh` (exit 0), which
+  compiles a skill living outside `module/src` against the interface header alone,
+  `dlopen`s it into the module, and checks the answer against something that is
+  not this repository:
+
+  ```
+  ok  libnotary_digest.dylib built from one header: agent_module_interface.h
+  ok  skills() advertises notary.digest alongside the built-ins
+  ok  a second skill of the same name is refused
+  ok  the skill answered through the module
+  ok  malformed parameters are refused … and the same call afterwards returns the same answer
+  ok  docs/skills.md §7 lists exactly the 23 skills the module registers
+  ok  the digest matches shasum -a 256 of the same input
+  ok  and does not match the digest of altered input
+  ok  nothing under module/ was modified — the criterion's words, checked
+  ```
+
+  The step between the last two of those reports the registry one larger than the
+  module's own built-in count, once the third-party library is loaded — which is
+  the criterion's arithmetic, and it is asserted rather than described.
+
+  The `shasum` comparison is what stops a registered-but-never-run skill passing,
+  and the `module/` cleanliness check is mechanical and runs at both ends. This
+  script is now a CI step — "A third party adds a skill without editing the
+  module" — which it was not: it broke for one commit when a new module source
+  file was added to the build everywhere except this example's link list, under a
+  comment saying the two lists must stay identical, and nothing noticed.
+
+- [x] **MET — The owner-facing interface is accessible from the Logos app
   (Basecamp) via the owner channel; local build instructions and loadable assets
   provided.**
-  The criterion is a conjunction and the two halves have different answers.
+  The criterion is a conjunction and both halves now hold.
 
-  **The assets and instructions half holds up, and was re-checked by following
-  the document rather than by reading it.** `module/agent.lgx` ships;
-  `lgx verify` reports the structure valid and `lgx manifest` reports
-  `type: core`, `main[darwin-arm64] = agent_plugin.dylib`. Installed by hand
-  with the four commands [`docs/basecamp.md`](docs/basecamp.md) gives, into a
-  modules directory that had never seen it, both harnesses were rebuilt from the
-  document's own `clang++` lines and both came back green — `QPluginLoader`
-  against the packaged artefact (23 skills, every one dispatching, exit 0) and
-  the installed Basecamp's real `liblogos_core` driving it over the module
-  transport (exit 0). Two defects in the document were found this way and fixed:
-  its `lgx verify` line assumed `lgx` on `PATH` when the packaging section says
-  it is found at `~/logos/src/logos-package/build/lgx`, and the root hash it
-  quoted was one repackage stale.
+  **Assets and instructions.** `module/agent.lgx` and `app/agent-ui.lgx` both ship,
+  with build and install commands in [`docs/basecamp.md`](docs/basecamp.md) and
+  [`app/README.md`](app/README.md). The package is provably the source committed
+  beside it: `./scripts/check-package-fresh.py` (exit 0) reports `all 29 build
+  inputs hash exactly as they did when the package was made` and `every one of the
+  701 source literals of >= 8 bytes is in the darwin-arm64 binary` — a check that
+  exists because the shipped `.lgx` was once two commits stale and produced cards
+  the repository's own verifier refused.
 
-  **The "accessible from the Logos app" half now holds, and the diagnosis that
-  it did not was right about the cause.** It was never that Basecamp 0.2.2 ships
-  no wallet, storage or messaging module — that blocks a different criterion.
-  It was that there was no surface: a `core` module is not one, Basecamp gives
-  windows to `ui` plugins, and this repository shipped none. With the module
-  installed at the exact path the document names, Basecamp reported
-  `Total modules: 3` and the string `agent` appeared **nowhere** in its output.
+  **A window, which a `core` module is not.** Basecamp gives windows to `ui`
+  plugins and this repository shipped none, so the module loaded, answered, and
+  was named nowhere a person watching the app could see. [`app/`](app/README.md)
+  is that plugin — Qt Widgets, implementing Basecamp's `IComponent`, packaged
+  `type: ui`, holding no agent logic of its own; every button is one call on the
+  loaded module. `app/tests/ui_plugin_load_test.cpp` (exit 0) reproduces what
+  Basecamp's PluginLoader does and asserts each step: the plugin **fails** to bind
+  without `liblogos_core` and binds with it, the IID is
+  `com.logos.component.IComponent`, the manifest says `type: ui` and declares
+  `agent`, `qobject_cast` succeeds across the boundary, and `createWidget` returns
+  this plugin's console rather than taking the host down. It was watched failing
+  against two real Qt plugins that are not this one, including this repository's
+  own `core` module.
 
-  [`app/`](app/README.md) is that plugin — Qt Widgets, implementing Basecamp's
-  `IComponent`, packaged `type: ui`, holding no agent logic of its own. With
-  both packages installed and the sidebar tile clicked once, Basecamp prints
-  `App launcher clicked: "agent-ui"`, `Loading core dependency for "agent-ui" :
-  "agent"`, `Module loaded: agent`, `Added plugin dock to WorkspaceArea:
-  "LP-0008 Agent"` and `Successfully loaded UI module: "agent-ui"`, and the
-  window's first call arrives at the module. The tile's own label is readable
-  out of the app through macOS's accessibility API, so it is an assertion
-  rather than a screenshot.
+  **Accessible from the Logos app, read out of the app.** With both packages
+  installed, macOS's accessibility API returns the sidebar's own labels — an
+  assertion rather than a screenshot:
 
-  The owner channel closes with it: an above-threshold `wallet.send` published
-  `ownerApprovalRequested` to that window, the owner clicked **Approve**, and
-  the agent acted on the verdict — 5.2 s from call to answer inside a 60 s wait,
-  reproduced from a clean clone and a clean install. Two module-side facts had
-  to be measured to get there, one of which changed `module/src`; both are in
-  [`docs/limitations.md`](docs/limitations.md).
+  ```
+  $ osascript -e 'tell application "System Events" to tell process "LogosBasecamp.bin"
+                  to tell window 1 to get name of every button'
+  LP-0008 Agent, lp-0002-multisig, lp-0003-airdrop, Applications,
+  Package Manager, Settings
+  ```
 
-  What is still bounded: Basecamp 0.2.2's Package Manager installs from a
-  configured repository only, so both packages are installed by hand — by the
-  reviewer as much as by us — and both carry only a `darwin-arm64` variant.
+  Before `app/` existed the same command returned that list without its first
+  entry, and `grep -ci agent` over Basecamp's whole output returned 0. It is still
+  0 at startup — nothing has asked for the module yet — and clicking the tile is
+  what asks: Basecamp's PluginLoader reads the `ui` plugin's
+  `"dependencies": ["agent"]`, loads the core module, has `capability_module` mint
+  a token for it, and only then calls `createWidget`.
+
+  **Via the owner channel.** An above-threshold `wallet.send` invoked from that
+  window published `ownerApprovalRequested` to it, the owner clicked **Approve**,
+  and the agent acted on the verdict — the window's own transcript:
+
+  ```
+  → agent.invoke(wallet.send, {"recipient":"9xQeWvG8…","amount":"100"})
+  <= event ownerApprovalRequested (attempt 1) … (attempt 2) … (attempt 3)
+  → agent.approveSpend(spend-1786829559014, approved)
+  <- approveSpend(spend-1786829559014, approved) accepted
+  <- invoke(wallet.send): {"approved":true,"attempts":5,"delivered":5,
+     "outcome":"approved","submitted":false,"waited_ms":12403,…}
+  ```
+
+  Two module-side facts had to be **measured** before that worked at all, and both
+  are in [`docs/limitations.md`](docs/limitations.md): a module that blocks on a
+  call cannot publish while it blocks, and a verdict cannot return on the
+  connection that asked for it, because Qt disables a socket's read notifier for
+  the duration of its handler.
+
+  What is bounded, stated rather than implied. This owner channel runs on Logos
+  Core's own event/method transport, **not** on Logos Messaging — that is the
+  Functionality criterion above, and it is answered there, outside Basecamp.
+  Basecamp 0.2.2's Package Manager installs from a configured repository only, so
+  both packages are installed by hand, by a reviewer as much as by us. And both
+  carry only a `darwin-arm64` variant.
 
 ### Reliability
 
-- [ ] **UNMET — Recovers from transient failures (network interruptions, node
+- [x] **MET — Recovers from transient failures (network interruptions, node
   restarts) without losing pending task state.**
-  `TaskStore` has `snapshot()`/restore precisely so pending task state can outlive a
-  restart, and the module lets the host own the store for that reason. No restart
-  recovery has been demonstrated: no node has been restarted under a running agent,
-  and no test drives a snapshot back into a fresh module and resumes a pending task.
-  A persistence layer (`module/src/task_persistence.*`) is in progress and untracked
-  at this commit, so it is not credited here.
+  `module/tests/module_recovery_test.cpp` (exit 0, 48 assertions) drives
+  `AgentModuleImpl` itself: configure, start, open tasks, destroy the module,
+  build it again over the same directory, and check what came back — with the
+  snapshot asserted to be on disk *before* anything restarts, both pending tasks
+  back with the peer, skill and state they were opened with, a truncated snapshot
+  **refusing** the start rather than coming up empty, and a transport failure
+  leaving the task in place rather than taking it with it.
+  `module/tests/task_persistence_test.cpp` (exit 0, 121 assertions) covers the
+  file format, including every way a snapshot can be unreadable.
 
-- [ ] **UNMET — Above-threshold transactions that fail to reach the owner are not
+  It is falsifiable, and the negative control is a CI step that was reproduced
+  here: `sed 's|if (dir.empty()) {|if (true) {|'` puts the module back in the
+  state where it constructs no snapshot — the diff is checked, not assumed — and
+  the recovery suite then exits **1 with 16 failures**. Without that, "a restart
+  keeps pending task state" is a claim nobody has watched fail, and this
+  repository has twice shipped an assertion that could not.
+
+  This was the exact failure mode worth testing for: `TaskPersistence` had 121
+  green assertions and **no construction site in the plugin**, so the shipped
+  module persisted nothing while its tests were green. The wiring is now asserted
+  in the real runtime — `./scripts/logos-core-headless.sh` (exit 0) reads back
+  `meta.status.durability` as `{"recovery":"absent","recovery_ran":true,…}` with
+  the snapshot under the persistence base the host set, and a module nobody gave a
+  directory to reports `"durability": null` rather than implying it is durable.
+
+- [x] **MET — Above-threshold transactions that fail to reach the owner are not
   executed; the agent retries notification before timing out and reports the
   failure.**
-  The behaviour is implemented and tested fail-closed against a fake owner that can
-  be made silent, late or hostile on demand: a channel that will not open is
-  reported rather than pretended, an approval naming different terms is refused, and
-  a silent owner is terminal instead of a quiet fallback to acting alone. Marked
-  UNMET for two independent reasons: those assertions did not execute in the latest
-  CI run, and the above-threshold path cannot run on chain at all while the owner
-  cannot approve.
+  Demonstrated in the module Logos Core is running, not against a fake
+  (`./scripts/logos-core-headless.sh`, exit 0):
 
-- [ ] **UNMET — Skill failures are isolated: a failing skill does not crash the
+  ```
+  <- wallet.send above threshold: {"amount":"100","attempts":7,"delivered":7,
+     "error":"the owner did not answer within 1500ms: 7 notification attempt(s),
+      7 of which the channel accepted; the spend was not submitted",
+     "ok":false,"outcome":"owner_unreachable","submitted":false,…}
+  ok an above-threshold spend nobody approved is not submitted by the loaded module
+  ok and the outcome is the terminal owner-unreachable one, not a fallback to acting alone
+  ok the notification was retried before the timeout: 7 attempts
+  ok and the failure is reported against the correlation id the owner was asked under
+  ok approveSpend is reachable, and refuses a request nobody is waiting on
+  ```
+
+  Confirmed independently by `module_recovery_test` (exit 0), by
+  `owner_channel_test` (exit 0, 85 assertions, against a fake owner that can be
+  made silent, late or hostile on demand — which a real one cannot), and on the
+  public network by `./scripts/owner-channel-live.sh --negatives` (exit 0:
+  unreachable after 8 attempts, `verdict: refused`, and six altered frames each
+  refused for naming a different amount).
+
+  This is the *module's* obligation and it is met. The separate fact that an
+  on-chain `approve_spend` cannot be signed by the anchoring owner belongs to the
+  spending-threshold criterion above; this one is about what happens when the
+  owner is **not reached**.
+
+- [x] **MET — Skill failures are isolated: a failing skill does not crash the
   module or affect other concurrently running skills.**
   `invoke()` wraps every dispatch in `catch (const std::exception &)` and `catch
   (...)`, returns the failure as JSON naming the skill, and a skill that returns
   non-JSON is rejected rather than propagated; a skill that throws from `name()`
-  during registration costs that skill, not the start. Marked UNMET on evidence, not
-  on design: this is exactly what the skills suite asserts, and that suite did not
-  compile in the latest CI run.
+  during registration costs that skill, not the start. `module/tests/skills_test.cpp`
+  asserts it — exit 0, 103 assertions, no `SKIPPED` banner:
+
+  ```
+  ok malformed json is refused, not thrown
+  ok a throwing parameterSchema() does not escape skills()
+  ok a throwing name() is reported, not propagated
+  ok a skill that calls back into the module does not deadlock skills()
+  ok a throwing skill does not escape invoke()
+  ok start registers the built-ins without holding the module's lock
+  ```
+
+  The two deadlock cases run the call on a detached thread behind a timeout, so a
+  hang is a failure rather than a hung suite — that is the "concurrently running
+  skills" half. The absence of the `SKIPPED` banner is asserted separately in CI,
+  because the suite's exit code cannot distinguish "the module half passed" from
+  "the module half was compiled out".
 
 ### Performance
 
@@ -787,7 +1058,9 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   candid about the premise: **LEZ v0.2.4 does not meter compute units.** Grepping the
   pinned revision for the term returns nothing, and the `GasConfig` struct in the
   wallet is declared and referenced nowhere else — a fee model's shape with no fee
-  model behind it. So nothing is labelled "CU", because the conversion would have to
+  model behind it. (One qualification, because it will be noticed: `mantle::gas`
+  does exist in that tree, as the bedrock L1 publish fee. It is not a LEZ execution
+  meter.) So nothing is labelled "CU", because the conversion would have to
   be invented. What is measured instead are the three real budgets: cycles against
   `MAX_NUM_CYCLES_PUBLIC_EXECUTION` (32M), chained calls against
   `MAX_NUMBER_CHAINED_CALLS` (10), and bytes on the wire, read back from the
@@ -795,81 +1068,128 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   table above prints the figure, and this sentence deliberately does not repeat
   it, because the number written here was 270,566 for three deployments after
   it had stopped being true. Cycle counts are measured by executing the
-  **deployed** binary, not a rebuild.
+  **deployed** binary, not a rebuild, and `./scripts/verify-deployment.sh` (exit 0)
+  asserts that the document measures the program that is actually on chain.
 
 ### Supportability
 
 - [x] **MET — The agent module is deployed and tested on LEZ devnet/testnet.**
-  Program, three anchors and three settlements all live on the public testnet, each
-  re-verified for this document with a null-returning control.
+  Program, three anchors and six settlements all live on the public testnet, each
+  re-verified for this document with a null-returning control:
+  `./scripts/verify-deployment.sh` (exit 0),
+  `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md` (exit 0), and
+  `./scripts/demo.sh` (exit 0) from a clean clone with only a Rust toolchain.
 
-- [x] **MET — End-to-end integration tests run against a LEZ sequencer (standalone
+- [ ] **UNMET — End-to-end integration tests run against a LEZ sequencer (standalone
   mode) and are included in CI.**
-  `.github/workflows/e2e-local-sequencer.yml` builds the LEZ workspace at pinned
-  revision `47eba25`, installs `r0vm` 3.0.5, and runs the full lifecycle — deploy,
-  anchor, spend inside the envelope, be refused outside it — with
-  `RISC0_DEV_MODE: 0`. It has **no skip path**, deliberately: a competing submission
-  was closed with "the standalone-sequencer E2E did not run in CI; the job completed
-  through its explicit skip path". Last green run on this branch's lineage:
+  The workflow exists and is wired in. `.github/workflows/e2e-local-sequencer.yml`
+  builds the LEZ workspace at pinned revision `47eba25`, installs `r0vm` 3.0.5, and
+  runs the full lifecycle with `RISC0_DEV_MODE: 0`. It has **no skip path**,
+  deliberately: a competing submission was closed with "the standalone-sequencer
+  E2E did not run in CI; the job completed through its explicit skip path".
+
+  **It is red on `main`, and that is the verdict.** The most recent run against
+  this branch is
+  [31903623142](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31903623142),
+  `failure`, ending in `error: create_policy failed` after `RISC0_DEV_MODE: 0` and
+  a successful deploy — the script calls `create_policy` without the `claim_agent`
+  the current program requires. The last green run on this branch,
   [31867735056](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31867735056),
-  `success`, commit `5a52efe`, 2026-08-15 05:45 UTC, 1h 03m 58s. Two caveats,
-  both stated because they will be noticed. That run is a long way back —
-  `git rev-list --count 5a52efe..HEAD` says how far, and an earlier version of
-  this line guessed "four", which was wrong by an order of magnitude. And the
-  workflow runs on a daily schedule rather than on push, so a green badge here
-  is never evidence about `HEAD`. A more recent green run of the same workflow
-  exists ([31890967866](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31890967866),
-  18m 49s) but it is on the `e2e-preflight` branch at a commit that is **not** an
-  ancestor of this one, so it is not evidence about this tree either.
+  is a long way back; `git rev-list --count 5a52efe..HEAD` says how far, and an
+  earlier version of this line guessed "four", which was wrong by an order of
+  magnitude. Green runs of the same workflow exist on other branches, and their
+  commits are **not** ancestors of this one, so they are not evidence about this
+  tree either. Do not check the badge; run
+  `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
 
-- [x] **MET, with a caveat — CI must be green on the default branch.**
-  CI is green on the published branch. Do not quote a run id from this
-  paragraph — "latest" moves, and the id written here was already two runs stale
-  by the time anyone read it. Ask instead:
+- [x] **MET — CI must be green on the default branch.**
+  All six jobs of the `CI` workflow are green at the tip of `main` — `Policy
+  primitive and its adversarial tests`, `The committed program matches its
+  recorded ImageID`, `The skills behave, against fake ports`, `The shipped .lgx
+  was built from the committed source`, `A real Storage node takes a file and
+  returns its address`, and `The illustrative use cases verify against the public
+  testnet`. Do not quote a run id from this paragraph — "latest" moves, and the id
+  written here was already two runs stale by the time anyone read it. Ask instead:
   `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.
-  One red run is worth recording because of *how* it failed
-  ([31882516164](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31882516164),
-  `failure`): `messaging_skills.h` and `storage_skills.h` used `std::uint8_t` /
-  `std::int64_t` without `<cstdint>`, which the runner's libstdc++ 14 no longer
-  supplies transitively, and the job died at its **first** compile step — so six C++
-  suites did not run at all while the badge said only "one job failed". The fix was
-  two include lines. The caveat that keeps this from being a clean MET: the
-  commits at `HEAD` are not on the published branch and have not been through
-  CI. See blocker 2.
 
-- [ ] **UNMET — A README documenting end-to-end usage: deployment steps, agent
+  Two things stated because a reviewer will meet them. **This has been red
+  recently and for real reasons**, each of which is worth more than the badge: a
+  missing `<cstdint>` killed six C++ suites at the *first* compile step while the
+  summary said only "one job failed"; the `use-cases` job could not build `spel`
+  against the pinned LEZ revision; and the packaging job's own negative control —
+  a package whose binary was swapped — failed. Each was a gate catching something,
+  and the last two were fixed within three commits. **And the separate `e2e vs
+  local sequencer` workflow is red on this branch** (above), so the Actions tab
+  shows a red run against `main` even while `CI` is green. That is not a caveat on
+  this criterion; it is the criterion above, and it is marked UNMET there.
+
+- [x] **MET — A README documents end-to-end usage: deployment steps, agent
   configuration, and step-by-step instructions for deploying and interacting with
   the agent via CLI and the Logos app owner channel.**
-  The README covers the demo, the layout and the evidence bar, and the deployment
-  steps are in `docs/DEPLOYMENT.md`, but the owner-channel interaction walkthrough
-  the criterion asks for describes a path that does not work from Basecamp yet.
+  [`README.md`](README.md) is a runnable walkthrough rather than a description of
+  one: §1 proves the deployment from a clean clone, §2 reads the live deployment
+  back, §3 deploys your own agents from the CLI (with a section on why each policy
+  needs its own signer, and one on re-running it), §4 configures an agent —
+  including "Doing it in Logos Core, headless, in one command" — §5 talks to it and
+  adds a skill, §6 runs an A2A task and settles it in LEZ, §7 drives a real
+  Delivery and Storage node, §7b runs the owner channel between two processes over
+  the public network, §8 loads the module in Basecamp and §8a installs the window
+  with the exact commands and says what an owner then does from it, §8b covers
+  surviving a restart, §9 specifies the owner channel and both its carriers, §10
+  covers tests and CI, and §11 says what does not work.
 
-- [x] **MET — A reproducible end-to-end demo script that works against a real local
-  sequencer with `RISC0_DEV_MODE=0`.**
-  `scripts/e2e-local-sequencer.sh`, green in CI as above. Separately,
-  `./scripts/demo.sh` runs from a clean clone with only a Rust toolchain — no funded
-  account, no keys, no local sequencer — and is green at this commit.
+  Every path and link in it resolves, mechanically: `./scripts/check-docs.py`
+  (exit 0) checks 334 paths and 142 link targets across 13 documents, so no
+  command in the README names a file that is not there.
+
+  The fourth clause — the Logos app owner channel — is what this entry failed on
+  for most of this project's life, and it failed for a good reason: the walkthrough
+  described a path the software said could not exist. It exists now, §8a documents
+  it, and the round trip in the Usability entry above was driven by following it.
+
+- [ ] **UNMET — A reproducible end-to-end demo script that works against a real
+  local sequencer with `RISC0_DEV_MODE=0`.**
+  `scripts/e2e-local-sequencer.sh` is that script, and it is the one that failed in
+  run 31903623142 above — `error: create_policy failed`, at a commit that is an
+  ancestor of this one, with no successful run on `main` since. So it is not
+  currently a script that works, and saying otherwise on the strength of a run 148
+  commits back is exactly the kind of staleness this document has been wrong about
+  before.
+
+  `./scripts/demo.sh` does run from a clean clone with only a Rust toolchain — no
+  funded account, no keys, no local sequencer — and is green at this commit. It
+  runs against the public testnet, so it answers a different question and is not
+  offered as this one.
 
 - [ ] **UNMET — A recorded video demo showing terminal output confirming
   `RISC0_DEV_MODE=0` was active.**
-  Not recorded. Blocker 1.
+  Not recorded. Blocker 1, and the only blocker with irreducible work in it.
 
-**Tally: 10 MET, 13 UNMET, of the 23 criteria the prize lists.** The commit this
-tally describes is the one recorded at the top of this document, and it is
-recorded there only — a count anchored to a commit id in two places is two
-places to forget.
+**Tally: 14 MET, 9 UNMET, of the 23 criteria the prize lists** — Functionality
+5 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+3 of 6. The commit this tally describes is the one recorded at the top of this
+document, and it is recorded there only — a count anchored to a commit id in two
+places is two places to forget.
 
 ## FURPS Self-Assessment
 
 ### Functionality
 
 The agent holds a shielded LEZ account, signs its own transactions, and spends
-under a ceiling the chain keeps in state only its own program may write. All twenty-one default skills are
-implemented and registered — `meta.skills`, the last one missing, was documented
-in three headers while `invoke()` refused it, and is now asserted against the
-loaded binary rather than against the source. The A2A coordination
-path — card, discovery, task lifecycle, settlement — is the part that has actually
-run on the public testnet, twice, unattended.
+under a ceiling the chain keeps in state only its own program may write. All
+twenty-one default skills are implemented and registered — `meta.skills`, the
+last one missing, was documented in three headers while `invoke()` refused it,
+and is now asserted against the loaded binary rather than against the source.
+
+The A2A coordination path has to be described in parts, because it runs in parts.
+**Cards and discovery run on the public network**: two modules a host loaded
+published signed cards to a Logos Messaging topic and each found the other's.
+**Settlement runs on chain**, unattended, inside an anchored envelope. **The task
+lifecycle runs through the real `TaskStore`** and is driven by the client rather
+than by the peer that received the request — so a task request crosses between
+two agents and is read by the far side, and nothing yet serves it back to a
+terminal state and pays on completion. This paragraph previously called the whole
+path "the part that has actually run", which read as one flow and was four.
 
 The limits are not incidental. The **owner cannot approve an above-threshold
 spend** after anchoring a policy, which removes half of the spending-threshold
@@ -881,7 +1201,11 @@ the per-period ceiling used to be advisory, checked against a number the caller
 passed in. Both are fixed, redeployed and re-anchored, and the refusals are
 asserted against the *deployed binary* rather than a rebuild, and a third settlement
 has since landed under the fixed program with the period total written on chain.
-**Storage and messaging skills have never touched a live node.** And **no
+**Storage skills have never touched a live node** from inside the module — the
+file-vault use case drives a real Logos Storage node through a purpose-built C
+driver, which proves the node ABI and not the skill. (The messaging skills used
+to be in this sentence and are not: they run against real Delivery nodes from a
+loaded plugin.) And **no
 model has ever been run against the inference port**: `StubLocalBackend` is a rule
 table with an honest name, `OpenAiCompatibleBackend` has never made a request that
 left this repository, and the acceptance decision is not even in the demo path —
@@ -894,11 +1218,23 @@ is not "an agent driven by a model".
 Two audiences. A **skill author** gets a three-method interface, a registration call
 that refuses to let one plugin shadow another's `wallet.send`, and a documented
 spec — this is the strongest usability story here. An **owner** gets a CLI that
-deploys and anchors three agents reproducibly, and a `.lgx` that genuinely loads in
-Basecamp. What the owner does not get is the thing the prize actually asks for:
-deployment through Logos Core headless in one command, and a conversation with the
-agent from the Logos app. The owner channel is built and tested, and is not
-reachable from the app.
+deploys and anchors three agents reproducibly, a `.lgx` that genuinely loads in
+Basecamp, a second `.lgx` that gives it a **window** in the Logos app, and a
+Logos Core **headless** command that installs, loads, configures and starts the
+module with no GUI.
+
+What the owner still does not get is the *conjunction* each of those criteria
+states. Deployment is two commands rather than one — the chain half and the
+Logos Core half — and neither runs on a machine without an installed Basecamp to
+take `liblogos_core` from. And the owner conversation that crosses **Logos
+Messaging** happens between a loaded module and a purpose-built responder, not
+between two Logos apps: from the window, the owner answers over Logos Core's own
+event/method transport. Both halves work; they have not been made the same half.
+
+The previous version of this paragraph said the owner channel "is not reachable
+from the app", which is no longer true in either sense — an owner has approved
+and denied a real spend from the window, and a loaded module has done the same
+over the public network.
 
 ### Reliability
 
@@ -911,14 +1247,27 @@ declines. Skill dispatch is exception-isolated and lock-free at the call site.
 balance moved by exactly the price — a rule added because an earlier version
 produced confirmed on-chain proofs that a policy permitted 25 LEZ and moved nothing.
 
-Against that: restart recovery is designed for and not demonstrated, and — the
-honest headline — the entire C++ suite did not run in the latest CI, so at this
-commit these are design claims plus a previously-green run, not current evidence.
+Restart recovery is demonstrated rather than designed for, and the demonstration
+is falsifiable: a restart across a destroy-and-rebuild brings both pending tasks
+back with the peer, skill and state they were opened with; a truncated snapshot
+**refuses** the start rather than coming up empty, because a corrupt file loading
+as an empty task list is how a paid task gets paid twice; and CI puts the module
+back in the state where it constructs no snapshot and requires the suite to go
+red. That control exists because `TaskPersistence` once had 121 green assertions
+and no construction site in the plugin — the tests passed and the shipped module
+persisted nothing.
+
+Against that: the assertion counts in this repository have twice included
+assertions that could not fail, and a sweep of 1,699 of them found 43. The number
+of green checks is not the measure; the negative control beside each one is.
 
 ### Performance
 
-No fees exist to measure on LEZ v0.2.4, so the document measures the budgets that do
-exist rather than inventing a CU number. A settlement's size on the wire is read back
+No LEZ execution meter exists to measure on v0.2.4, so the document measures the
+budgets that do exist rather than inventing a CU number. One qualification, because
+a reviewer grepping the pinned tree will find it: `mantle::gas` **does** exist there,
+as the bedrock L1 publish fee. It is not a compute meter for LEZ execution, and no
+figure here is derived from it. A settlement's size on the wire is read back
 from the sequencer rather than estimated, and is printed in the generated settlement
 table above rather than restated here. Cycles are measured against the
 32M public-execution cap by running the deployed binary; the settlements take the
@@ -928,20 +1277,28 @@ is one-shot per signer.
 
 ### Supportability
 
-Six C++ suites, a Rust policy crate with adversarial tests, and an end-to-end job
-against a real standalone sequencer with `RISC0_DEV_MODE=0` and no skip path. The CI
-file documents, in comments, exactly which four suites do **not** run there and why —
-Qt and an installed Basecamp for the two load tests, a Nim and `librln` build for the
-node drives — because a suite silently absent from CI is indistinguishable from one
-that was never written.
+The `CI` workflow runs six jobs — the policy crate and its adversarial tests, the
+committed program against its recorded ImageID, the C++ suites against fake ports,
+the shipped `.lgx` against the source committed beside it, a real Storage node, and
+the illustrative use cases against the public testnet. A seventh workflow runs the
+end-to-end lifecycle against a real standalone sequencer at `RISC0_DEV_MODE=0` with
+no skip path. The CI file documents, in comments, exactly which suites do **not**
+run there and why — Qt and an installed Basecamp for the load tests, a Nim and
+`librln` build for the node drives — because a suite silently absent from CI is
+indistinguishable from one that was never written.
 
-CI is green on the published branch as of the latest run, after a red one whose
-failure mode is the more useful fact: a missing `<cstdint>` killed the skills job at
-its first compile step, so six suites did not run while the summary said only that
-one job had failed. A job that fails early and a job that passes having tested
-nothing look similar from the outside, which is why the workflow asserts on the
-`SKIPPED` banner as well as on exit codes. The four commits at `HEAD` have not been
-through CI yet (blocker 2). Debuggability is otherwise deliberate —
+**Do not read a badge here; run the command in blocker 2's row.** CI has been red
+on `main` three times in the recent past, and each failure is more useful than the
+green either side of it. A missing `<cstdint>` killed the skills job at its *first*
+compile step, so six suites did not run while the summary said only that one job
+had failed. The use-case job could not build `spel` against the pinned LEZ
+revision. And a coverage floor added by one piece of work began reading a line of
+output added by another — it selected the first line starting with `checked ` and
+found a skill count where it expected a path count, failing a healthy run. That
+last one is this repository's own defect class pointed at itself: two guards, each
+correct, one parsing the other. A job that fails early and a job that passes having
+tested nothing look similar from the outside, which is why the workflow asserts on
+the `SKIPPED` banner as well as on exit codes. Debuggability is otherwise deliberate —
 every failure path returns JSON naming the skill and the half that failed, and
 `share` takes both ports specifically so it can say whether storage or delivery
 failed rather than blaming the wrong one.
@@ -952,8 +1309,12 @@ failed rather than blaming the wrong one.
   `<<< VIDEO URL TO BE INSERTED HERE >>>`
   Must be a narrated walkthrough — a silent screencast is explicitly insufficient —
   covering ≥3 illustrative use cases, with terminal output visible confirming
-  `RISC0_DEV_MODE=0`, against the **public testnet** rather than a localnet. Only
-  one use case is currently demonstrable end-to-end (blocker: see criterion 9).
+  `RISC0_DEV_MODE=0`, against the **public testnet** rather than a localnet. Three
+  use cases are demonstrable end-to-end today — the agent services / paid skill
+  marketplace, the privacy-preserving notary and the on-chain event alerter — plus
+  the personal file vault against real Storage and Messaging nodes, which records
+  nothing on chain. An earlier version of this line said only one was, which was
+  true when written and has not been true for some time.
 
 - **Live evidence, re-derivable:** [`artifacts/agents.tsv`](artifacts/agents.tsv),
   [`artifacts/anchored.tsv`](artifacts/anchored.tsv),

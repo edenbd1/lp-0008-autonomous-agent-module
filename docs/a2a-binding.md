@@ -193,7 +193,7 @@ The card `agent.card` builds (`CardSkill` in `agent_skills.cpp`), and the one
   "x-logos": {
     "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
     "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
-    "pricePerTask": 25,
+    "pricePerTask": 5,
     "settlement": "lez-chained-authenticated-transfer"
   },
   "signatures": [ { "protected": "eyJhbGci…", "signature": "…" } ]

@@ -782,7 +782,7 @@ mint the plugin a token for it, and only then calls `createWidget(LogosAPI*)`.
 So `"dependencies": ["agent"]` in `app/metadata.json` is what turns a click on a
 tile into a loaded module.
 
-From that window an owner binds the agent, starts it, reads its 22-skill card,
+From that window an owner binds the agent, starts it, reads its 23-skill card,
 invokes any of them, and — the part the criterion is about — answers the spends
 the agent asks it to approve. A `wallet.send` above the envelope published
 `ownerApprovalRequested` to the window in **7 ms**, and the owner's `approved`
@@ -832,9 +832,43 @@ than ignored. A reply carrying `per_tx`, `per_period`, `period_blocks` or
 limit — and the only reason to send one is to try.
 
 That exchange is exercised in CI against a fake owner — one that can be made
-silent, late or hostile on demand, which a real one cannot. It is **not**
-reachable from a loaded Basecamp module, and cannot be: `OwnerChannelPort` is a
-struct of `std::function`s and a plugin cannot be handed one (§8).
+silent, late or hostile on demand, which a real one cannot.
+
+**It is reachable from a loaded module, and this paragraph used to say it could
+never be.** The claim was that `OwnerChannelPort` is a struct of `std::function`s
+and a plugin cannot be handed one. The premise is true and the conclusion does not
+follow: a *host* cannot pass a closure across a plugin boundary, which was never a
+statement about what a *module* can construct. The module links
+`liblogosdelivery`, opens a node from its own configuration, and builds the port
+on its own side of the boundary — so nothing crosses it but
+`meta.configure("delivery","on")`. Watched, rather than argued:
+
+```sh
+./scripts/delivery-in-plugin.sh approval    # exit 0
+```
+
+A plugin loaded through `QPluginLoader` holds an above-threshold `wallet.send`,
+publishes it to an owner on a **separate** Delivery node over the public network,
+and acts on the answer — approved in 438 ms, and, on the second run, denied in
+661 ms:
+
+```
+  ok  the owner can derive a marker seed for these terms
+  ok  and it is the seed the agent named — two independent derivations of the
+      account `spend_approved` will look for, not one copied twice
+  <-  wallet.send: {"amount":"250","approved":true,"attempts":1,
+      "outcome":"approved","submitted":false,"waited_ms":438,…}
+  ok  the owner was reached
+  ok  and approved these exact terms: approved
+```
+
+It runs twice on purpose. A channel that returned "approved" whatever came back
+would pass the first run and only the first, so the deny run is what makes the
+approve run mean anything.
+
+What is still open is the **host**, not the transport: the owner in that exercise
+is `module/tests/owner_responder.cpp`, a program written for the purpose, not a
+second Logos app with a person in front of it. §11 keeps that distinction.
 
 ### What a loaded module does about that
 
@@ -862,13 +896,15 @@ Measured against the packaged module inside Basecamp 0.2.2's runtime
   ok    approveSpend is reachable, and refuses a request nobody is waiting on
 ```
 
-Two things this does **not** claim. It is not Logos Messaging: this exchange
-runs on Logos Core's own event/method transport, and the Delivery-backed
-`OwnerChannel` is a different object that a plugin cannot be handed a port for.
-§7b is where that one runs, between two processes on two real Delivery nodes —
-so the transport clause of "using Logos Messaging, with no intermediary server"
-is answered there and the *app instance* clause is answered nowhere yet. Keep
-those apart; [`docs/basecamp.md`](docs/basecamp.md) does. And an *approved*
+Two things this does **not** claim. It is not Logos Messaging: *this* exchange
+runs on Logos Core's own event/method transport, which is what a window inside
+Basecamp uses. The Delivery-backed `OwnerChannel` is a different object, and the
+module builds a port for it itself — §7b runs it between two processes on two real
+Delivery nodes, and `./scripts/delivery-in-plugin.sh approval` runs it from a
+module a host has **loaded**. So the transport clause of "using Logos Messaging,
+with no intermediary server" is answered, and the *app instance* clause is not:
+the owner in both is a program written for the purpose rather than a second Logos
+app. Keep those apart; [`docs/basecamp.md`](docs/basecamp.md) does. And an *approved*
 above-threshold spend is still not submitted: submitting one goes through the
 policy program's `spend_approved`, which needs an approval account only the
 owner's own signature can create, and
@@ -1033,4 +1069,12 @@ is the fix, and running it is cheaper than reading for it.
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
-option.
+option — as `Cargo.toml` also declares (`license = "MIT OR Apache-2.0"`).
+
+The root [`LICENSE`](LICENSE) is now the **verbatim MIT text** rather than a
+pointer to the other two files, and the reason is worth a sentence. GitHub's
+licence detector matches file contents against known texts; a file that merely
+*describes* a dual grant matches nothing, so the repository sidebar read
+**"Other"** — which is what a reviewer sees before they read a word of this. The
+grant has not changed: Apache-2.0 remains available under
+[`LICENSE-APACHE`](LICENSE-APACHE), at your option, and every crate declares both.

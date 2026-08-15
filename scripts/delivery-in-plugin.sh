@@ -47,7 +47,29 @@ MODE="${1:-single}"
 QT="${QT_ROOT:-$HOME/logos/Qt/6.9.2/macos}"
 SDK="${LOGOS_CPP_SDK_ROOT:-$HOME/logos/src/logos-cpp-sdk}"
 APP="${BASECAMP_APP:-/Applications/LogosBasecamp.app}"
-WORK="${TMPDIR:-/tmp}/lp0008-delivery-in-plugin"
+
+# THE WORK DIRECTORY IS PER-CHECKOUT, AND THAT IS NOT TIDINESS
+#
+# This was a fixed path — `$TMPDIR/lp0008-delivery-in-plugin` — shared by every
+# checkout on the machine. Step [1/4] unpacks `module/agent.lgx` into it, and a
+# concurrent run from a DIFFERENT checkout unpacks a different package to the
+# same place. An audit hit exactly that: `plugin_load_test`, pointed at
+# `$WORK/modules/agent/agent_plugin.dylib` minutes after this script had put the
+# committed package there, ran against another tree's in-flight build and
+# reported 23 skills where the package under test had 22. It read as the module
+# drifting from its own test. Nothing warned, because nothing could: both runs
+# did exactly what they were told.
+#
+# So the path now carries the checkout's identity. Two rules that came out of
+# the same incident and are worth keeping:
+#
+#   1. anything that runs a harness against `$WORK/modules/agent` should compare
+#      the binary's sha256 against the one `scripts/check-package-fresh.py`
+#      names, before believing the result;
+#   2. `$LP0008_WORK` overrides this outright, which is what a parallel run in
+#      one checkout wants.
+WORK="${LP0008_WORK:-${TMPDIR:-/tmp}/lp0008-delivery-in-plugin-$(
+    printf '%s' "$ROOT" | shasum -a 256 | cut -c1-12)}"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { echo "error: $*" >&2; exit 1; }

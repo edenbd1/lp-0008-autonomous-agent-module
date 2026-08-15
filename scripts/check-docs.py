@@ -308,8 +308,16 @@ SKILL_FILES = DOCS + [
 # every number would be turned off within a day. Two-and-up only, because a
 # registry of one skill is not a thing this repository has ever had and `0
 # entries` / `1 entries` appear in transcripts of failures.
+#
+# The hyphenated form is here because it escaped: this gate went green over
+# `reads its 22-skill card` in README.md §8a while the module registered 23,
+# counting 21 other mentions on the same pass. A gate that reports a number and
+# misses the one wrong line is worse than no gate, because the number reads as
+# coverage. Adjectival compounds (`22-skill card`, `23-skill registry`) are the
+# same claim with a hyphen in it.
 COUNT_SHAPES = re.compile(
     r"\b(\d{2,3})\s+(?:skills|built-in skills|entries|of them)\b"
+    r"|\b(\d{2,3})-skill\b"
     r"|\ball\s+(\d{2,3})\b"
     r"|\bexactly\s+(\d{2,3})\b"
     r"|\bevery one of the\s+(\d{2,3})\b")
