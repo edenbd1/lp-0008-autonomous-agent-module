@@ -17,6 +17,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 : "${SIGNER:?set SIGNER to a funded public account id}"
+# The account that pays the agents must not be the account that signs their
+# policies. `auth-transfer send` leaves its sender owned by the transfer
+# program, and create_policy returns its signer as a post-state — a program
+# cannot hand back an account another program owns. Sharing one account makes
+# every anchor stop landing, silently, the moment the first agent is funded.
+FUNDER="${FUNDER:-$SIGNER}"
 RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
 WALLET="${WALLET_BIN:-wallet}"
 SPEL="${SPEL_BIN:-spel}"
@@ -136,7 +142,7 @@ fund_agent() { # category seed_account amount
   [ -s "$keys" ] || { echo "  could not export the agent's keys" >&2; return 1; }
 
   LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
-    "$WALLET" auth-transfer send --from "Public/$SIGNER" \
+    "$WALLET" auth-transfer send --from "Public/$FUNDER" \
       --to-keys "$keys" --amount "$amount" </dev/null >/dev/null 2>&1
   rm -f "$keys"
 
