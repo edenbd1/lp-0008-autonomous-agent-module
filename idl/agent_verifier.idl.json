@@ -260,6 +260,12 @@
           "writable": false,
           "signer": true,
           "init": false
+        },
+        {
+          "name": "recipient",
+          "writable": true,
+          "signer": false,
+          "init": false
         }
       ],
       "args": [
@@ -303,7 +309,7 @@
           "type": "u64"
         },
         {
-          "name": "recipient",
+          "name": "recipient_id",
           "type": {
             "array": [
               "u8",
