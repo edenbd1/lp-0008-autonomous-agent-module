@@ -2,20 +2,27 @@
 
 > ## ⚠️ DRAFT — NOT READY FOR SUBMISSION
 >
-> **Pinned to commit `9e98d24` on `main`.** The repository is public and
-> **actively changing** — a security redeploy, a CI fix, the A2A binding spec, a
-> deployment-doc regeneration, settlements and two further redeploys all landed
-> while this was being written — so the prose below is stated against that
-> commit. The evidence sections are stated against the *chain*, and carry their
-> own freshness check: `./scripts/submission-evidence.py --check
-> SUBMISSION-DRAFT.md` re-fetches every figure and fails if any has moved.
+> **This document does not pin a commit hash, and the reason is worth stating.**
+> The repository is public and **actively changing** — a security redeploy, a CI
+> fix, the A2A binding spec, a deployment-doc regeneration, settlements and two
+> further redeploys all landed while this was being written.
 >
-> The pin moved from `1de38d8` to `51e57fc` to here, and twice it was left
-> behind while the claims under it were edited. A document that states its own
-> commit and then describes a later one is the same defect as a benchmark that
-> names a superseded program: everything in it is true of something, and the
-> reader cannot tell of what. That is the argument for generating the parts that
-> move rather than pinning them.
+> A pin was carried here through three values, `1de38d8`, `51e57fc` and
+> `9e98d24`, and **every one of them was wrong by the time it was read**: twice
+> because the claims underneath were edited without moving it, and once because
+> a rebase rewrote the hash it named out of existence. A hash written into a
+> branch that will be rebased is wrong by construction, and a document that
+> states its own commit and then describes a later one has the same defect as a
+> benchmark naming a superseded program — everything in it is true of something,
+> and the reader cannot tell of what.
+>
+> So the state this document describes is identified the way it can be checked
+> rather than asserted. `git rev-parse --short HEAD` names the commit you have.
+> `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md` re-fetches every
+> figure in the evidence sections from the chain and **exits non-zero if any has
+> moved**, which is a stronger guarantee than a pin ever gave: a pin tells you
+> which commit the author meant, this tells you whether the numbers are true
+> now. It runs in CI, on every push.
 >
 > **Every figure in the evidence sections is generated, not typed.**
 > `./scripts/submission-evidence.py` fetches them from the committed binary and
@@ -43,7 +50,7 @@
 > | # | Blocker | State |
 > |---|---|---|
 > | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the one blocker with real work left in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
-> | 2 | **`HEAD` and `origin/main` have diverged** — each has commits the other does not. A reviewer cloning right now sees neither the regenerated evidence nor `meta.skills`, and CI has not run on the unpublished side. No count is written here on purpose: `git rev-list --left-right --count origin/main...HEAD` answers it, and any number typed into this row is wrong the moment either side moves. | Merge `origin/main`, push, confirm CI. |
+> | 2 | **`HEAD` is ahead of `origin/main` and unpushed.** A reviewer cloning right now gets the published branch, which does not have the regenerated evidence sections or the CI steps that keep them honest, and CI has not run on the commits that are only here. No count is written in this row on purpose — `git rev-list --left-right --count origin/main...HEAD` answers it, and any number typed here is wrong the moment either side moves, which is how the previous two versions of this row came to be wrong. | `git push`, then confirm CI. |
 >
 > Resolved while this was written, and no longer blockers: the
 > `spend`-does-not-bind-the-policy defect, the caller-supplied period total and
@@ -117,11 +124,10 @@ has ever been run against the inference port, and there is no video.
 ## Repository
 
 - **Repo:** <https://github.com/edenbd1/lp-0008-autonomous-agent-module>
-- **Commit this document describes:** `51e57fc`
 - **License:** dual MIT / Apache-2.0
-- **Default branch:** `main` (public). ⚠️ `origin/main` has **diverged** from the
-  state described here — see blocker 2, and run the command in it rather than
-  believing a count written down here.
+- **Default branch:** `main` (public). ⚠️ See blocker 2 for how this tree
+  relates to `origin/main`, and run the command there rather than believing a
+  count written down here.
 
 Everything asserted below is verifiable from a clean clone plus the public
 sequencer. No claim in this document depends on trusting the author.
