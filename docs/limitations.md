@@ -2,43 +2,34 @@
 
 What does not work, stated before anyone has to discover it.
 
-## One signer anchors exactly one policy
+## Two of the three agents never anchor, and I do not know why
 
-Unresolved, and the most concrete thing to pick up next.
+Corrected twice, so the record is what was measured rather than what was
+inferred. Only `storage` (`7o9PT8uE…`) is anchored. `messaging` (`25LLt4Zx…`)
+and `blockchain` (`9KdQSJ2t…`) have never anchored under the current program,
+and every attempt is submitted, given a hash, and dropped.
 
-With the funder separated from the signer, a fresh public signer anchors its
-first policy and lands it (`3dcb2378…`, storage). Every later anchor from that
-same signer is built, submitted, given a hash, and never lands. Four further
-passes changed nothing.
+Hypotheses tested and **rejected**:
 
-The signer is not the problem in the obvious way: it is still owned by the
-default program, so it was never claimed.
+- *Stale nonce.* The signer's on-chain nonce advances correctly.
+- *Empty `chain_index`.* The first signer had `"chain_index": []` where a fresh
+  account has `[1]`. That looked decisive; a brand-new, correctly formed signer
+  behaves identically.
+- *One anchor per signer.* Three distinct, unused signers in one run: only the
+  first anchor lands.
+- *One anchor per process.* Three separate runs, one signer each: still only
+  `storage`, and that via the ledger rather than a new anchor.
 
-```
-Public/G8Aky5Rd…  {"balance":0,"program_owner":"1111…1111","nonce":1}
-```
+So it is neither the account nor the process. What is left is something
+specific to those two agents. Both were funded through `--to-keys` like
+`storage` was, and both were used in `spend` attempts that failed at submit —
+that is the most obvious difference and the first thing to check: whether a
+private account left in some state by a rejected privacy transaction can still
+be named in a later one.
 
-`nonce: 1` — it signed once and the chain knows it. Refetching with
-`account get` between anchors, which does rewrite the stored state, does not
-make the second one land.
-
-It is not the nonce, and it is not the chain index either — both were tested.
-
-A freshly created public account carries `"chain_index": [1]` where this signer
-carried `[]`, which looked like the answer. It is not: a brand-new, correctly
-formed signer behaves identically. Its first anchor lands, and no later one
-does, across three separate runs of the script.
-
-So the constraint is **per account, not per run**: one signer anchors exactly
-one policy, permanently. Re-running does not accumulate.
-
-The remaining route is a signer per policy — three owner accounts rather than
-one. That works within the design (nothing requires a single owner; `owner_id`
-is simply committed into each policy hash) but it changes every policy hash and
-means three funded accounts, so it should be a deliberate choice rather than a
-workaround slipped in. It also deserves one more look at *why* the second
-anchor is dropped, because a program that can only ever be called once per
-signer would be a strange thing to ship.
+The honest summary is that criterion 1 stands at one of three, with four
+plausible explanations eliminated by experiment. That is worth more than a
+fifth guess.
 
 ## Funding from the owner account breaks anchoring from the same account
 
