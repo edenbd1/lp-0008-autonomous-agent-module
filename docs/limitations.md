@@ -582,6 +582,23 @@ needs *two* nodes to find each other through public relays, so it depends on the
 health of a network this repository does not run. A required job that goes amber
 on a bad afternoon teaches everyone to ignore it.
 
+`./scripts/delivery-in-plugin.sh settle` is local for a third reason on top of
+both of those: it moves real LEZ on a testnet whose faucet is gone, and a job
+that spends money on every push would empty the agents inside a day. The half
+of it that can be checked freely is split out — `delivery-in-plugin.sh signers`
+needs no key, no second agent and no chain, and it is the one to run when either
+delegate changes. It is still not in CI, because it starts a Delivery node and
+so inherits the first reason.
+
+So neither of them runs on a push, and the honest statement of what that costs
+is this: a change that stopped the module refusing correctly would be caught by
+nobody until somebody ran the harness. What CI does hold is narrower and worth
+naming exactly — `scripts/check-package-fresh.py` refuses to accept the package
+unless every source string literal of eight bytes or more is present in the
+shipped binary, so the refusal *messages* those harnesses assert on cannot drift
+away from the binary a reviewer downloads. That is a check on the words, not on
+the behaviour.
+
 ## The owner in the live owner-channel run is a node, not a second Basecamp
 
 `scripts/owner-channel-live.sh` answers the transport half of "the owner can
