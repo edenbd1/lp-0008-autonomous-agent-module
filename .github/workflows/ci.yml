@@ -861,7 +861,15 @@ jobs:
       - name: Build spel
         run: |
           set -euo pipefail
-          cargo build --release --locked --manifest-path vendor/spel/Cargo.toml
+          # -p spel, not the whole workspace. vendor/spel also contains
+          # spel-ffi-compile-test, a member whose build script generates
+          # bindings against a WalletCore API that has since moved -- from_env
+          # became async, get_accounts_nonces took a slice -- so building it
+          # fails on code nobody here calls. It never failed locally because a
+          # warm target/ never rebuilt it, which is exactly the shape of defect
+          # this job exists to catch, one level up. We need the CLI binary and
+          # nothing else.
+          cargo build --release --locked -p spel --manifest-path vendor/spel/Cargo.toml
           echo "SPEL_BIN=$PWD/vendor/spel/target/release/spel" >> "$GITHUB_ENV"
           "$PWD/vendor/spel/target/release/spel" --help > /dev/null
 
