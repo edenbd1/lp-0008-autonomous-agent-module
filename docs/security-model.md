@@ -5,80 +5,130 @@ steals its keys gets. Every claim below names a file and a line, and the ones
 that can be executed have been executed against the deployed binary.
 
 **Which program this describes.** `artifacts/programs/agent_verifier.bin`,
-ImageID `26ed1580…0bad50be`, deploy transaction `8c87cc9b…2d20ebbe` at block
-8646. That matters more than it usually would: a policy account is a PDA of the
+ImageID `12fa95d9…b578c9d8`, deploy transaction `a780003b…8576841e` at block
+8720. That matters more than it usually would: a policy account is a PDA of the
 program id, so a rebuild moves every anchor, and a claim about "the program" is
 only meaningful against one ImageID. Line references are to the guest source
 that builds to that ImageID. If the two ever disagree, the binary is right —
 recompute its hash with the command in [`DEPLOYMENT.md`](DEPLOYMENT.md) and
 check it against the chain.
 
-The design in one sentence: **the agent's spending authority is an account
-address, not a branch in its code.** The rest of this document is what that buys,
-and — the longer half — what it does not.
+The design in one sentence: **an agent has exactly one policy account, its
+address is the agent, and only the program that owns it can write what it
+says.** The rest of this document is what that buys, and — the longer half —
+what it does not.
 
 ## 1. The envelope
 
 The owner fixes three numbers when the agent is deployed: the largest single
 transfer it may make unattended (`per_tx`), the largest total it may move in a
 window (`per_period`), and the window's length in blocks (`period_blocks`)
-(`crates/agent-policy-core/src/lib.rs:45-52`).
+(`crates/agent-policy-core/src/lib.rs:131-140`).
 
 | Action | Who has to agree |
 |---|---|
 | A payment at or below `per_tx` | nobody — the agent alone |
 | A payment above `per_tx` | the owner, on an approval account naming that exact payment |
-| Changing a limit on an existing policy | nobody can: the limits are the account's *address*, not its contents, see §2 |
+| Changing a limit on an existing policy | nobody can, including the owner: there is one policy account per agent and `create_policy` is the only writer of its limits, see §2 |
+| Anchoring a *second*, looser policy for the same agent | nobody can: the address is a function of the agent, and `init` refuses an account that exists |
 | A payment above the ceiling with no approval | refused by the chain, error 6005 |
 
-## 2. Why the limit is an address and not an `if`
+## 2. One policy account per agent
 
 A threshold checked inside the agent is worth nothing: the agent holds its own
 keys on a remote node, so whoever takes the process takes the check
 (`crates/agent-verifier-spel/methods/guest/src/bin/agent_verifier.rs:5-9`).
 
-So the policy is not stored, it is *named*. `compute_policy_hash` folds the
-owner, the agent and all three limits into one digest
-(`crates/agent-policy-core/src/lib.rs:77-86`), and the account the spend must
-present is the PDA seeded by that digest — `#[account(pda = arg("policy_hash"))]`
-at `agent_verifier.rs:382` for `spend` and `:488` for `spend_approved`.
+So the policy lives in an account, and the account's address is
 
-Raising a limit therefore does not edit an account. It names a *different*
-account, which `create_policy` never initialised, whose `program_owner` is
-still the default, and the spend is refused before the body runs
-(`agent_verifier.rs:406-411`).
+```
+PDA(agent_verifier, ["agent-policy/v1", agent_id])
+```
 
-The division of labour inside that account is worth stating exactly, because an
-earlier version of this document got it wrong in the direction that flatters us.
-**The address carries the limits; the data carries what has been spent against
-them.** The address is immutable by construction — it is a hash — and the data
-is mutable by exactly one writer, this program, because the account is its PDA
-and LEZ rule 6 refuses a data write from anyone else
-(`UnauthorizedDataModification`, `lee/state_machine/core/src/program/mod.rs:718-728`).
-So the ceiling cannot be edited and the running total cannot be forged. §6 is
-where that second half is measured.
+and nothing else — `#[account(init, pda = [literal("agent-policy/v1"),
+arg("agent_id")])]` at `agent_verifier.rs:244`. Everything the policy *says* —
+the owner, both limits, the period, and the running total — is that account's
+**data**, 97 bytes in a fixed layout (`agent-policy-core/src/lib.rs:256-311`).
 
-Three checks make the address binding stick, and all three are exercised in §7:
+Two consequences, and they are the whole security argument:
 
-- The presented limits are re-derived into a hash and compared
-  (`agent_verifier.rs:399-405`), so an agent cannot hand over generous numbers
-  alongside a real policy account and have the address constraint alone miss it.
-- The policy account must be owned by this program
-  (`agent_verifier.rs:406-411`, `:523-528`).
-- The account **paying** must be the agent the policy names
-  (`agent_verifier.rs:417-422`, `:532-537`). Without this last one every
-  anchored policy on the chain is a ceiling any agent may borrow, and the
-  effective limit is whichever policy on the chain happens to be loosest. It was
-  missing until this deployment; `limitations.md` records the version that
-  shipped without it.
+- **There is one address, so there is one policy.** `create_policy` declares the
+  account `#[account(init)]`, and `init` refuses an account that is not in its
+  default state. The first anchor for an agent is the only anchor for that
+  agent. A second one is not *detected*; it has nowhere to go.
+- **Only this program can write it.** The account is the program's PDA, so LEZ
+  rule 6 refuses a data write from anyone else (`UnauthorizedDataModification`,
+  `lee/state_machine/core/src/program/mod.rs:718-728`). The limits are written
+  once, by `create_policy`; afterwards `spend` writes only the running total
+  (`agent_verifier.rs:390-397`).
+
+### What this replaced, and why the replacement was necessary
+
+The three deployments before this one derived the address from the policy's
+*contents* — a `compute_policy_hash` over (owner, agent, `per_tx`, `per_period`,
+`period_blocks`). The reasoning was that an agent cannot edit a limit, because an
+edited limit names a different address that `create_policy` never initialised.
+That much was true, and it was never the attack.
+
+Folding the limits into the address means every (owner, agent, limits) triple has
+an address of its own, so there is no such thing as *the* policy account for an
+agent — there are 2^256 of them, all uninitialised, and anchoring is first-come
+at every single one. Three separate fixes were shipped against that, each adding
+a comparison:
+
+| Deployment | What it added | Why it did not close the hole |
+|---|---|---|
+| `b028eabf…` and before | — | `create_policy` never compared `owner_id` to the signer, so an agent anchored a policy naming an owner that does not exist |
+| `8c87cc9b…` | the signer must be the `owner_id` it commits to (6012); the payer must be the `agent_id` (6013); `approve_spend`'s signer must be the owner (6012) | the attacker does not need to invent an owner or borrow a policy. **It is the owner.** |
+
+The version that mattered is the last one, and it is worth stating as the
+attacker would: holding the agent's key, anchor a *fresh* policy naming the
+compromised agent as `agent_id` and an account you control as `owner_id`, with
+`per_tx = per_period = u128::MAX`, then spend the balance under it. Every
+comparison above passes, because every one of them is satisfied — the signer
+really is the owner that policy names, and the payer really is the agent it
+names. §6 has the transactions.
+
+The fix could not be another comparison; there was no id left in the instruction
+to compare. It was to take the choice of address away. That is what this
+deployment does, and it is why the ImageID, the program and every anchored policy
+changed with it.
+
+### What the call still carries, and what it no longer can
+
+Because the address now carries the identity and the account carries the terms,
+most of the instruction arguments have gone, and each removal is a class of
+disagreement that can no longer be expressed:
+
+- `create_policy` has **no `owner_id`**. The program writes the signer's own
+  account id into the record (`agent_verifier.rs:265-271`). The claim and the
+  fact cannot differ, because there is no claim.
+- `spend` has **no `agent_id` and no limits**. The policy account's address is
+  derived from the *paying* account itself — `pda = [literal("agent-policy/v1"),
+  account("agent")]`, `agent_verifier.rs:374` — and the ceiling is read out of
+  that account. An agent presenting another agent's policy account fails the PDA
+  check the macro emits before the body runs.
+- `spend_approved` is the same, and reads the agent for the approval marker off
+  the signing account rather than the call (`agent_verifier.rs:495-500`).
+- `approve_spend` still names the agent, because the owner has to say which agent
+  it is approving for, but the owner it compares the signer against comes out of
+  the policy record (`agent_verifier.rs:318-324`, error 6012), not out of the
+  instruction.
+
+Three error codes were **retired rather than reused**: 6001 (`policy_hash` does
+not commit to these limits), 6004 (marker seed mismatch at anchoring) and 6013
+(the payer is not the agent this policy commits to). All three existed only
+because the caller chose the address and the program had to check the choice.
+Leaving the numbers unused keeps an integration that branches on them from
+silently matching a different refusal (`agent_verifier.rs:196-202`).
 
 ## 3. Above the threshold: an approval that names one payment
 
 `approve_spend` creates an account whose address is derived from the payment
-itself — policy, recipient, amount, nonce — via `compute_spend_ref` and
-`compute_approval_marker` (`crates/agent-policy-core/src/lib.rs:94-116`), and it
+itself — agent, recipient, amount, nonce — via `compute_spend_ref` and
+`compute_approval_marker` (`crates/agent-policy-core/src/lib.rs:335-357`), and it
 declares that account `#[account(init, pda = arg("marker_seed"))]`
-(`agent_verifier.rs:291-292`). Three properties follow from that one line:
+(`agent_verifier.rs:296`). Three properties follow from that one line:
 
 - **Single issue.** `init` refuses to overwrite, so the same approval cannot be
   created twice.
@@ -92,21 +142,24 @@ declares that account `#[account(init, pda = arg("marker_seed"))]`
 difference was a real defect: a marker that exists and is never touched
 authorises the same payment on **every** later transaction that presents it. So
 `spend_approved` stamps the marker as it consumes it and refuses one already
-stamped (`agent_verifier.rs:577-585`, error 6018). Issuance is guarded by `init`;
+stamped (`agent_verifier.rs:526-534`, error 6018). Issuance is guarded by `init`;
 consumption is guarded by the stamp. Both are in §7.
 
 Two more bindings close the obvious ways round it. The account being paid is
 checked against the account id the approval commits to
-(`agent_verifier.rs:542-547`), so `recipient_id` is a real destination rather
+(`agent_verifier.rs:486-492`), so `recipient_id` is a real destination rather
 than a label inside a hash. And `approve_spend` checks that the signer is the
-owner the policy commits to (`agent_verifier.rs:328-333`, error 6012) — without
-that the agent signs its own approvals and steps over the threshold from the
-other side, which makes the whole above-threshold path decorative.
+owner **the policy record names** (`agent_verifier.rs:318-324`, error 6012) —
+without that the agent signs its own approvals and steps over the threshold from
+the other side, which makes the whole above-threshold path decorative. That the
+owner now comes off the chain rather than out of the call is the strengthening
+this deployment brought to that check: there is no `owner_id` argument left to
+disagree with the record.
 
 ## 4. Existence is not consent
 
 The approval account is checked to be owned by *this program*, not merely to be
-non-default (`agent_verifier.rs:564-569`):
+non-default (`agent_verifier.rs:513-518`):
 
 ```rust
 if approval.account.program_owner != ctx.self_program_id {
@@ -123,13 +176,21 @@ way in (`lez/programs/authenticated_transfer/src/main.rs:50-53`). Requiring this
 program to be the owner means the account can only have come from
 `approve_spend`, which only runs when someone signed it.
 
+The same argument applies to the policy account, and `spend` makes the same check
+(`agent_verifier.rs:383-388`, error 6002) — plus one more, added with the record:
+the data must decode as a record this program wrote, or the spend is refused with
+6016 (`agent_verifier.rs:554-562`). "The ceiling could not be read" fails closed
+rather than decoding to something permissive. Empty data is an error too: an
+anchored policy always carries a full record, so empty means the account was
+made some other way.
+
 Whether an outsider could in fact fund an address they do not control is a
 separate question about LEZ's claiming rules — `scripts/deploy-agents.sh` records
 that a claim on a public account the payer did not sign for is rejected as
 `ClaimedUnauthorizedAccount` — and the point is that this program does not have
 to depend on the answer.
 
-Measured, not argued: the "approval merely funded" row in §7.
+Measured, not argued: the "funded by an outsider" rows in §7.
 
 ## 5. The agent is an account holder like any other
 
@@ -149,6 +210,15 @@ the amount's origin stay shielded; the credit side is readable by anyone with
 shielded", it is deliberate, and it is written up in
 [`limitations.md`](limitations.md) rather than glossed.
 
+A second qualification, new with this deployment: **the policy account is
+public.** Its address is a PDA of the agent's account id, so anyone who knows an
+agent's id can read its owner and both its limits with `getAccount`. Under the
+old scheme the address was a hash of the whole policy, which hid the limits from
+anyone who had not already guessed them — weakly, since the search space of
+plausible limits is small. This trades a little of that obscurity for the
+property in §2, and the trade is deliberate: a ceiling that an observer can check
+is worth more than one they have to brute-force.
+
 ## 6. What someone who steals the agent's key can do
 
 This is the half that matters, so it is stated in full rather than implied.
@@ -162,10 +232,6 @@ This is the half that matters, so it is stated in full rather than implied.
   The period ceiling is real (below), but it is a rate limit, not a total: a
   patient attacker still drains the account over enough periods. What it buys is
   time, and time is what an owner watching the chain needs.
-- **Anchor themselves a new ceiling, and spend the whole balance under it.**
-  This is the one that is still open, and it is the reason the rest of this
-  section is worth reading carefully rather than skimming. See "the gap this
-  leaves" below for exactly how far it goes and exactly what now bounds it.
 - **Consume an approval the owner has already signed**, for the payment it
   names — **once**. The marker is stamped on use (§3), so an approval that has
   been paid out cannot be presented again (6018, §7).
@@ -175,39 +241,35 @@ This is the half that matters, so it is stated in full rather than implied.
 
 ### They cannot
 
-**Read this list with its scope attached**, because otherwise it contradicts the
-one above. Everything here is what the chain refuses *under the policy the owner
-anchored*. The third bullet of "they can" is precisely the escape from all of
-it: an attacker who anchors a fresh policy of their own is no longer inside
-these constraints, they are inside a different account's. So this list describes
-how tight the envelope is, and "the gap this leaves" describes how to get out of
-it. Both are true; neither is the whole answer on its own.
-
-- **Raise the limits of the policy the owner anchored.** Those numbers are the
-  account's name; a different number is a different account (§2).
-- **Exceed `per_period` inside a period by splitting the payment up.** This is
-  the claim that was false in every version of this document before the current
-  deployment, so it is the one to check rather than take: the running total is
-  now on chain, in the policy account's data, and the program that owns that
-  account is the only thing that can write it (§2). Error 6006, measured in §7
-  and readable on the chain right now — see below.
+- **Anchor themselves a new ceiling.** This is the line that was in the "can"
+  column of every previous version of this document, and closing it is what this
+  deployment is for. There is one policy account per agent and `init` refuses a
+  second (§2). Measured below, twice: once against the program this replaces,
+  where it worked, and once against this one, where it does not.
+- **Raise the limits of the policy the owner anchored.** `create_policy` is the
+  only instruction that writes them and it can only run on an account that does
+  not yet exist; `spend` writes the running total and nothing else.
+- **Borrow another agent's policy.** The policy account's address is derived from
+  the paying account, so presenting somebody else's is a PDA mismatch before the
+  body runs (§2). The old 6013 check is gone because the disagreement it reported
+  can no longer be constructed.
+- **Exceed `per_period` inside a period by splitting the payment up.** The
+  running total is on chain, in the policy account's data, and the program that
+  owns that account is the only thing that can write it (§2). Error 6006,
+  measured in §7 and readable on the chain right now — see below.
 - **Reset the period early to get a fresh budget.** The period is named by the
   caller, because no program on this chain can read the block height, but naming
   it is not choosing it: it must be a multiple of `period_blocks` (6014), it may
-  not be older than the period the ledger records (6015), and the transaction is
+  not be older than the period the record holds (6015), and the transaction is
   pinned to `[window_start, window_start + period_blocks)` through
   `ProgramOutput`'s block validity window, so naming a *future* period yields a
   transaction that no current block will include (`OutOfValidityWindow`,
   `lee/state_machine/src/validated_state_diff/mod.rs:202-208` public,
   `:393-398` privacy-preserving). Sliding forward, replaying backwards and
   jumping ahead are each refused by a different one of those three.
-- **Borrow another agent's policy.** `spend` and `spend_approved` check that the
-  account paying is the agent the policy commits to (6013, §2). Before this
-  deployment they did not, and the effective ceiling was the loosest policy
-  anchored anywhere on the chain.
-- **Forge an owner approval** for a payment above an existing policy's ceiling
-  (§4), sign their own approval (6012, §3), point an approved payment at a
-  different recipient (6011, §3), or present a spent one twice (6018, §3).
+- **Forge an owner approval** for a payment above the ceiling (§4), sign their
+  own approval (6012, §3), point an approved payment at a different recipient
+  (6011, §3), or present a spent one twice (6018, §3).
 - **Spend from the owner's account, or from another agent's.** The payer is
   whichever account signs, and they hold only the agent's keys.
 - **Pass the local process check by lying to it.** The C++ envelope check fails
@@ -215,95 +277,152 @@ it. Both are true; neither is the whole answer on its own.
   path rather than the autonomous one (`module/src/wallet_skills.cpp:394-404`).
   That is a property of the honest process only — see §8.
 
+### The attack, and the transactions on both sides of the fix
+
+The bypass is stated as the attacker would run it, because that is the only form
+in which it can be checked. The victim below is the **messaging agent**,
+`GpRdooEW…Zpe5FS`, whose owner anchored `per_tx = 25`. It held 65 LEZ.
+
+Against the program this release replaces, `8c87cc9b…2d20ebbe`:
+
+1. The agent's **own public pay account**, `Dxh7ZLHF…fpEwD` — an account the
+   attacker holds along with the agent's key — calls `create_policy` naming
+   itself as `owner_id`, the compromised agent as `agent_id`, and
+   `per_tx = per_period = u128::MAX`. The owner check passes: the signer really
+   is the owner it names.
+
+   [`e530e0ba…399d462d`](https://explorer.testnet.lez.logos.co/transaction/e530e0ba9a49c4ebacbfeaeac8fff3376f8bece24b71cb8f985b70c5399d462d)
+   — **accepted, included in a block.**
+
+2. The agent then calls `spend` for **its entire 65 LEZ in one transaction**,
+   against a ceiling its owner had set at 25. The agent check passes: the payer
+   really is the agent that policy names.
+
+   [`7fc6c9af…f49a022228`](https://explorer.testnet.lez.logos.co/transaction/7fc6c9af06e590c7553af9d3090384e88a2780e38995117ca4e091f49a022228)
+   — **accepted, included in a block.** The recipient's balance moved by 65.
+
+The same two steps were run against the storage agent as well —
+[`d7498d65…1fbdd09b`](https://explorer.testnet.lez.logos.co/transaction/d7498d65a77e9e0d550bf89ae16127d5bb328d42643c6eacd3e74a611fbdd09b)
+and
+[`0a9ac12c…15b0e170`](https://explorer.testnet.lez.logos.co/transaction/0a9ac12ce1442cd6d33c7eac02df8a120f13e558273e6a91a4289f4f15b0e170)
+— and accepted there too. Four transactions, all `Halted(0)`, all on the public
+testnet. This was never a theory about the source.
+
+Against **this** program, `a780003b…8576841e`, step 1 is the identical call:
+
+```
+create_policy --owner Public/Dxh7ZLHF…fpEwD --agent-id <the messaging agent>
+              --per-tx  340282366920938463463374607431768211455
+              --per-period 340282366920938463463374607431768211455
+              --period-blocks 1000
+```
+
+`a01ace40b839f89b7b662b5532521716bd0906fbeef73ed15dae8c6b2cfd5352` — submitted,
+given a hash, **never included**. The same call aimed at the storage agent,
+`ecfeb924e26aa563b3fa6948434542843c571a2a49b3510422321d867ec04eec`, likewise.
+The policy account those calls address already exists, holds the owner's own
+record, and `init` refuses it.
+
+**Neither of those two hashes proves anything by itself, and they are not offered
+as proof.** A refused transaction, a pending one and a hash nobody ever sent all
+read `null` from `getTransaction`, which is exactly what `demo.sh`'s
+cannot-exist-hash control demonstrates. A refusal is not an event on this chain.
+The refusal is shown where it *can* be shown — by running the committed binary,
+the bytes that hash to the deploy transaction, against both steps of the attack
+in `crates/agent-verifier-adversarial`. That suite now runs the anchor **and**
+the follow-up spend, in all three shapes that were accepted above, and requires
+the balance to be out of reach at the end of each. §7 has the table.
+
+### What is left, stated plainly
+
+Three things, none of them hidden by the above.
+
+**Anchoring is first-writer-wins, and the first writer needs no key.** This is
+the sharpest thing left and it deserves to be stated at full strength rather
+than as "the owner should anchor early". `create_policy` declares two accounts:
+the policy account and a signer, recorded as the owner. **The agent's account is
+not among them.** It is never declared, never read and never asked to sign —
+`agent_id` is a `[u8; 32]` argument whose only job is to seed the address
+(`agent_verifier.rs:243-249`). So anchoring a policy over somebody else's agent
+requires no key at all, only the agent's *public id*, which this repository
+publishes in `artifacts/agents.tsv` and inside every signed Agent Card.
+
+Two consequences, and neither is theoretical:
+
+- Whoever anchors first owns that agent's envelope for the life of the agent
+  identity. If a third party gets there before the owner, the honest owner's
+  anchor is refused `AccountAlreadyInitialized` and stays refused.
+- `per_tx = 0` makes the same call a permanent denial of service: the agent can
+  never spend unattended again, and no `close` instruction exists to undo it
+  (LEZ rule 4 forbids changing an account's program owner, `ModifiedProgramOwner`,
+  `program/mod.rs:697-703`, so an account this program has claimed is this
+  program's forever).
+
+What this is *not* is the attack §6 closes. That one is an attacker with the
+agent's key turning a stolen process into an unlimited spender, and it is now
+impossible rather than merely detectable. This is a race for an address, it
+grants no spending authority to the racer, and it moves no money. It is
+nonetheless worse than it needs to be — the predecessor design at least required
+the agent's key to anchor over the agent — and the honest reading is that this
+release traded a theft for a griefing surface.
+
+The mitigation as shipped is procedural: `scripts/deploy-agents.sh` anchors
+immediately after funding, before the agent id is published anywhere, and
+records the policy account it anchored so that a reader can check it. The
+structural fix is a second signature — the agent designating, in its own
+transaction, which account may anchor for it — and it is being built rather than
+argued about here.
+
+**A policy cannot be changed.** One account per agent, written once. An owner who
+wants a different envelope needs a new agent identity. That is a real cost, paid
+deliberately: an `update_policy` instruction would be a second writer of the
+limits, and a second writer is the thing that was just removed. It is also
+strictly better than the previous design, where an owner *could* anchor a
+second, looser policy — and so could anyone else.
+
+**The rate limit is still a rate limit.** `per_period` bounds a window, not a
+lifetime. A patient attacker inside the envelope still drains the account across
+enough periods, publicly, one anchored ledger entry at a time.
+
 ### The period ledger, on the chain, right now
 
 The per-period ceiling is the claim this document got wrong for four
 deployments, so it is the one stated with a command rather than a sentence. The
-blockchain agent's policy account is `BLHNchq8…GhpsS`; it was created with empty
-data at block 8652 and every byte in it since was written by the policy program:
+blockchain agent's policy account is `Coxz1Cmf…Zk5rgM`, the PDA of that agent and
+nothing else:
 
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["BLHNchq8haEZ8w1UPk68Qr6sGLzYZB6haBrZLZ4GhpsS"]}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM"]}' \
 | python3 -c "
 import json,sys
-r=json.load(sys.stdin)['result']; d=bytes(r['data'])
-print('period', int.from_bytes(d[:8],'little'), 'spent', int.from_bytes(d[8:],'little'))"
+d=bytes(json.load(sys.stdin)['result']['data'])
+assert len(d)==97 and d[0]==1, 'not a record this program wrote'
+le=lambda a,b: int.from_bytes(d[a:b],'little')
+print('owner bytes', d[1:33].hex())
+print('per_tx', le(33,49), 'per_period', le(49,65), 'period_blocks', le(65,73))
+print('period', le(73,81), 'spent', le(81,97))"
+# owner bytes 9e54ba23…  (= Bf4MG9AW…s6Du, the account that signed create_policy)
+# per_tx 200 per_period 1000 period_blocks 1000
 # period 8000 spent 50
 ```
 
-Two settlements of 25 each — `5a488f28…` at block 8677 and `f780df62…` at block
-8686 — took it 0 → 25 → 50, in a policy whose anchored `per_period` is 1000.
-Nothing the agent sends can lower that number, because the write is the
-program's and rule 6 forbids anyone else's; at 1000 `spend` refuses with 6006
-until block 9000, when the window rolls and the budget starts again.
+Two settlements of 25 each — `4e3a3454…a490ddb1` and `7cad4fbd…7168f019` — took
+it 0 → 25 → 50, in a policy whose anchored `per_period` is 1000. Nothing the
+agent sends can lower that number, or the two limits sitting next to it in the
+same 97 bytes, because the write is the program's and rule 6 forbids anyone
+else's. At 1000, `spend` refuses with 6006 until block 9000, when the window
+rolls and the budget starts again.
 
-The 24 bytes are `window_start` then `spent`, both little-endian
-(`agent-policy-core/src/lib.rs:198-228`), which is the whole format.
-
-### The gap this leaves, stated plainly
-
-The design's headline claim is that a compromised agent cannot raise its own
-ceiling. It is true of *the policy the owner anchored* and **still false of the
-agent's authority overall**, and this deployment narrowed the hole without
-closing it. Stated as the attack, because that is the only form in which it can
-be checked:
-
-1. The attacker holds the agent's key. They call `create_policy` signing with
-   an account they control, naming that account as `owner_id` and the
-   compromised agent as `agent_id`, with `per_tx = per_period = u128::MAX`.
-   The owner check passes — the signer really is the owner it names.
-2. They call `spend` under that policy with the agent's key. The agent check
-   passes — the payer really is the agent that policy names. `per_tx` is
-   `u128::MAX`, so every payment is autonomous, the period ceiling is never
-   reached, and §3's approval machinery is never consulted.
-
-Both halves are accepted by the deployed binary, at halt 0, in
-`crates/agent-verifier-adversarial` — the second and fourth rows of §7. The
-attacker's account may be the compromised agent's own, which is the cheapest
-version: one stolen key is enough for both signatures.
-
-What the three bindings did buy is narrower than "fixed", and it is worth being
-exact about it. Before them the attacker could name an owner that does not
-exist (`aaaa…aaaa`, an account nobody controls) and could point any agent at
-any anchored policy. Now the anchoring account must be one they actually hold,
-and the paying account must be the one the policy names. The residual defect is
-that **nothing ties `agent_id` to the agent's real owner**: `create_policy` will
-anchor a policy for any `agent_id` the caller writes down, so the set of
-policies naming a given agent is open to anyone, and `spend` is happy with any
-of them.
-
-The fix is not another comparison — there is no id in the instruction left to
-compare. It is to make the policy account's address depend on the agent alone,
-so that an agent has exactly *one* policy account and `init` refuses a second.
-That means seeding the PDA on `agent_id` rather than on the full policy hash and
-moving the limits into the account's data next to the ledger, which trades the
-pure address commitment of §2 for a record this program writes once. It changes
-the ImageID, the deployed program and every anchored policy, so it is recorded
-here rather than half-made.
-
-**What has not been shown on chain** is the second half. `c0b21ba6…`, a
-`create_policy` with `per_tx = per_period = u128::MAX` naming an owner nobody
-controls, was accepted by the *previous* program at block 8652 — that is a real
-transaction, and it is why this is a matter of record rather than a worry. The
-identical call to the current program, `30c93c61…`, was submitted and never
-included. That second hash proves nothing by itself: a refused transaction, a
-pending one and a hash nobody ever sent all read `null` from `getTransaction`,
-which is exactly what `demo.sh`'s cannot-exist-hash control demonstrates. The
-refusal is shown where it can be — against the binary, in §7. The *surviving*
-attack has not been submitted as a transaction either, and it should not be
-reported as prevented on the strength of that.
-
-What still holds, and is worth not throwing away: a second policy has to be
-*anchored on chain* to be used, which is a public, permanent event an owner
-watching the chain can see, and the ledger of §6 means the honest policy's own
-spending is public too. The compromise is loud. It is not prevented.
+The layout is `version || owner(32) || per_tx(16) || per_period(16) ||
+period_blocks(8) || window_start(8) || spent(16)`, every integer little-endian
+(`agent-policy-core/src/lib.rs:256-311`), and that is the whole format.
 
 ## 7. Checking it yourself
 
 Everything below is the deployed binary — `artifacts/programs/agent_verifier.bin`,
-the bytes that hash to deploy transaction `8c87cc9b…2d20ebbe`, ImageID
-`26ed1580…0bad50be` — executed under the risc0 executor with inputs written in
+the bytes that hash to deploy transaction `a780003b…8576841e`, ImageID
+`12fa95d9…b578c9d8` — executed under the risc0 executor with inputs written in
 the order the sequencer writes them. Run it:
 
 ```bash
@@ -316,41 +435,79 @@ that refuses everything would pass it.
 
 | Input | Result |
 |---|---|
-| `create_policy` naming an `owner_id` the signer does not control | refused, `6012` — "the signer is not the owner this policy commits to" |
-| …the same call, naming the account that actually signs | **accepted**, `Halted(0)` — §6, still open |
-| `spend` under a policy anchored for a **different** agent | refused, `6013` — "the paying account is not the agent this policy commits to" |
-| …the agent that policy names, same amount | **accepted**, `Halted(0)` |
-| `spend` of `per_tx + 1`, no approval | refused, `6005` — "the spend needs an owner approval" |
+| `create_policy` for an agent nobody has anchored | **accepted**, `Halted(0)`, and the record it writes is printed |
+| an attacker anchors an **unlimited** policy over an agent that has one, naming itself as owner | refused, `AccountAlreadyInitialized` |
+| …the same, signed by the agent's own program-owned public pay account | refused, `AccountAlreadyInitialized` |
+| …the same, signed by the compromised agent itself | refused, `AccountAlreadyInitialized` |
+| `create_policy` whose policy account is not the PDA for the agent it names | refused, `PdaMismatch` |
+| `create_policy` with `period_blocks = 0` | refused, `6017` |
+| `spend` inside the envelope | **accepted**, `Halted(0)` |
+| `spend` of the agent's whole balance, as it would be under an unlimited policy | refused, `6005` — "the spend needs an owner approval" |
+| `spend` where a **different** agent presents this agent's policy account | refused, `PdaMismatch` |
+| `spend` against a policy account at the right address that this program never created | refused, `6002` |
+| `spend` against a policy account holding data this program did not write | refused, `6016` |
 | `spend` that would carry the period total past `per_period` | refused, `6006` |
 | …the same spend in the next period, where the budget starts again | **accepted**, `Halted(0)` |
 | `spend` naming a period that is not a multiple of `period_blocks` | refused, `6014` |
-| `spend` presenting raised limits with the real policy account | refused, `6001` — "policy_hash does not commit to these limits" |
-| `spend` against a policy account nobody created | refused, `6002` — "no policy is committed for these limits" |
-| `spend` where the agent is not a signer | refused, `Unauthorized: Account 'agent' (index 1) must be a signer` |
-| `approve_spend` signed by the agent rather than the owner | refused, `6012` |
-| …signed by the owner | **accepted**, `Halted(0)` |
-| `spend_approved` with an approval account **funded by an outsider** at the right address | refused, `6007` — "no owner approval is anchored for this spend" |
-| `spend_approved` with a real approval, redirected to another recipient | refused, `6011` — "the recipient account is not the one this spend names" |
-| `spend_approved` presenting an approval that has already been stamped | refused, `6018` — "this owner approval has already been spent" |
+| `spend` naming a period older than the one the record holds | refused, `6015` |
+| `approve_spend` signed by the compromised agent | refused, `6012` |
+| …signed by the agent's own public pay account | refused, `6012` |
+| …signed by the owner the record names | **accepted**, `Halted(0)` |
+| `approve_spend` by the owner where the marker does not commit to the amount | refused, `6003` |
+| `spend_approved` with an approval account **funded by an outsider** at the right address | refused, `6007` |
+| `spend_approved` on the approval this program created | **accepted**, `Halted(0)` |
+| `spend_approved` presenting an approval that has already been stamped | refused, `6018` |
+| `spend_approved` where a different agent presents an approval granted for this one | refused, `PdaMismatch` |
 
-**One row that used to be here and was wrong.** Earlier versions of this table
-claimed that `spend_approved`, on a valid approval, is refused with `6006` if it
-would burst the period total. It is not: executed against this binary it is
-**accepted**. That is deliberate rather than an oversight — an approved payment
-carries the owner's signature naming this recipient, this amount and this nonce,
-and it does not draw on the *unattended* budget, which is the thing `per_period`
-bounds (`agent_verifier.rs:466-471`). Making an owner's own approval refusable
-because the agent had been busy would buy nothing, since the marker is
-single-use anyway. But the document asserted a refusal that does not happen, and
-the correction belongs in the open rather than in a silent edit.
+and then, separately, the two-step attack end to end — anchor, then spend the
+whole balance — in each of the three shapes that the previous binary accepted on
+chain, followed by three consecutive spends that walk the period total 200 → 400
+→ 600 out of the record the guest itself wrote.
 
-One trap for anyone integrating against these numbers: the codes declared in the
-guest as `6001…6018` reach a caller **offset by 6000**, because
-`SpelError::error_code` returns `6000 + code` for a custom error
+**Two refusals in that table have no error code, and that is worth knowing before
+you integrate against it.** `AccountAlreadyInitialized` and `PdaMismatch` come
+from the macro's account validation, which the generated dispatcher consumes with
+`.expect("account validation failed")` — so the guest panics with the variant's
+`Debug` and no number:
+
+```
+account validation failed: AccountAlreadyInitialized { account_index: 0 }
+```
+
+`SpelError::error_code()` would call that 1002, but 1002 appears nowhere in what
+the executor prints. The refusal that closes the anchoring bypass is one of
+these, so the harness matches the variant name rather than a code, and says so.
+
+The codes that *are* numbered have their own trap: the `6001…6018` declared in
+the guest reach a caller **offset by 6000**, because `SpelError::error_code`
+returns `6000 + code` for a custom error
 (`vendor/spel/spel-framework-core/src/error.rs:119`). What the log actually says
 is `Program error [12005]: Program error 6005: …`. Matching the bracketed number
 would match `6012` against `12012` and pass a case that halted for an entirely
 different reason.
+
+**One row that used to be here and was wrong.** Earlier versions of this table
+claimed that `spend_approved`, on a valid approval, is refused with `6006` if it
+would burst the period total. It is not: executed against the binary it is
+**accepted**. That is deliberate rather than an oversight — an approved payment
+carries the owner's authorisation naming this recipient, this amount and this
+nonce, and it does not draw on the *unattended* budget, which is the thing
+`per_period` bounds (`agent_verifier.rs:434-441`). Making an owner's own approval
+refusable because the agent had been busy would buy nothing, since the marker is
+single-use anyway. But the document asserted a refusal that does not happen, and
+the correction belongs in the open rather than in a silent edit.
+
+**And one row that used to be here and was worse.** Until this release the
+adversarial suite carried the case
+
+> `create_policy` — "the same call, naming the account that actually signs" — **accepted**
+
+as its *benign control*, `expect: None`. That call is step 1 of the attack in §6:
+an attacker anchoring an unlimited policy over somebody else's agent while
+honestly naming itself as the owner. The suite whose whole purpose was to prove
+the bypass closed had the bypass written down as required behaviour, and never
+followed it with the `spend` that empties the account. Both are fixed: that call
+must now refuse, and the follow-up spend runs as a regression.
 
 ## 8. Where the enforcement is *not*
 
@@ -388,10 +545,17 @@ and §6 says exactly how far they get.
 - **The sequencer enforces the state machine.** Rule 5 forbids a program from
   debiting an account it does not own
   (`lee/state_machine/core/src/program/mod.rs:707-716`), which is why `spend`
-  chains into the transfer program rather than moving balance itself; rule 8
-  requires total balance to be preserved across a transaction. These are LEZ's
-  checks, not ours, and we verify them by observing that transactions violating
-  them do not land.
+  chains into the transfer program rather than moving balance itself; rule 6
+  forbids a data write to an account the executing program does not own, which is
+  what makes the policy record a record; rule 8 requires total balance to be
+  preserved across a transaction. These are LEZ's checks, not ours, and we verify
+  them by observing that transactions violating them do not land.
+- **`#[account(init)]` means what it says.** The macro refuses any account whose
+  pre-state is not `Account::default()`
+  (`vendor/spel/spel-framework-macros/src/lib.rs:1396-1410`), and the pre-states
+  are built by the state machine from actual chain state rather than supplied by
+  the caller. The whole of §2 rests on that one comparison, which is why it is
+  named here rather than assumed.
 - **The privacy circuit is what the sequencer pins.** The chained call is
   re-executed and checked under `env::verify` inside the proof
   (`lee/privacy_preserving_circuit/src/execution_state.rs:149-155`).
