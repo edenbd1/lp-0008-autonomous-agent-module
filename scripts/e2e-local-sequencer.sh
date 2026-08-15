@@ -201,9 +201,10 @@ done
 echo "  agent $AGENT  (holds 1000)"
 
 PER_TX=100; PER_PERIOD=500; PERIOD=1000
-# Account ids as the 32 bytes the chain holds. `create_policy` compares
-# `owner_id` against the account that signs and `spend` compares `agent_id`
-# against the account that pays, so neither can be a hash of the printed form.
+# The agent's id as the 32 bytes the chain holds. It is the PDA seed of the
+# policy account — there is one per agent and no other address for it — so this
+# cannot be a hash of the printed form. The owner needs no conversion:
+# `create_policy` takes no owner argument and records the account that signs.
 id_hex() {
   python3 -c "
 import sys
@@ -217,18 +218,29 @@ b = b'\x00'*(len(s)-len(s.lstrip('1'))) + b
 assert len(b)==32, 'not a 32-byte account id: %r' % s
 print(b.hex())" "$1"
 }
-OWNER_HEX=$(id_hex "$TEST_SIGNER")
 AGENT_HEX=$(id_hex "$AGENT")
-POLICY=$(cd "$ROOT" && cargo run --quiet --release -p agent-policy-core --example policy-hash -- \
-  "$OWNER_HEX" "$AGENT_HEX" "$PER_TX" "$PER_PERIOD" "$PERIOD")
-[ -n "$POLICY" ] || die "could not compute the policy hash"
+POLICY=$(spel --idl "$IDL" --program "$PROGRAM" pda policy --agent-id "$AGENT_HEX" 2>/dev/null | tail -n1)
+[ -n "$POLICY" ] || die "could not resolve the policy account"
 echo "  policy $POLICY  (per-tx $PER_TX, per-period $PER_PERIOD)"
 
 spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
-  --policy-hash "$POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
+  --agent-id "$AGENT_HEX" \
   --per-tx "$PER_TX" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" >/dev/null 2>&1 \
   || die "create_policy failed"
 echo "  policy anchored"
+
+# Anchoring is once per agent. A second create_policy for the same agent — any
+# limits, any signer — resolves to the account just created and `init` refuses
+# it. That is the anchoring bypass closed, checked against a real sequencer
+# rather than argued: an attacker holding the agent's key gets this too.
+if spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
+     --agent-id "$AGENT_HEX" \
+     --per-tx 340282366920938463463374607431768211455 \
+     --per-period 340282366920938463463374607431768211455 \
+     --period-blocks "$PERIOD" 2>&1 | grep -q 'Transaction confirmed'; then
+  die "a SECOND, unlimited policy was anchored for the same agent"
+fi
+echo "  a second, unlimited policy for the same agent was refused"
 
 say "[5/5] the agent pays inside its envelope, and is refused outside it"
 # A second party, with its own wallet home, so the payer holds no key for the
@@ -281,8 +293,6 @@ spend_at() { # amount
   LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   spel --idl "$IDL" --program "$PROGRAM" --bin-auth-transfer "$AUTH_TRANSFER" \
     -- spend --agent "Private/$AGENT" --recipient "Public/$RECIP" \
-    --policy-hash "$POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
-    --per-tx "$PER_TX" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" \
     --amount "$1" --window-start "$(window_start)" 2>&1
 }
 

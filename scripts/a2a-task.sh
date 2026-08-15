@@ -47,23 +47,19 @@ CLIENT_CAT=blockchain          # has the largest envelope, so it pays
 SERVER_CAT=storage             # advertises a skill and gets paid
 
 CLIENT_ID=$(field $CLIENT_CAT 2);  CLIENT_POLICY=$(field $CLIENT_CAT 4)
-CLIENT_PER_TX=$(field $CLIENT_CAT 5); CLIENT_PER_PERIOD=$(field $CLIENT_CAT 6)
-CLIENT_PERIOD=$(field $CLIENT_CAT 7)
 SERVER_ID=$(field $SERVER_CAT 2)
 SERVER_PAY=$(field $SERVER_CAT 3)
-# The account that anchored the client's policy. It has to come from the
-# manifest: the policy hash commits to sha256(owner base58), and each agent was
-# anchored by a different signer, so assuming one owner produces a hash that
-# does not match anything on chain and `spend` refuses with 6001.
+# Recorded for the reader, not used to build anything: `spend` derives the policy
+# address from the paying account itself and reads the owner out of that
+# account's data, so nothing here has to know who anchored.
 CLIENT_OWNER=$(field $CLIENT_CAT 9)
 [ -n "$SERVER_PAY" ] || { echo "the server agent has no receiving account in $AGENTS" >&2; exit 1; }
-[ -n "$CLIENT_OWNER" ] || { echo "no owner recorded for $CLIENT_CAT in $AGENTS" >&2; exit 1; }
+[ -n "$CLIENT_POLICY" ] || { echo "no policy account recorded for $CLIENT_CAT in $AGENTS" >&2; exit 1; }
 
 # An account id, base58 as the wallet prints it, as the 32 raw bytes the chain
-# holds. The policy hash commits to the owner and the agent by account id, and
-# the program compares both against the accounts in front of it — the signer for
-# the owner, the payer for the agent — so these have to be the accounts
-# themselves and not a hash of how they are printed.
+# holds. Used here only to derive the approval marker the owner WOULD have to
+# grant if this price were above the envelope: the settlement below passes no
+# account ids at all, because the program takes them off the accounts.
 id_hex() {
   python3 -c "
 import sys
@@ -88,7 +84,27 @@ balance_of() {
   | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['balance'])"
 }
 
-PRICE=25                       # inside the client's per-transaction limit of 200
+PRICE=${A2A_PRICE:-25}         # inside the client's per-transaction limit
+
+# The envelope, read off the chain rather than out of the manifest. The policy
+# account's data IS the policy now — owner, both limits, the period and the
+# running total — so a manifest that disagreed with the chain would be caught
+# here instead of at the settlement. Layout: version, owner(32), per_tx(16),
+# per_period(16), period_blocks(8), window_start(8), spent(16).
+policy_field() { # field name -> value on stdout
+  curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$CLIENT_POLICY\"]}" \
+  | python3 -c "
+import json,sys
+r=json.load(sys.stdin)['result']
+d=bytes(r['data'])
+if len(d)!=97 or d[0]!=1:
+    sys.exit('the policy account holds %d bytes, not a record this program wrote' % len(d))
+le=lambda a,b: int.from_bytes(d[a:b],'little')
+print({'owner':d[1:33].hex(),'per_tx':le(33,49),'per_period':le(49,65),
+       'period_blocks':le(65,73),'window_start':le(73,81),'spent':le(81,97),
+       'program_owner':r['program_owner']}[sys.argv[1]])" "$1"
+}
 
 rule() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
@@ -166,6 +182,14 @@ print('  provider:',d['provider']['organization'],'<'+d['provider']['url']+'>')
 print('  signed:',d['signatures'][0]['signature'][:16]+'…','by',json.loads(__import__('base64').urlsafe_b64decode(d['signatures'][0]['protected']+'==').decode())['kid'])"
 
 rule "2. the client agent discovers it and accepts the price"
+# The ceiling is whatever the chain says, not whatever this script was told.
+CLIENT_PER_TX=$(policy_field per_tx)     || exit 1
+CLIENT_PER_PERIOD=$(policy_field per_period) || exit 1
+CLIENT_PERIOD=$(policy_field period_blocks)  || exit 1
+[ -n "$CLIENT_PER_TX" ] || { echo "  could not read the client's anchored policy" >&2; exit 1; }
+echo "  policy  $CLIENT_POLICY"
+echo "          read off chain: per-tx $CLIENT_PER_TX, per-period $CLIENT_PER_PERIOD,"
+echo "          period $CLIENT_PERIOD blocks, spent $(policy_field spent) in period $(policy_field window_start)"
 echo "  client  $CLIENT_ID  ($CLIENT_CAT, per-tx limit $CLIENT_PER_TX)"
 echo "  server  $SERVER_ID  ($SERVER_CAT), paid at Public/$SERVER_PAY"
 echo "  task    storage.upload at $PRICE LEZ"
@@ -207,7 +231,6 @@ rule "5. settlement on chain, by the client agent, unattended"
 # does not consume an approval, so the same call shape works either side of the
 # threshold.
 NONCE=$(python3 -c "import random;print(random.randrange(1,2**63))")
-OWNER_HEX=$(id_hex "$CLIENT_OWNER")
 AGENT_HEX=$(id_hex "$CLIENT_ID")
 # The account that is actually paid, not the server's shielded identity. An
 # approval commits to the recipient the chain will hand the money to, and
@@ -215,7 +238,7 @@ AGENT_HEX=$(id_hex "$CLIENT_ID")
 # derived from anything else names a payment that cannot happen.
 RECIP_HEX=$(id_hex "$SERVER_PAY")
 MARKER=$(cargo run --quiet --release -p agent-policy-core --example spend-marker -- \
-  "$CLIENT_POLICY" "$RECIP_HEX" "$PRICE" "$NONCE")
+  "$AGENT_HEX" "$RECIP_HEX" "$PRICE" "$NONCE")
 echo "  nonce  $NONCE"
 echo "  marker $MARKER"
 
@@ -276,8 +299,6 @@ echo "  signing from $LEE_WALLET_HOME_DIR"
 OUT_TXT=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
   --bin-auth-transfer "$AUTH_TRANSFER" \
   -- spend --agent "Private/$CLIENT_ID" --recipient "Public/$SERVER_PAY" \
-  --policy-hash "$CLIENT_POLICY" --owner-id "$OWNER_HEX" --agent-id "$AGENT_HEX" \
-  --per-tx "$CLIENT_PER_TX" --per-period "$CLIENT_PER_PERIOD" --period-blocks "$CLIENT_PERIOD" \
   --amount "$PRICE" --window-start "$WINDOW_START" 2>&1)
 TX=$(echo "$OUT_TXT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
 if [ -z "$TX" ]; then
