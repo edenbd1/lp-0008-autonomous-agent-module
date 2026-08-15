@@ -153,19 +153,105 @@ fi
 
 echo
 echo "settlements ($TASKS)"
+#
+# "It is on chain" was the whole check here, and it cannot fail in the way that
+# matters. Every settlement this repository has ever produced is still on chain
+# — deployment is content-addressed and nothing is ever removed — so four green
+# lines were reporting that four transactions resolve, not that any of them was
+# charged against the policy account of the program we ship. Two of these four
+# are settlements under `a780003b…`, which `697746f5…` superseded. They moved
+# real balance and they are real history; what they are not is evidence about
+# the shipped binary, because the policy account they charged no longer exists.
+#
+# Each row is therefore attributed to a program TWICE, and the two routes must
+# agree:
+#
+#   the manifest  — `a2a-task.tsv`'s `program` column, read BY NAME. That column
+#                   was inserted at position 1 by the migration, which pushed
+#                   `settlement_tx` from field 8 to field 9; a positional read
+#                   now returns the nonce, confidently and silently.
+#   the chain     — a privacy-preserving settlement composes the program call
+#                   inside its proof and looks the callee up by ImageID, so the
+#                   32-byte ImageID is present in the payload. The shipped one
+#                   is not hardcoded either: it is read out of a `create_policy`
+#                   payload on chain, where byte 0 is the transaction kind and
+#                   bytes 1..33 are the ImageID being called.
+#
+# Agreement is the point. The manifest alone can be edited; the chain alone
+# cannot say which program a maintainer *believes* a row belongs to. A row where
+# they disagree is a misattribution and fails.
+#
+# Inclusion depth is deliberately NOT re-done here — `scripts/submission-evidence.py`
+# already confirms each transaction against its neighbouring blocks, and two
+# implementations of one check is how they come to disagree.
 if [ -f "$TASKS" ]; then
   c_stx=$(col "$TASKS" settlement_tx)
   c_ba=$(col "$TASKS" balance_after)
+  c_prog=$(col "$TASKS" program)
   if [ -z "$c_stx" ]; then
     bad "$TASKS has no settlement_tx column"
+  elif [ -z "$c_prog" ]; then
+    bad "$TASKS has no program column: a settlement that names no program cannot be told from an orphan"
   else
+    # The shipped ImageID, from the chain. Any anchor of the shipped program
+    # carries it; the first one that resolves is enough.
+    SHIPPED_IMG=""
+    if [ -n "$(col "$AGENTS" create_tx)" ]; then
+      _ctx=$(rows "$AGENTS" | awk -F'\t' -v c="$(col "$AGENTS" create_tx)" 'NR==1 {print $c}')
+      SHIPPED_IMG=$(rpc getTransaction "[\"$_ctx\"]" | python3 -c "
+import json,sys,base64
+r=json.load(sys.stdin).get('result')
+if not isinstance(r,list): raise SystemExit
+d=base64.b64decode(r[0])
+print(d[1:33].hex() if len(d)>33 and d[0]==0 else '')")
+    fi
+    if [ -z "$SHIPPED_IMG" ]; then
+      bad "could not read the shipped ImageID off an anchor: settlements cannot be attributed from the chain"
+    else
+      echo "  shipped ImageID (read off an on-chain anchor) $SHIPPED_IMG"
+    fi
+
+    shipped=0
     while IFS=$'\t' read -r -a f; do
-      stx="${f[$((c_stx-1))]}"; ba="${f[$((c_ba-1))]}"
-      b=$(rpc getTransaction "[\"$stx\"]" \
-          | python3 -c "import json,sys; r=json.load(sys.stdin).get('result'); print(r[1] if isinstance(r,list) else '')")
-      if [ -n "$b" ]; then ok "$stx  block $b  (balance after $ba)"
-      else bad "$stx is not on chain"; fi
+      stx="${f[$((c_stx-1))]}"; ba="${f[$((c_ba-1))]}"; prog="${f[$((c_prog-1))]}"
+      out=$(rpc getTransaction "[\"$stx\"]" | python3 -c "
+import json,sys,base64
+r=json.load(sys.stdin).get('result')
+if not isinstance(r,list): print('ABSENT'); raise SystemExit
+print('%s %s' % (r[1], 'SHIPPED' if bytes.fromhex('$SHIPPED_IMG') in base64.b64decode(r[0]) else 'OTHER'))")
+      set -- $out
+      if [ "${1:-}" = "ABSENT" ]; then
+        bad "$stx is not on chain"
+        continue
+      fi
+      b="$1"; chain="$2"
+      # What the manifest claims, in the same vocabulary.
+      if [ "$prog" = "$DEPLOY_TX" ]; then claim=SHIPPED; else claim=OTHER; fi
+
+      if [ "$claim" != "$chain" ]; then
+        bad "$stx  block $b  the manifest files it under ${prog:0:8}… but the chain says $chain: a settlement attributed to the wrong program is worse than one with no program at all"
+      elif [ "$chain" = "SHIPPED" ]; then
+        shipped=$((shipped + 1))
+        ok "$stx  block $b  under the shipped program  (balance after $ba)"
+      else
+        ok "$stx  block $b  SUPERSEDED (${prog:0:8}…) — real history, not evidence for what ships"
+      fi
     done < <(rows "$TASKS")
+
+    # How many must be under the shipped program, and why this is a failure
+    # rather than a label. The claim a reviewer checks is not "this chain has
+    # processed settlements" — nobody doubts that — it is that the agent settles
+    # repeatedly and unattended under the envelope THIS repository anchors. An
+    # orphan row cannot support it: the policy account it charged does not exist
+    # under the shipped program. Two, not one, because the documented claim is
+    # specifically a *repeat* settlement — producing one was possible for most of
+    # this repository's life; producing a second was the thing that was not.
+    want="${MIN_SHIPPED_SETTLEMENTS:-2}"
+    if [ "$shipped" -ge "$want" ]; then
+      ok "$shipped settlement(s) under the shipped program (need $want)"
+    else
+      bad "only $shipped settlement(s) under the shipped program, need $want — the rest are under superseded programs and are not evidence that what this repository ships settles anything"
+    fi
   fi
 else
   bad "$TASKS is missing"
