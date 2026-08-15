@@ -669,6 +669,13 @@ int main()
         TaskPersistence reader(restarted.port(), kPath, disk.port());
         const LoadReport r = reader.load();
         check(r.ok(), "the snapshot still loads");
+        // `fieldAt` returns "" for an empty array, an out-of-range index and an
+        // absent key alike, so "the task carries no settlement" was true of a
+        // restore that produced NO TASK AT ALL — handing the store `"[]"` left
+        // this whole block green with nothing restored. The task has to be there
+        // before the absence of its settlement means anything.
+        check(!restarted.data.empty() && fieldAt(restarted.data, 0, "id") == "t1",
+              "and the task itself came back");
         check(fieldAt(restarted.data, 0, "settlementTx").empty(),
               "and it shows the task as carrying no settlement");
         check(r.uncertainPayments == 1 && reader.needingReconciliation().size() == 1,
@@ -706,12 +713,18 @@ int main()
         std::string why;
         check(!reader.mayPay("t1", why) && mentions(why, "c45d3f24beef"),
               "and will not pay it again");
+        // The assertion used to live INSIDE this loop, so a `recovered()` that
+        // returned nothing did not fail it — it never ran it, and the run simply
+        // printed one assertion fewer while the block stayed green. The verdict
+        // is now computed and then checked unconditionally.
+        bool carried = false;
         for (const auto &t : reader.recovered()) {
             if (t.id == "t1") {
-                check(t.payment == PaymentRecord::Settled && t.settlementTx == "c45d3f24beef",
-                      "the recovered task carries the settlement the journal held");
+                carried = t.payment == PaymentRecord::Settled
+                          && t.settlementTx == "c45d3f24beef";
             }
         }
+        check(carried, "the recovered task carries the settlement the journal held");
     }
     {
         // A journal that claims a settlement and names no transaction is not

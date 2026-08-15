@@ -284,13 +284,24 @@ if [ -n "${TX:-}" ]; then
   printf '%s\t%s\t%s\t%s\t%s\n' "$CID" "$DOC_SHA" "$ACCOUNT" "$PUBKEY" "$TX" >> "$MANIFEST"
 fi
 [ -s "$MANIFEST" ] || bad "no notarisations recorded at $MANIFEST"
+# SEEN counts rows this loop entered; COUNT counts rows that passed EVERY check
+# in it. They were one variable, incremented on entry, and the summary line
+# below — the one CI parses and compares against the manifest's row count —
+# called it "each verified". It was not: a row that failed every check still
+# incremented it and then `continue`d, so a run against an unreachable chain
+# printed "OK 1 notarisation(s), each verified from the chain" having verified
+# none. Demonstrated by pointing SEQUENCER_URL at a dead port. `ROW_OK` is what
+# makes the sentence true, and the seen/verified comparison at the end is what
+# makes a silently skipped row a failure rather than a smaller number.
 COUNT=0
+SEEN=0
 if [ -s "$MANIFEST" ]; then
   for ADDR in $(column_of "$MANIFEST" content_address); do
     NTX=$(field "$MANIFEST" "$ADDR" notary_tx)
     [ -n "$NTX" ] || continue
     NACC=$(field "$MANIFEST" "$ADDR" account)
-    COUNT=$((COUNT + 1))
+    SEEN=$((SEEN + 1))
+    ROW_OK=1
     echo
     echo "  content address $ADDR"
     echo "    $NTX"
@@ -324,30 +335,33 @@ if [ -s "$MANIFEST" ]; then
     if [ "$(kv "$V" match)" = "1" ]; then
       ok "  signed by the key this content address derives: $CHAIN_PUB"
     else
-      bad "  signed by $CHAIN_PUB; this address derives $(kv "$V" expected)"
+      bad "  signed by $CHAIN_PUB; this address derives $(kv "$V" expected)"; ROW_OK=0
     fi
     # The account it created, and the program that owns it — both from the chain.
     if [ "$(kv "$F" account)" = "$NACC" ]; then
       ok "  and it created $NACC"
     else
-      bad "  the transaction names $(kv "$F" account), the manifest records $NACC"
+      bad "  the transaction names $(kv "$F" account), the manifest records $NACC"; ROW_OK=0
     fi
     NOW_OWNER=$(owner_of "$NACC")
     if [ -n "$TRANSFER_ID" ] && [ "$(kv "$F" program_id)" = "$TRANSFER_HEX" ]; then
       ok "  under the chain's own $TRANSFER_PROGRAM program"
     else
-      bad "  the transaction ran $(kv "$F" program_id), not the chain's $TRANSFER_PROGRAM"
+      bad "  the transaction ran $(kv "$F" program_id), not the chain's $TRANSFER_PROGRAM"; ROW_OK=0
     fi
     if [ "$NOW_OWNER" != "0,0,0,0,0,0,0,0" ]; then
       ok "  getAccount still reports it as a real account today"
     else
-      bad "  getAccount reports the default account — the record is gone"
+      bad "  getAccount reports the default account — the record is gone"; ROW_OK=0
     fi
+    [ "$ROW_OK" -eq 1 ] && COUNT=$((COUNT + 1))
   done
 fi
 echo
-if [ "$COUNT" -ge 1 ]; then
+if [ "$COUNT" -ge 1 ] && [ "$COUNT" -eq "$SEEN" ]; then
   ok "$COUNT notarisation(s), each verified from the chain against the document's own key"
+elif [ "$SEEN" -ge 1 ]; then
+  bad "$COUNT of $SEEN notarisation(s) verified — the rest failed a check above"
 else
   bad "no notarisation could be checked"
 fi
@@ -359,10 +373,24 @@ else
   bad "the control hash did not return null — the checks above are not meaningful"
 fi
 GHOST=$(kv "$(python3 scripts/use-cases/notary-key.py "a-document-nobody-notarised")" pubkey)
-if [ -n "$MANIFEST" ] && ! grep -q "$GHOST" "$MANIFEST" 2>/dev/null; then
-  ok "control: a document nobody notarised derives a key that appears nowhere"
-else
+# The positive half FIRST, and it is not decoration. "The ghost key is not in
+# the manifest" is an absence, and an absence is satisfied by an empty manifest,
+# an unreadable one, a manifest with no pubkey column, and a grep that would
+# find nothing whatever it was asked for. This control printed OK on a run
+# against a dead chain that verified nothing at all. So show the same grep
+# finding a key that IS there before believing it about one that is not — the
+# shape 01-file-vault.sh already uses for its plaintext marker.
+REAL=$(column_of "$MANIFEST" pubkey 2>/dev/null | grep -m1 .)
+if [ -z "$GHOST" ]; then
+  bad "control: the un-notarised document derived no key, so this control is empty"
+elif [ -z "$REAL" ]; then
+  bad "control: $MANIFEST carries no pubkey to search for — an absence here would prove nothing"
+elif ! grep -q "$REAL" "$MANIFEST"; then
+  bad "control: the search cannot even find a key the manifest records — it is broken"
+elif grep -q "$GHOST" "$MANIFEST"; then
   bad "control: an un-notarised document's key is in the manifest"
+else
+  ok "control: the same search finds a recorded key and not the un-notarised one"
 fi
 
 rule "7. what is proved, and what is not"

@@ -835,9 +835,23 @@ fn main() -> Result<()> {
     let mut failures = 0;
     for case in &cases {
         match (run(&elf, program_id, case), case.expect) {
+            // `wrote()`'s own doc comment says it exists "so 'accepted' is not
+            // merely the absence of an error", and for as long as its `None`
+            // arm printed `ok` it was exactly that: forcing `wrote()` to return
+            // None left all eight accepted cases and the three four-step step-2s
+            // printing `ok` and the suite exiting 0. An accepted call that
+            // committed no record this program can decode is now a failure.
             (Ok(Some(output)), Expect::Accepted) => match wrote(&output) {
                 Some(what) => println!("  ok    {}\n          {what}", case.what),
-                None => println!("  ok    {}", case.what),
+                None => {
+                    failures += 1;
+                    println!(
+                        "  FAIL  {}\n          accepted, but its first post-state holds no \
+                         policy, claim or approval record: 'accepted' here would mean \
+                         nothing but the absence of an error",
+                        case.what
+                    );
+                }
             },
             (Ok(None), Expect::Accepted) => {
                 failures += 1;
@@ -992,13 +1006,34 @@ fn main() -> Result<()> {
                 Ok(Some(output)) => {
                     data = output.post_states[0].account().data.to_vec();
                     let r = PolicyRecord::decode(&data).expect("the guest wrote a record");
-                    println!(
-                        "  ok    spend {} of {}: {} moved in period {}",
-                        i + 1,
-                        amount,
-                        r.ledger.spent,
-                        r.ledger.window_start
-                    );
+                    // The running total is the whole point of this loop and it
+                    // was printed, never compared. Stopping the guest's own
+                    // post-state from being fed forward — a `spend` that never
+                    // persists the total — printed
+                    //     ok    spend 1 of 200: 0 moved in period 0
+                    // three times over and exited 0. Each spend has to move the
+                    // total by exactly its amount, in the period it named.
+                    let want = (i as u128 + 1) * amount;
+                    if r.ledger.spent != want || r.ledger.window_start != 8000 {
+                        failures += 1;
+                        println!(
+                            "  FAIL  spend {} of {}: the ledger reads {} in period {}, \
+                             not {} in period 8000",
+                            i + 1,
+                            amount,
+                            r.ledger.spent,
+                            r.ledger.window_start,
+                            want
+                        );
+                    } else {
+                        println!(
+                            "  ok    spend {} of {}: {} moved in period {}",
+                            i + 1,
+                            amount,
+                            r.ledger.spent,
+                            r.ledger.window_start
+                        );
+                    }
                 }
                 other => {
                     failures += 1;

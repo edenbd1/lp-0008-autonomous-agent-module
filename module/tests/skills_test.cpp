@@ -258,9 +258,29 @@ int main()
 
     std::printf("storage\n");
     {
-        StoragePort down{[] { return false; }, {}, {}, {}, {}};
-        UploadSkill u(down);
-        check(!okOf(u.invoke(R"({"path":"/tmp/x"})")), "upload refuses while storage is down");
+        // Two things were wrong with this port and only one of them was under
+        // test. `ready` returns false AND `upload` is an empty std::function, so
+        // `!okOf(...)` was satisfied by either guard — and deleting the readiness
+        // guard from UploadSkill left the whole suite printing "all skill
+        // behaviours hold" with a storage.upload that ignores a stopped node.
+        // The port is therefore crippled ONE WAY AT A TIME, and the error is
+        // pinned, which is the shape `send refuses while the node is not
+        // started` two hundred lines up already uses and `share` was fixed to.
+        StoragePort stopped{[] { return false; },
+                            [](const std::string &, std::int64_t) { return std::string("cid-1"); },
+                            {}, {}, {}};
+        UploadSkill uStopped(stopped);
+        const auto rs = uStopped.invoke(R"({"path":"/tmp/x"})");
+        check(!okOf(rs), "upload refuses while storage is down");
+        check(errOf(rs).find("not started") != std::string::npos,
+              "and blames the stopped node, not the wiring");
+
+        StoragePort unwired{[] { return true; }, {}, {}, {}, {}};
+        UploadSkill uUnwired(unwired);
+        const auto ru = uUnwired.invoke(R"({"path":"/tmp/x"})");
+        check(!okOf(ru), "and refuses when the node is up but nobody wired upload");
+        check(errOf(ru).find("not wired") != std::string::npos,
+              "blaming the wiring that time");
     }
     {
         StoragePort up{[] { return true; },
@@ -552,6 +572,14 @@ int main()
         }
         if (!missing.empty()) std::printf("       missing: %s\n", missing.c_str());
         check(missing.empty(), "every skill the module ships with is registered and listed");
+        // `schemaless` is only ever appended to in the `else` branch of `if
+        // (entry.empty())`, so an EMPTY card leaves it empty and this prints
+        // `ok` having checked nothing — the "ok (0 checked)" shape that has
+        // shipped here before. `missing` above catches the empty card from the
+        // other side, and the count below catches it from a third; this line is
+        // now anchored on its own rather than relying on its neighbours.
+        check(!card.empty(),
+              "the card is not empty, so the schema loop above checked something");
         check(schemaless.empty(),
               "each with a parameter schema another agent can call it from");
         check(card.size() == kBuiltinCount, "and the card lists nothing it cannot dispatch");
@@ -597,6 +625,7 @@ int main()
         };
         int dispatched = 0;
         int refusedCleanly = 0;
+        int notStarted = 0;
         std::string wrong;
         for (const char *name : kBuiltinSkills) {
             std::string answer;
@@ -611,6 +640,13 @@ int main()
                 wrong += std::string(wrong.empty() ? "" : " ") + name;
                 continue;
             }
+            // Two refusals have to be counted, not one. `agent is not started`
+            // does not contain `no skill named`, so a module that never started
+            // — or a started one whose registry is empty and whose registry
+            // error was reworded — answered all 22 with something this counted
+            // as a successful dispatch. Both suites stayed green under exactly
+            // that mutation. The second string is now its own tally.
+            if (errOf(answer).find("agent is not started") != std::string::npos) ++notStarted;
             if (errOf(answer).find("no skill named") == std::string::npos) ++dispatched;
             if (!selfAnswering(name) && !okOf(answer) && !errOf(answer).empty()) {
                 ++refusedCleanly;
@@ -618,7 +654,9 @@ int main()
         }
         if (!wrong.empty()) std::printf("       not JSON: %s\n", wrong.c_str());
         check(wrong.empty(), "invoking every one of them yields a JSON answer, not an exception");
-        check(dispatched == static_cast<int>(kBuiltinCount),
+        check(notStarted == 0,
+              "the module answered as a running agent, not 'agent is not started'");
+        check(dispatched == static_cast<int>(kBuiltinCount) && kBuiltinCount > 0,
               "each dispatches to a skill rather than answering 'no skill named'");
         check(refusedCleanly == static_cast<int>(kBuiltinCount) - 2,
               "and each unwired one refuses, naming what it is missing");

@@ -185,11 +185,22 @@ int main()
               "a body that is not JSON-RPC is an error too");
 
         FakeSequencer refused;
-        refused.body = R"({"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"no"}})";
+        // The message the sequencer sends has to be a string that could not have
+        // come from anywhere else. It was `"no"` — two characters that occur in
+        // `not`, `nothing`, `node` and in this module's own `no sequencer to
+        // query` — so `errOf(r3).find("no")` was satisfied by every refusal the
+        // module can emit. Replacing the line in program_skills.cpp that appends
+        // the sequencer's message with a canned sentence of the module's own
+        // left this assertion printing `ok` and the whole suite green.
+        refused.body =
+            R"({"jsonrpc":"2.0","id":1,"error":{"code":-32601,)"
+            R"("message":"zq-sequencer-said-this-and-nothing-else-did"}})";
         ProgramQuerySkill q3(refused.port());
         const auto r3 = q3.invoke(R"({"program_id":"p1","method":"getBlock","params":[1]})");
         check(!okOf(r3), "an RPC error is surfaced as an error");
-        check(errOf(r3).find("no") != std::string::npos, "carrying the sequencer's own message");
+        check(errOf(r3).find("zq-sequencer-said-this-and-nothing-else-did")
+                  != std::string::npos,
+              "carrying the sequencer's own message");
     }
     {
         FakeSequencer seq;

@@ -282,7 +282,15 @@ rule "6. every settlement, decoded out of the chain's own copy of it"
 # settlement-facts.py checks that before it decodes anything, so what follows is
 # this settlement or it is an error — never a plausible wrong number.
 [ -s "$SETTLEMENTS" ] || bad "no settlement manifest at $SETTLEMENTS"
+# SEEN is rows this loop entered; COUNT is rows that passed EVERY check in it.
+# They were one variable, incremented on entry, and the summary line below — the
+# one CI parses and compares against the manifest's row count — called it "each
+# one decoded from the chain's own copy". It was not: a row whose settlement the
+# chain would not return still incremented it and then `continue`d, so a run
+# against an unreachable chain printed "OK 6 settlement(s), each one decoded"
+# having decoded none. Demonstrated by pointing SEQUENCER_URL at a dead port.
 COUNT=0
+SEEN=0
 LEDGER_ACCOUNT="${PDA:-$CLIENT_POLICY}"
 PREV_BAL=; PREV_SPENT=; PREV_WINDOW=; PREV_LEDGER=; SUM=0
 WORK6="${TMPDIR:-/tmp}/lp0008-usecase-02"; mkdir -p "$WORK6"
@@ -321,7 +329,8 @@ if [ -s "$SETTLEMENTS" ]; then
     CLIENT_K=$(kv "$R" client);         SKILL_K=$(kv "$R" skill)
     REC_BEFORE=$(kv "$R" balance_before); REC_AFTER=$(kv "$R" balance_after)
     [ -n "$TX" ] || continue
-    COUNT=$((COUNT + 1))
+    SEEN=$((SEEN + 1))
+    ROW_OK=1
     echo
     echo "  task $TASK"
     echo "    $SKILL_K, $PRICE_K LEZ advertised, $CLIENT_K -> Public/$PAY_K"
@@ -369,6 +378,7 @@ if [ -s "$SETTLEMENTS" ]; then
         ok "  it moved $D_BAL: payee and ledger both advanced by the advertised price"
       else
         bad "  the chain says it moved $D_BAL and charged the ledger $D_SPENT, for an advertised price of $PRICE_K"
+        ROW_OK=0
       fi
     elif [ -n "$SPENT" ]; then
       # The first settlement of a period has nothing before it to difference
@@ -380,9 +390,11 @@ if [ -s "$SETTLEMENTS" ]; then
         ok "  it moved $SPENT: period $WIN opened at zero and its ledger reads $SPENT after this"
       else
         bad "  the ledger reads $SPENT after the first settlement of period $WIN, for an advertised price of $PRICE_K"
+        ROW_OK=0
       fi
     else
       bad "  the post-state carries no policy ledger, so the amount cannot be read out of it"
+      ROW_OK=0
     fi
 
     # The cached figures are a LOCAL RECORD — what a2a-task.sh saw with
@@ -393,7 +405,9 @@ if [ -s "$SETTLEMENTS" ]; then
       ok "  local record $REC_BEFORE -> $REC_AFTER agrees with the transaction"
     else
       bad "  local record ends on $REC_AFTER; the transaction commits to $BAL"
+      ROW_OK=0
     fi
+    [ "$ROW_OK" -eq 1 ] && COUNT=$((COUNT + 1))
 
     # The running sum restarts whenever the ledger does. A settlement made under
     # the superseded program charged a different account, and adding its price to
@@ -405,8 +419,10 @@ if [ -s "$SETTLEMENTS" ]; then
   done
 fi
 echo
-if [ "$COUNT" -ge 1 ]; then
+if [ "$COUNT" -ge 1 ] && [ "$COUNT" -eq "$SEEN" ]; then
   ok "$COUNT settlement(s), each one decoded from the chain's own copy"
+elif [ "$SEEN" -ge 1 ]; then
+  bad "$COUNT of $SEEN settlement(s) decoded — the rest failed a check above"
 else
   bad "the manifest records no settlement at all"
 fi

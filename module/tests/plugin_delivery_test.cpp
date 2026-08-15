@@ -189,7 +189,13 @@ int runProbe(const QString &path)
 
     step("3. two strings across the boundary");
     r = call(p, "meta.configure", QStringLiteral(R"({"key":"delivery","value":"maybe"})"));
-    check(!r.value("ok").toBool(),
+    // `QJsonValue::toBool()` on an ABSENT key returns false, and `call()`
+    // answers `QJsonObject{}` for a call that never arrived — so `!ok` was
+    // satisfied by a dead module and a timed-out Qt Remote Objects call alike.
+    // Its neighbour eight lines up pins the exact error for the same class of
+    // refusal; this one now does too.
+    check(r.contains(QStringLiteral("ok")) && !r.value("ok").toBool()
+              && !r.value("error").toString().isEmpty(),
           "a value the module cannot read is refused rather than guessed at: " +
               r.value("error").toString());
     r = call(p, "meta.configure", QStringLiteral(R"({"key":"delivery","value":"on"})"));
@@ -230,7 +236,9 @@ int runProbe(const QString &path)
           "the node is down again, and the wire skills refuse again");
     r = call(p, "messaging.send",
              QStringLiteral(R"({"recipient":"probe","message":"hi"})"));
-    check(!r.value("ok").toBool(), "which they do");
+    check(r.contains(QStringLiteral("ok")) && !r.value("ok").toBool()
+              && r.value("error").toString() == QLatin1String("delivery node is not started"),
+          "which they do, with the same refusal as before delivery was ever on");
 
     std::fprintf(stderr, "\n%s (%d failure(s))\n",
                  failures ? "FAILED" : "a loaded plugin obtained a working Delivery port",

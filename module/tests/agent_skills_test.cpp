@@ -243,8 +243,25 @@ static void *deepDocumentsOnASmallStack(void *)
                                  R"("history":)" + nested(600) + "}]";
         check(!store.restore(snap, err), "a snapshot nested past the limit is refused");
         check(mentions(err, "nests deeper"), "and says so");
-        check(!store.applyUpdate(R"({"taskId":"t1","status":)" + nested(600) + "}", err),
+        // Every other clause of this update has to be VALID, or the depth bound
+        // is not what refuses it. The document here was `{"taskId":..., "status":
+        // <600-deep ARRAY>}` against a store that had never seen `t1`, so it was
+        // refused by the shape rule and by the unknown-task rule long before
+        // depth was consulted — deleting the depth guard from
+        // TaskStore::applyUpdate outright left this printing `ok` and the whole
+        // suite reporting "all agent-coordination behaviours hold". The task now
+        // exists, `status` is an object as the rule requires, and the reason is
+        // pinned the way its two siblings above pin theirs.
+        TaskStore live;
+        std::string lerr;
+        check(live.restore(R"([{"id":"t1","agent":"a","skill":"s","state":"submitted"}])", lerr),
+              "a shallow snapshot loads, so the update below has a task to name");
+        const std::string deepUpdate =
+            R"({"taskId":"t1","status":{"state":"working","note":)" + nested(600) + "}}";
+        check(!live.applyUpdate(deepUpdate, err),
               "and so is a status update off the wire");
+        check(mentions(err, "nests deeper"),
+              "refused for its depth, not for naming a task nobody opened");
     }
     return nullptr;
 }
@@ -546,7 +563,16 @@ int main()
         check(!okOf(d.invoke(R"({"topic":"/t","require_signed":"yes"})")),
               "and a non-boolean require_signed is refused");
         const auto r = d.invoke(R"({"topic":"/t"})");
-        check(okOf(r) && jsonOf(r)["agents"].empty(),
+        // `jsonOf(r)` is a non-const prvalue, so `operator[]("agents")` on a
+        // MISSING key inserts a null and returns it — and `json(null).empty()`
+        // is true. A discovery that answered with no `agents` member whatever
+        // satisfied this; making DiscoverSkill omit the field left the suite at
+        // 332/332. Bound to a const json, an absent key is a failure, which is
+        // what every sibling check in this file already does.
+        const json rj = jsonOf(r);
+        check(okOf(r) && rj.contains("agents") && rj["agents"].is_array(),
+              "a topic nobody publishes on still answers with an agents list");
+        check(rj.contains("agents") && rj["agents"].empty(),
               "a topic nobody publishes on is empty, not an error");
     }
 
@@ -1153,7 +1179,13 @@ int main()
                 threw = true;
             }
             check(!threw, "and agent.task returns an error rather than throwing out of invoke()");
-            check(!okOf(r), "which is a refusal");
+            // `r` is only assigned inside the try, so a call that THREW left it
+            // "" — and `okOf("")` is false, which made a call that produced no
+            // reply at all read as "a refusal". Reinstating the historical
+            // type_error.302 defect turned the line above red and left this one
+            // green. A refusal is a document that says so.
+            check(!r.empty() && !jsonOf(r).is_null() && !okOf(r) && !errOf(r).empty(),
+                  "which is a refusal");
         }
         // The original rule is still there: a price with no payee is refused.
         json noPayee = goodCard();

@@ -409,18 +409,36 @@ int main()
               "an HTML page from a captive proxy is Malformed");
     }
     {
+        // `Unavailable` is the DEFAULT member initialiser of InferenceResult
+        // (module/src/inference.h), so asserting it alone asserts the value a
+        // result that was never touched already carries. Replacing the body of
+        // `complete()` with `return InferenceResult{};` — a backend that does
+        // nothing whatever — left both of these printing `ok` while eleven of
+        // their siblings went red. The two structurally identical blocks above
+        // pin `r.error` as well, and these two are brought up to that standard:
+        // the operator of a misconfigured deployment is entitled to be told
+        // WHICH half is missing, and that sentence is what cannot be defaulted.
+        //
         // The realistic misconfiguration: an endpoint set, no client wired.
         OpenAiCompatibleBackend api({"http://x/v1/chat/completions", "m"}, HttpTransport{});
-        check(api.complete(InferenceRequest{}).status == InferenceStatus::Unavailable,
+        const auto noTransport = api.complete(InferenceRequest{});
+        check(noTransport.status == InferenceStatus::Unavailable,
               "a missing transport is Unavailable, not a null call");
+        check(!noTransport.error.empty()
+                  && noTransport.error.find("transport") != std::string::npos,
+              "and it names the transport as the missing half, not merely the default status");
     }
     {
         HttpTransport fake{[](const std::string &, const std::string &, std::uint32_t) {
             return HttpResponse{};
         }};
         OpenAiCompatibleBackend api({"", "m"}, fake);
-        check(api.complete(InferenceRequest{}).status == InferenceStatus::Unavailable,
+        const auto noEndpoint = api.complete(InferenceRequest{});
+        check(noEndpoint.status == InferenceStatus::Unavailable,
               "an unconfigured endpoint is Unavailable");
+        check(!noEndpoint.error.empty()
+                  && noEndpoint.error.find("endpoint") != std::string::npos,
+              "and it names the endpoint as the missing half, not merely the default status");
     }
 
     std::printf("\nagent.evaluate_task, through the skill interface\n");

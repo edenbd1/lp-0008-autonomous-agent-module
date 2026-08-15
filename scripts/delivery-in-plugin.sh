@@ -192,9 +192,11 @@ rm -rf "$WORK/probe"; mkdir -p "$WORK/probe"
 filter < "$WORK/probe.log" | grep -E "^  (ok|FAIL|<-)|^[0-9]\.|failure"
 
 say "[4/4] harness 2 — the runtime out of the installed Basecamp"
+SKIPPED_CORE=0
 if [ ! -f "$APP/Contents/Frameworks/liblogos_core.dylib" ]; then
     echo "  skipped: no LogosBasecamp.app at $APP" >&2
     rc2=0
+    SKIPPED_CORE=1
 else
     rm -rf "$WORK/core" "$WORK/persist"; mkdir -p "$WORK/core" "$WORK/persist"
     ( cd "$WORK/core" && \
@@ -210,5 +212,18 @@ fi
 [ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] || {
     echo "FAILED — logs at $WORK/probe.log and $WORK/core.log" >&2; exit 1; }
 echo
-echo "A module Logos Core loaded opened its own Logos Delivery node and served"
-echo "the skills that used to refuse. Logs: $WORK"
+# The closing sentence is harness 2's claim, and harness 2 sets rc2=0 when it
+# was not run at all — so with no Basecamp installed this script printed "A
+# module Logos Core loaded opened its own Logos Delivery node" having loaded
+# nothing through Logos Core. What was not run is not described.
+if [ "$SKIPPED_CORE" = "1" ]; then
+    echo "A module QPluginLoader loaded opened its own Logos Delivery node and"
+    echo "served the skills that used to refuse."
+    echo
+    echo "HARNESS 2 DID NOT RUN: there is no LogosBasecamp.app at $APP, so nothing"
+    echo "here was loaded by the real Logos Core runtime. Install Basecamp (see"
+    echo "docs/basecamp.md) and re-run to make that claim. Logs: $WORK"
+else
+    echo "A module Logos Core loaded opened its own Logos Delivery node and served"
+    echo "the skills that used to refuse. Logs: $WORK"
+fi
