@@ -763,6 +763,9 @@ scripts/verify-deployment.sh      checks docs/DEPLOYMENT.md and artifacts/
 scripts/a2a-task.sh               §6 — two agents, one A2A task, one settlement
 scripts/exercise-nodes.sh         §7 — real Delivery and Storage nodes
 scripts/e2e-local-sequencer.sh    §10 — the lifecycle against a real sequencer
+scripts/use-cases/                the prize's illustrative use cases, one script
+                                  each, every claim fetched from the chain —
+                                  docs/use-cases.md
 artifacts/                        the manifests: agents, anchors, settlements,
                                   Agent Cards, and the deployed program binaries
 idl/                              the instruction ABI the CLI drives

@@ -190,36 +190,150 @@ else
   echo "  evidence is that the chain still holds them, which is checked now."
 fi
 
-rule "6. every settlement, against the chain"
+rule "6. every settlement, decoded out of the chain's own copy of it"
+# What this section used to do, and why it was not evidence.
+#
+# It read `balance_before` and `balance_after` out of the manifest and asserted
+# `after - before == price`, where `price` is a third column of the same file.
+# Three fields of one local file agreeing with each other is a statement about
+# the file, and it is a statement that cannot fail: a2a-task.sh writes the row
+# only when the difference already equalled the price. Meanwhile the account it
+# describes is live, and 50 LEZ has left it since — so the OK line was about to
+# start printing a confident number that the chain contradicts.
+#
+# The honest difficulty is that `getAccount` answers with CURRENT state and this
+# chain has no historical-state RPC at all: getAccountAtBlock, getBalance and
+# getTransactionReceipt are all "Method not found", and the whole surface is five
+# methods. A balance as it stood at block 8740 cannot be fetched. That is why
+# those numbers were cached, and caching them is how the strongest sentence in
+# this use case came to rest on a file. The current balance is no substitute
+# either: funds have legitimately left the payee since, so "current balance
+# equals the sum of the prices" is false for an honest reason.
+#
+# The way out is that a settlement carries the answer inside itself. A LEZ
+# transaction commits to its POST-STATE — every account it touched, with the
+# balance and the data that account holds once it has run — and `getTransaction`
+# hands those bytes over. Two of the accounts in a settlement's post-state are
+# the payee and the client's policy ledger, so the transaction states both the
+# balance the payee ended on and the running total the program itself wrote.
+#
+# The bytes are content-addressed by the very hash the manifest names: a LEZ
+# transaction hash is sha256 over the bytes with the leading kind byte dropped.
+# settlement-facts.py checks that before it decodes anything, so what follows is
+# this settlement or it is an error — never a plausible wrong number.
 [ -s "$SETTLEMENTS" ] || bad "no settlement manifest at $SETTLEMENTS"
 COUNT=0
+LEDGER_ACCOUNT="${PDA:-$CLIENT_POLICY}"
+PREV_BAL=; PREV_SPENT=; PREV_WINDOW=; PREV_LEDGER=; SUM=0
+WORK6="${TMPDIR:-/tmp}/lp0008-usecase-02"; mkdir -p "$WORK6"
 if [ -s "$SETTLEMENTS" ]; then
-  while IFS=$'\t' read -r task client server pay skill price nonce tx before after; do
-    [ "$task" = task_id ] && continue
-    [ -n "$tx" ] || continue
+  # BY HEADER NAME. This loop used to be
+  #   while IFS=$'\t' read -r task client server pay skill price nonce tx before after
+  # which is exactly the positional read note 1 of lib.sh warns about — and the
+  # file has since gained a `program` column AT POSITION 1, which would have
+  # shifted every one of those ten variables by one place while the loop carried
+  # on. It was then briefly keyed with `field`, which matches on the FIRST
+  # column: correct while that column was `task_id`, and silently wrong the
+  # moment `program` took the front. Columns are named here and nothing is keyed
+  # on which one happens to be first.
+  paste -d'\t' \
+    <(column_of "$SETTLEMENTS" task_id) \
+    <(column_of "$SETTLEMENTS" price) \
+    <(column_of "$SETTLEMENTS" settlement_tx) \
+    <(column_of "$SETTLEMENTS" server_pay_account) \
+    <(column_of "$SETTLEMENTS" client) \
+    <(column_of "$SETTLEMENTS" skill) \
+    <(column_of "$SETTLEMENTS" balance_before) \
+    <(column_of "$SETTLEMENTS" balance_after) > "$WORK6/settlements.tsv" \
+    || die "$SETTLEMENTS is missing a column this script needs"
+  while IFS=$'\t' read -r TASK PRICE_K TX PAY_K CLIENT_K SKILL_K REC_BEFORE REC_AFTER; do
+    [ -n "$TX" ] || continue
     COUNT=$((COUNT + 1))
     echo
-    echo "  task $task"
-    echo "    $skill, $price LEZ, $client -> Public/$pay"
-    echo "    $tx"
-    if tx_live "$tx"; then
-      ok "  getTransaction returns it"
+    echo "  task $TASK"
+    echo "    $SKILL_K, $PRICE_K LEZ advertised, $CLIENT_K -> Public/$PAY_K"
+    echo "    $TX"
+
+    F=$(settlement_facts "$TX" "$PAY_K" "$LEDGER_ACCOUNT")
+    if [ "$(kv "$F" found)" = "1" ]; then
+      ok "  the chain holds it, in block $(kv "$F" block)"
     else
       bad "  getTransaction returns null — an unconfirmed hash is not a payment"
+      continue
     fi
-    # An included transaction is still not a payment: an earlier version of this
-    # program produced confirmed, on-chain proofs that a policy PERMITTED 25 LEZ
-    # and moved nothing at all. The last word belongs to the balance.
-    if [ "$((after - before))" -eq "$price" ]; then
-      ok "  the recipient went $before -> $after, exactly the advertised price"
+    if [ "$(kv "$F" hash_ok)" = "1" ]; then
+      ok "  its $(kv "$F" bytes) bytes hash to exactly this settlement's hash"
     else
-      bad "  recorded $before -> $after for a price of $price"
+      bad "  the bytes the chain returned are not this transaction: $(kv "$F" error)"
+      continue
     fi
-  done < "$SETTLEMENTS"
+    if [ "$(kv "$F" recipient_found)" != "1" ]; then
+      bad "  the settlement's post-state never mentions Public/$PAY_K — it paid nobody"
+      continue
+    fi
+    BAL=$(kv "$F" recipient_balance)
+    # The ledger is FOUND in the settlement's own post-state, not named. Its
+    # address is a PDA of the program, so the migration moved it and this
+    # manifest now spans two ledgers — a caller that had to name the account
+    # would have to know which program each settlement was made under before it
+    # could read the settlement. Deltas are only taken within one ledger.
+    LEDGER=$(kv "$F" ledger_account)
+    SPENT=$(kv "$F" ledger_spent)
+    WIN=$(kv "$F" ledger_window_start)
+    echo "    the transaction commits to: payee on $BAL, ledger $LEDGER on ${SPENT:-<none>} for period ${WIN:-?}"
+
+    # THE VERDICT, and both sides of it come from transaction bytes.
+    #
+    # Two independent figures have to move by the price: the payee's balance,
+    # and the running total the policy program keeps for this agent. A
+    # settlement that was included but moved nothing — which this program has
+    # produced before, with a real proof, and which is the whole reason this
+    # section exists — advances neither.
+    if [ -n "$PREV_BAL" ] && [ -n "$SPENT" ] && [ -n "$PREV_SPENT" ] \
+       && [ "$LEDGER" = "$PREV_LEDGER" ] && [ "$WIN" = "$PREV_WINDOW" ]; then
+      D_BAL=$((BAL - PREV_BAL)); D_SPENT=$((SPENT - PREV_SPENT))
+      if [ "$D_BAL" -eq "$PRICE_K" ] && [ "$D_SPENT" -eq "$PRICE_K" ]; then
+        ok "  it moved $D_BAL: payee and ledger both advanced by the advertised price"
+      else
+        bad "  the chain says it moved $D_BAL and charged the ledger $D_SPENT, for an advertised price of $PRICE_K"
+      fi
+    elif [ -n "$SPENT" ]; then
+      # The first settlement of a period has nothing before it to difference
+      # against, and no RPC will give the state before it. What the chain does
+      # say is the total, and a period's total opens at zero — so after the
+      # first settlement of a period the total IS the amount that settlement
+      # charged. Later settlements are differenced above and do not rely on it.
+      if [ "$SPENT" -eq "$PRICE_K" ]; then
+        ok "  it moved $SPENT: period $WIN opened at zero and its ledger reads $SPENT after this"
+      else
+        bad "  the ledger reads $SPENT after the first settlement of period $WIN, for an advertised price of $PRICE_K"
+      fi
+    else
+      bad "  the post-state carries no policy ledger, so the amount cannot be read out of it"
+    fi
+
+    # The cached figures are a LOCAL RECORD — what a2a-task.sh saw with
+    # getAccount at the time — and they are no longer what any verdict rests on.
+    # They are still checked, because a recorded payment that the transaction
+    # contradicts is a manifest making a claim about the chain that is false.
+    if [ "$REC_AFTER" = "$BAL" ]; then
+      ok "  local record $REC_BEFORE -> $REC_AFTER agrees with the transaction"
+    else
+      bad "  local record ends on $REC_AFTER; the transaction commits to $BAL"
+    fi
+
+    # The running sum restarts whenever the ledger does. A settlement made under
+    # the superseded program charged a different account, and adding its price to
+    # a total that account never saw would make the live comparison below false
+    # for a reason that has nothing to do with anything moving.
+    [ "$LEDGER" = "$PREV_LEDGER" ] || SUM=0
+    PREV_BAL=$BAL; PREV_SPENT=$SPENT; PREV_WINDOW=$WIN; PREV_LEDGER=$LEDGER
+    SUM=$((SUM + PRICE_K))
+  done < "$WORK6/settlements.tsv"
 fi
 echo
 if [ "$COUNT" -ge 1 ]; then
-  ok "$COUNT settlement(s), each one live on the public testnet"
+  ok "$COUNT settlement(s), each one decoded from the chain's own copy"
 else
   bad "the manifest records no settlement at all"
 fi
@@ -228,8 +342,44 @@ if rpc getTransaction "[\"$IMPOSSIBLE\"]" | grep -q '"result":null'; then
 else
   bad "the control hash did not return null — the checks above are not meaningful"
 fi
+
+# And the live ledger, which is the one figure a settlement writes that nothing
+# else spends. The payee's balance is a wallet and moves for reasons that have
+# nothing to do with this marketplace — it has been 45, 70, 95, 45 and 95 again
+# in a day. The per-period total is written only by the policy program, only on
+# a spend, and only upward, so it can be compared against the sum of the prices
+# with getAccount, today.
+#
+# Compared against the ledger the last settlements ACTUALLY charged, read out of
+# their post-state, rather than against the client agent's own. Those are not the
+# same account and assuming they were is how this check would quietly stop
+# testing anything: settlements in this manifest were made by two different
+# agents under two different programs, which is four ledgers between them.
+if [ -n "$PREV_LEDGER" ]; then
+  LIVE_WINDOW=$(policy_record "$PREV_LEDGER" window_start) || LIVE_WINDOW=
+  LIVE_SPENT=$(policy_record "$PREV_LEDGER" spent) || LIVE_SPENT=
+  [ "$PREV_LEDGER" = "$LEDGER_ACCOUNT" ] \
+    || note "the last settlements were paid by another agent, so this is its ledger"
+  echo "  ledger $PREV_LEDGER"
+  if [ -z "$LIVE_SPENT" ]; then
+    bad "that policy ledger could not be read off the chain"
+  elif [ "$LIVE_WINDOW" != "$PREV_WINDOW" ]; then
+    note "period has rolled from $PREV_WINDOW to $LIVE_WINDOW, so the live total has"
+    note "reset and is not comparable with settlements made in the old one"
+  elif [ "$LIVE_SPENT" -eq "$SUM" ]; then
+    ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: the sum of every price charged to it"
+  else
+    bad "it reads $LIVE_SPENT for period $LIVE_WINDOW; the prices charged to it sum to $SUM"
+  fi
+fi
+
 NOW=$(balance_of "$SERVER_PAY")
-echo "  Public/$SERVER_PAY holds $NOW LEZ, by getAccount"
+echo "  Public/$SERVER_PAY holds $NOW LEZ right now, by getAccount"
+# Said plainly rather than left to look like a discrepancy: this is current
+# state, not a settlement figure. The payee is a live account that has been spent
+# from since, which is precisely why the amounts above are decoded out of the
+# settlements instead of differenced from a balance.
+note "current state, not a settlement figure — this account has been spent from since"
 # The payer's side is not readable here and saying so is part of the evidence:
 # `getAccount` reads public state only, and the client agent is shielded. What
 # constrains the debit is LEZ rule 8 — total balance is preserved across every
