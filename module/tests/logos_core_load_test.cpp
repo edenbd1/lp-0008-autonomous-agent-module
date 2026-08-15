@@ -146,7 +146,8 @@ namespace {
 /// as `plugin_load_test.cpp`, asserted here against the module the *runtime*
 /// loaded rather than the one `QPluginLoader` opened.
 const char *const kSkills[] = {
-    "messaging.send",      "messaging.join",   "messaging.create_group",
+    "messaging.send",      "messaging.receive", "messaging.join",
+    "messaging.create_group",
     "storage.upload",      "storage.download", "storage.list",
     "storage.share",       "wallet.balance",   "wallet.send",
     "wallet.history",      "program.query",    "program.call",
@@ -171,8 +172,8 @@ const char *const kUnregistered = "no skill named";
 ///
 /// It has to be counted as a failure to dispatch, and it was not. `agent is not
 /// started` does not contain @ref kUnregistered, so a module that never started
-/// answered every one of the 22 names with it and the dispatch check printed
-/// `ok invoke() dispatches to every one of the 22` — directly under
+/// answered every one of the 22 names with it and the dispatch check printed  (count-as-it-was)
+/// `ok invoke() dispatches to every one of the 22` — directly under  (count-as-it-was)
 /// `skills(): 0 entries`. A check that passes hardest when nothing is running is
 /// worse than no check: it is the exact configuration this harness exists to
 /// catch, reported as a pass. Both strings are now failures, and they are kept

@@ -278,6 +278,84 @@ for doc, promise in HASH_FREE.items():
                 % (doc, lineno, token[:12], promise))
         checked["promise"] += 1
 
+# ---------------------------------------------------------------------------
+# The skill count, which four documents and three harnesses all state
+# ---------------------------------------------------------------------------
+#
+# Adding the twenty-third built-in skill meant editing forty-six lines across
+# eleven files that carried the number twenty-two, and every one of them was
+# found by hand. A document saying 22 next to a module registering 23 is the
+# same class of drift as a package built from source nobody read: nothing fails,
+# and a reviewer counting the entries in `skills()` finds the discrepancy before
+# we do.
+#
+# So the number has one source — the registry in `installBuiltinSkills` — and
+# every count-shaped mention of it anywhere in the tree has to agree. The next
+# skill is then one edit plus whatever this reports.
+SKILL_FILES = DOCS + [
+    "docs/basecamp.md", "docs/skills.md", "docs/a2a-binding.md",
+    "module/src/agent_module_plugin.cpp", "module/src/agent_module_plugin.h",
+    "module/tests/skills_test.cpp", "module/tests/plugin_load_test.cpp",
+    "module/tests/logos_core_load_test.cpp",
+    ".github/workflows/ci.yml", "scripts/check-package-fresh.py",
+    "app/README.md",
+]
+
+# Count-shaped: a number about a quantity of skills or card entries, ON A LINE
+# THAT IS ABOUT SKILLS. Both halves are needed and the second is what keeps this
+# from becoming noise: "all 121 assertions", "429 of them" and "1 entries" are
+# all count-shaped and none of them is this count, so a checker that flagged
+# every number would be turned off within a day. Two-and-up only, because a
+# registry of one skill is not a thing this repository has ever had and `0
+# entries` / `1 entries` appear in transcripts of failures.
+COUNT_SHAPES = re.compile(
+    r"\b(\d{2,3})\s+(?:skills|built-in skills|entries|of them)\b"
+    r"|\ball\s+(\d{2,3})\b"
+    r"|\bexactly\s+(\d{2,3})\b"
+    r"|\bevery one of the\s+(\d{2,3})\b")
+
+# …and the line has to be talking about skills at all.
+ABOUT_SKILLS = re.compile(r"skill|card|registry|registered|dispatch", re.I)
+
+# One marker, for a line that is deliberately about a count that is no longer
+# true — the record of a defect, where changing the number would destroy the
+# point being made. It has to be written down on the line itself, so an
+# exemption is visible to whoever reads the sentence.
+HISTORICAL = "(count-as-it-was)"
+
+
+def registered_skill_count():
+    """How many built-ins `installBuiltinSkills` actually registers."""
+    src = open(os.path.join(ROOT, "module/src/agent_module_plugin.cpp"),
+               encoding="utf-8").read()
+    start = src.index("const std::vector<std::shared_ptr<logos::agent::ISkill>> builtins{")
+    end = src.index("};", start)
+    return src.count("std::make_shared<", start, end)
+
+
+expected_count = registered_skill_count()
+counted = 0
+for rel in sorted(set(SKILL_FILES)):
+    path = os.path.join(ROOT, rel)
+    if not os.path.isfile(path):
+        continue
+    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
+        if HISTORICAL in raw or not ABOUT_SKILLS.search(raw):
+            continue
+        for m in COUNT_SHAPES.finditer(raw):
+            value = next(g for g in m.groups() if g)
+            counted += 1
+            if int(value) != expected_count:
+                failures.append(
+                    "%s:%d  says %s where the module registers %d built-in skills "
+                    "(%s). Either the count moved and this did not, or the line is "
+                    "about a count that is no longer true and needs %s on it."
+                    % (rel, lineno, value, expected_count, m.group(0).strip(),
+                       HISTORICAL))
+
+print("checked %d skill-count mention(s) against the %d the module registers"
+      % (counted, expected_count))
+
 print("checked %d paths, %d link targets, %d line citations, %d symbol "
       "citations, %d lines of two hash-free documents, across %d documents"
       % (checked["path"], checked["link"], checked["line"], checked["symbol"],

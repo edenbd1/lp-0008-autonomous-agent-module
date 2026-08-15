@@ -100,6 +100,57 @@ std::string SendSkill::invoke(const std::string &paramsJson)
     return done(json{{"topic", topic}, {"bytes", payload.size()}});
 }
 
+std::string ReceiveSkill::parameterSchema() const
+{
+    return R"({"type":"object","required":["topic"],)"
+           R"("properties":{"topic":{"type":"string","description":"Logos content topic, passed )"
+           R"(through exactly as given"},)"
+           R"("since":{"type":"integer","minimum":0,"description":"skip this many messages )"
+           R"(already read"}}})";
+}
+
+std::string ReceiveSkill::invoke(const std::string &paramsJson)
+{
+    std::string err;
+    const json p = parse(paramsJson, err);
+    if (!err.empty()) return fail(err);
+
+    std::string topic;
+    if (!field(p, "topic", topic, err)) return fail(err);
+    // The topic is passed through exactly as given, like `agent.discover`'s:
+    // turning a name into a content topic is `ownerTopic`/`discoveryTopic`'s
+    // job, and a reader has to be able to name a topic those two do not build —
+    // `taskTopic`, for one, which is where an A2A request arrives.
+    std::uint64_t since = 0;
+    if (p.contains("since")) {
+        if (!p["since"].is_number_unsigned()) {
+            return fail("'since' must be a non-negative integer");
+        }
+        since = p["since"].get<std::uint64_t>();
+    }
+
+    if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
+    if (!port_.receive) return fail("no delivery receive path is wired");
+
+    const std::vector<std::string> all = port_.receive(topic);
+    json messages = json::array();
+    for (std::size_t i = since; i < all.size(); ++i) {
+        // The payload is bytes off a public topic and may be anything at all, so
+        // it travels as the string it is rather than being parsed here. A reader
+        // that needs JSON parses it and decides for itself what to do with a
+        // frame that is not.
+        messages.push_back(json{{"index", i}, {"message", all[i]}});
+    }
+    // `total` as well as `count`: a caller that read three of five and asks
+    // again with since=3 gets two, and a caller that wants to know whether it is
+    // behind does not have to ask twice.
+    return done(json{{"topic", topic},
+                     {"messages", messages},
+                     {"count", messages.size()},
+                     {"total", all.size()},
+                     {"next_since", all.size()}});
+}
+
 std::string JoinSkill::parameterSchema() const
 {
     return R"({"type":"object","required":["group_id"],)"

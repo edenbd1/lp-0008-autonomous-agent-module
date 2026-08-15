@@ -77,6 +77,8 @@ logos_module(
         src/agent_skills.cpp
         src/owner_channel.h
         src/owner_channel.cpp
+        src/spend_marker.h
+        src/spend_marker.cpp
         src/task_persistence.h
         src/task_persistence.cpp
 )

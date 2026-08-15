@@ -105,6 +105,7 @@ echo "[2/5] compile agent-console, linking the agent module unmodified"
     "$here/console.cpp" \
     "$repo/module/src/agent_module_plugin.cpp" \
     "$repo/module/src/delivery_runtime.cpp" \
+    "$repo/module/src/spend_marker.cpp" \
     "$repo/module/src/messaging_skills.cpp" \
     "$repo/module/src/storage_skills.cpp" \
     "$repo/module/src/inference.cpp" \
@@ -135,7 +136,12 @@ echo "  ->    agent-console --offline --skill … skills   (names only)"
 echo
 count="$("$OUT/agent-console" --offline --skill "$OUT/libnotary_digest.$SO" skills \
          | grep -o '"name"' | wc -l | tr -d ' ')"
-echo "  ok    $count skills registered (22 built in, plus each --skill library)"
+# The built-in count is derived, not typed: it is what installBuiltinSkills
+# registers, and a --skill library adds to it. A literal here went stale the
+# moment messaging.receive landed, one commit after the last time this file
+# drifted from module/CMakeLists.txt.
+builtin="$("$OUT/agent-console" --offline skills | grep -o '"name"' | wc -l | tr -d ' ')"
+echo "  ok    $count skills registered ($builtin built in, plus each --skill library)"
 
 # The reference table in docs/skills.md is a snapshot of a thing that moves, and
 # a snapshot nobody checks is how a document comes to describe a skill that was

@@ -1,5 +1,7 @@
 #include "agent_module_plugin.h"
 
+#include "spend_marker.h"
+
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -370,11 +372,26 @@ bool AgentModuleImpl::publishApprovalOverDelivery(const std::string &requestJson
         std::lock_guard<std::mutex> lock(mutex_);
         request.policyHash = policyHashHex_;
     }
-    // `markerSeed` is deliberately left empty here and the owner's reply must
-    // echo it as empty. It is the seed of the on-chain approval account and is
-    // derived by `agent-policy-core` from the four fields above; this module
-    // does not link that crate, and inventing a seed would produce an approval
-    // naming an account `spend_approved` would never look for.
+    // The seed of the on-chain approval account, derived exactly as the chain
+    // derives it — see `spend_marker.h`, which is checked against
+    // `crates/agent-policy-core` itself rather than against a table.
+    //
+    // This used to be left empty, with a comment saying the derivation lived in
+    // a crate the module does not link. That was not a limitation, it was a
+    // defect: `OwnerChannel::requestApproval` refuses a request with no marker
+    // seed before it sends anything, so the whole Delivery-backed approval path
+    // could never have produced an approval. Every piece of it was separately
+    // tested and the assembly was not — which is the fourth time in this
+    // repository that "each part works" has stood in for "the thing works".
+    //
+    // Refusing here rather than sending an empty one: an owner cannot be asked
+    // correctly about a spend whose approval account nobody can name, so this
+    // falls through to the runtime-event path, which does not need a seed.
+    request.markerSeed = logos::agent::approvalMarkerSeed(agentAccount, request.recipient, request.amount,
+                                            request.nonce);
+    if (request.markerSeed.empty()) {
+        return false;
+    }
 
     std::lock_guard<std::mutex> lock(ownerChannelMutex_);
     if (ownerWaits_.count(request.id) != 0) {
@@ -442,9 +459,9 @@ bool AgentModuleImpl::publishApprovalRequest(const std::string &requestJson)
     int attempt = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!ownerNotify_) {
-            return false;
-        }
+        // No early return on a missing notifier: the Delivery route below does
+        // not need one, and returning here is what made a configured owner
+        // channel unreachable.
         notify = ownerNotify_;
         // The request is registered on the first attempt and left registered
         // for the retries, so `approveSpend` accepts an answer to any of them —
@@ -476,6 +493,11 @@ bool AgentModuleImpl::publishApprovalRequest(const std::string &requestJson)
     // regression against the path that works today.
     if (publishApprovalOverDelivery(requestJson)) {
         return true;
+    }
+    if (!notify) {
+        // Neither route. False is the honest answer and `wallet.send` turns it
+        // into a terminal owner-unreachable outcome with nothing submitted.
+        return false;
     }
     // Outside the lock: the notifier reaches the host, and a host that called
     // back into the module from it would deadlock against a non-recursive
@@ -763,6 +785,11 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
                       "support, so no node can be started in it";
             }
             if (!err.empty()) d["error"] = err;
+            const std::string counters = node->countersJson();
+            if (!counters.empty()) {
+                auto parsed = json::parse(counters, nullptr, false);
+                if (!parsed.is_discarded()) d["frames"] = parsed;
+            }
             return dumpSafe(d);
         };
     }
@@ -786,7 +813,18 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
         std::lock_guard<std::mutex> lock(mutex_);
         hosted = static_cast<bool>(ownerNotify_);
     }
-    if (hosted) {
+    // OR, not AND: there are now two routes to an owner and either one is
+    // enough. The runtime event reaches whatever loaded this module; the owner
+    // channel on the module's own Delivery node reaches an owner's app on
+    // another machine. Gating both behind `ownerNotify_` meant a module with a
+    // node, an owner account and a working channel still answered "no owner
+    // channel to ask for approval" — measured, and it is how the first live
+    // run of this path failed.
+    //
+    // A build with no Delivery library still gates on `ownerNotify_` alone, so
+    // a unit test that constructs this class directly keeps the immediate,
+    // honest refusal rather than waiting out a timeout against nobody.
+    if (hosted || DeliveryRuntime::linkedIn()) {
         if (!ports.ownerApproval.requestApproval) {
             ports.ownerApproval.requestApproval = [this](const std::string &requestJson) {
                 return publishApprovalRequest(requestJson);
@@ -875,6 +913,7 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     const std::vector<std::shared_ptr<logos::agent::ISkill>> builtins{
         // Messaging, over Logos Delivery.
         std::make_shared<SendSkill>(ports.delivery),
+        std::make_shared<ReceiveSkill>(ports.delivery),
         std::make_shared<JoinSkill>(ports.delivery),
         std::make_shared<CreateGroupSkill>(ports.delivery),
         // Storage, over Logos Storage. `share` takes both ports so it can say

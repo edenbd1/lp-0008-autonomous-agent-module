@@ -253,7 +253,7 @@ model. A real dependency cannot be made to fail on demand; a fake can.
 | Category | Skills | Port |
 |---|---|---|
 | Storage | `storage.upload`, `storage.download`, `storage.list`, `storage.share` | `StoragePort` (+ `SharePort`) |
-| Messaging | `messaging.send`, `messaging.join`, `messaging.create_group` | `DeliveryPort` |
+| Messaging | `messaging.send`, `messaging.receive`, `messaging.join`, `messaging.create_group` | `DeliveryPort` |
 | Blockchain | `wallet.balance`, `wallet.send`, `wallet.history` | `WalletPort` (+ owner channel) |
 | Blockchain | `program.query`, `program.call`, `program.deploy` | `ProgramPort`, `SequencerPort` |
 | Agent / A2A | `agent.card`, `agent.discover`, `agent.task`, `agent.subscribe`, `agent.cancel` | `CardPort`, `DiscoveryPort`, `TaskPort` |

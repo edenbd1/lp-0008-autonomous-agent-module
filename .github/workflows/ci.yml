@@ -56,6 +56,25 @@ jobs:
       - name: Test
         run: cargo test --workspace --release --locked
 
+      # The module's copy of the approval-marker derivation, against the crate
+      # the chain runs. Not a table of expected values: the check RUNS
+      # `agent-policy-core` and compares, so a change to either side that the
+      # other does not follow goes red here rather than at an owner's approval
+      # of a payment the chain will never look for.
+      - name: The marker seed the module derives is the one the chain derives
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -Wall -Wextra \
+            module/tests/spend_marker_test.cpp module/src/spend_marker.cpp \
+            -o spend_marker_test
+          ./spend_marker_test \
+            --rust 'cargo run -q -p agent-policy-core --example spend-marker --' \
+            | tee spend_marker.out
+          # Without --rust the harness exits 1 rather than passing on the checks
+          # it can still do, so a green here is a comparison that happened.
+          grep -q "the module derives the marker the chain will look for" spend_marker.out
+          rm -f spend_marker.out
+
   binaries:
     name: The committed program matches its recorded ImageID
     runs-on: ubuntu-latest
@@ -312,6 +331,26 @@ jobs:
       # upgrade into a red build on a change that is not ours — the same failure
       # `--locked` spends effort to avoid on the Rust side. Warnings stay
       # visible in the log; the assertions are what gate the merge.
+      # examples/agent-console/run.sh is the evidence for the usability
+      # criterion -- a third party adding a skill without editing the module --
+      # and nothing built it. It drifted twice in two commits: once when
+      # delivery_runtime.cpp joined module/CMakeLists.txt and once when
+      # spend_marker.cpp did, each time failing to link on a machine that had
+      # every prerequisite the README names. The comment above its own source
+      # list claims that list is CMakeLists' list, whole. Building it here is
+      # what makes that claim checkable rather than aspirational.
+      - name: A third party adds a skill without editing the module
+        run: |
+          set -euo pipefail
+          LOGOS_CPP_SDK_ROOT="$PWD/_external/logos-cpp-sdk" \
+            ./examples/agent-console/run.sh | tee console.out
+          grep -q "a third party added a skill to this module without editing it" console.out \
+            || { echo "run.sh exited 0 without reporting the thing it exists to prove"; exit 1; }
+          if grep -q SKIPPED console.out; then
+            echo "agent-console reported SKIPPED"; exit 1
+          fi
+          rm -f console.out
+
       - name: Exercise the skills, and the module that hosts them
         run: |
           set -euo pipefail
@@ -320,6 +359,7 @@ jobs:
             module/tests/skills_test.cpp \
             module/src/agent_module_plugin.cpp \
             module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
@@ -355,6 +395,7 @@ jobs:
             module/tests/module_recovery_test.cpp \
             module/src/agent_module_plugin.cpp \
             module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \
@@ -383,6 +424,7 @@ jobs:
             module/tests/module_recovery_test.cpp \
             broken_plugin.cpp \
             module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
             module/src/messaging_skills.cpp \
             module/src/storage_skills.cpp \
             module/src/inference.cpp \

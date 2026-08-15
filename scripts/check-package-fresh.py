@@ -25,7 +25,7 @@ claimed to make:
          build of HEAD     : secp256k1-bip340 -> 1    EdDSA -> 0
 
      Note what could not have caught it. Both binaries are 3699040 bytes and
-     both load, cast, and answer `skills()` with all 22 entries. A size check, a
+     both load, cast, and answer `skills()` with all 22 entries. A size check, a  (count-as-it-was)
      load test and the whole plugin-contract harness pass on the wrong one.
 
 Every check `module/package-basecamp.sh` runs passed on both of those packages,

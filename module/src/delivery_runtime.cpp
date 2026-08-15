@@ -298,6 +298,9 @@ struct DeliveryRuntime::Impl {
     std::atomic<int> started{-1};
     std::string error;
     std::thread bringUpThread;
+    std::atomic<std::uint64_t> relaySeen{0};
+    std::atomic<std::uint64_t> channelSeen{0};
+    std::atomic<std::uint64_t> channelDecoded{0};
     std::set<std::string> subscribed;
     std::map<std::string, std::vector<std::string>> inbox;    // topic -> payloads
     std::vector<std::string> channelEvents;                    // raw, decoded later
@@ -328,6 +331,7 @@ struct DeliveryRuntime::Impl {
     {
         if (ret != RET_OK || !ev || len == 0) return;
         auto *self = static_cast<Impl *>(ud);
+        self->relaySeen.fetch_add(1);
         const std::string raw(ev, len);
         DeliveredMessage m;
         if (!parseMessageEvent(raw, m)) return;
@@ -341,6 +345,7 @@ struct DeliveryRuntime::Impl {
     {
         if (ret != RET_OK || !ev || len == 0) return;
         auto *self = static_cast<Impl *>(ud);
+        self->channelSeen.fetch_add(1);
         std::lock_guard<std::mutex> lock(self->mu);
         self->channelEvents.emplace_back(ev, len);
     }
@@ -571,9 +576,19 @@ std::vector<InboundMessage> DeliveryRuntime::drainChannel(const std::string &cha
     std::vector<InboundMessage> out;
     for (const std::string &e : raw) {
         InboundMessage m;
-        if (parseInboundEvent(e, channelId, m)) out.push_back(std::move(m));
+        if (parseInboundEvent(e, channelId, m)) {
+            impl_->channelDecoded.fetch_add(1);
+            out.push_back(std::move(m));
+        }
     }
     return out;
+}
+
+std::string DeliveryRuntime::countersJson() const
+{
+    return "{\"relay_seen\":" + std::to_string(impl_->relaySeen.load()) +
+           ",\"channel_seen\":" + std::to_string(impl_->channelSeen.load()) +
+           ",\"channel_decoded\":" + std::to_string(impl_->channelDecoded.load()) + "}";
 }
 
 std::string DeliveryRuntime::state() const
@@ -636,6 +651,7 @@ bool DeliveryRuntime::channelSend(const std::string &, const std::vector<std::ui
 std::vector<std::string> DeliveryRuntime::received(const std::string &) { return {}; }
 std::vector<InboundMessage> DeliveryRuntime::drainChannel(const std::string &) { return {}; }
 std::string DeliveryRuntime::state() const { return kStateAbsent; }
+std::string DeliveryRuntime::countersJson() const { return {}; }
 std::string DeliveryRuntime::lastError() const { return {}; }
 
 #endif // LP0008_WITH_DELIVERY
@@ -655,6 +671,7 @@ DeliveryPort DeliveryRuntime::deliveryPort()
                                    payload.size()));
     };
     port.subscribe = [this](const std::string &topic) { return subscribe(topic); };
+    port.receive = [this](const std::string &topic) { return received(topic); };
     // A "channel" in `messaging.create_group` is the reliable channel, opened on
     // the group's own content topic with this node as the sender.
     port.channelCreate = [this](const std::string &channelId) {

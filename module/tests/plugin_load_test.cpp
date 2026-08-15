@@ -80,7 +80,8 @@ bool contains(const QVariant &value, const char *needle)
 /// Every skill this module ships with, spelled out rather than counted, so a
 /// skill that stops being registered fails this harness *by name*.
 const char *const kSkills[] = {
-    "messaging.send",      "messaging.join",   "messaging.create_group",
+    "messaging.send",      "messaging.receive", "messaging.join",
+    "messaging.create_group",
     "storage.upload",      "storage.download", "storage.list",
     "storage.share",       "wallet.balance",   "wallet.send",
     "wallet.history",      "program.query",    "program.call",

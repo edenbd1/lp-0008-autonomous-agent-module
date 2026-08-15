@@ -50,7 +50,7 @@ The window's own transcript, from a run inside the app:
 <- configure accepted: the agent is bound to this owner and this policy anchor
 -> agent.start()
 <- start accepted
-<- skills(): 22 entries parsed, 22 names in 4436 bytes of reply (* = required)
+<- skills(): 23 entries parsed, 22 names in 4436 bytes of reply (* = required)
 ```
 
 and then the owner channel, which is the part the criterion is actually about:

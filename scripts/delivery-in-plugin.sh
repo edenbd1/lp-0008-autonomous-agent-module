@@ -5,6 +5,7 @@
 #
 #   ./scripts/delivery-in-plugin.sh            # both single-process harnesses
 #   ./scripts/delivery-in-plugin.sh peers      # two loaded modules, two nodes
+#   ./scripts/delivery-in-plugin.sh approval   # an owner approves, then denies
 #
 # This script owns the paths, the way scripts/exercise-nodes.sh does. Nothing
 # below is a rebuild made for the occasion: every harness runs against the
@@ -102,6 +103,56 @@ clang++ -std=c++17 -o "$WORK/bin/logos_core_delivery_test" \
     || die "logos_core_delivery_test did not compile"
 
 filter() { grep -vE "^(DBG|INF|WRN|NOT|NTC|TRC|ERR|\[) " ; }
+
+if [ "$MODE" = "approval" ]; then
+    # The composition that was wired and unwatched: a loaded module holds an
+    # above-threshold spend, publishes it over Logos Messaging to an owner on
+    # another node, and acts on the answer. Run twice — approve, then deny —
+    # because a channel that reported "approved" whatever came back would pass
+    # the first run and only the first.
+    A="${LP0008_AGENT:-5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ}"
+    O="${LP0008_OWNER:-BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu}"
+    PAYEE="${LP0008_PAYEE:-Dxh7ZLHFmhKdNVE69XWayqLrquMk9iLfFVpmiJdfpEwD}"
+    # The responder is the one thing here that links the Delivery library
+    # directly — it is the owner's app, not the module — so it needs the
+    # checkout `scripts/exercise-nodes.sh` builds.
+    D="${DELIVERY_SRC:-$ROOT/_external/logos-delivery}"
+    [ -f "$D/library/liblogosdelivery.h" ] || die \
+        "no logos-delivery checkout at $D (set DELIVERY_SRC). See scripts/exercise-nodes.sh"
+    clang++ -std=c++17 -Wall -Wextra -o "$WORK/bin/owner_responder" \
+        module/tests/owner_responder.cpp module/src/owner_channel.cpp \
+        module/src/messaging_skills.cpp module/src/spend_marker.cpp \
+        -I"$D/library" -I/opt/homebrew/include -L"$D/build" -llogosdelivery \
+        -Wl,-rpath,"$D/build" || die "the owner responder did not compile"
+
+    rc=0
+    for run in approve deny; do
+        say "[3/4] the owner will $run"
+        denyflag=""; expect=""
+        [ "$run" = "deny" ] && { denyflag="--deny"; expect="LP0008_EXPECT_DENY=1"; }
+        # Each process in a directory of its own: a Delivery node keeps its
+        # reliable-channel state in the CWD, and two nodes sharing one is an
+        # unreliable network that is not the network's fault.
+        rm -rf "$WORK/$run-owner" "$WORK/$run-agent"
+        mkdir -p "$WORK/$run-owner" "$WORK/$run-agent"
+        ( cd "$WORK/$run-owner" && "$WORK/bin/owner_responder" --owner "$O" --agent "$A" \
+            --seconds 200 $denyflag > "$WORK/$run-owner.log" 2>&1 ) &
+        sleep 2
+        ( cd "$WORK/$run-agent" && env $expect "$WORK/bin/plugin_delivery_test" \
+            "$MODDIR/agent_plugin.dylib" approval "$A" "$O" "$PAYEE" 250 \
+            > "$WORK/$run-agent.log" 2>&1; echo $? > "$WORK/$run.rc" ) &
+        wait
+        echo "  --- owner ---"; filter < "$WORK/$run-owner.log" | grep -E "^  (ok|FAIL)|failure\)"
+        echo "  --- agent ---"; filter < "$WORK/$run-agent.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
+        rc=$(( rc + $(cat "$WORK/$run.rc") ))
+    done
+    say "[4/4] result"
+    [ "$rc" -eq 0 ] || { echo "FAILED — logs in $WORK" >&2; exit 1; }
+    echo "A loaded module published an above-threshold spend to an owner on another"
+    echo "node, over the public network, and acted on the answer — approved once and"
+    echo "denied once, and nothing was submitted either time."
+    exit 0
+fi
 
 if [ "$MODE" = "peers" ]; then
     # Two agents, two accounts, two working directories. The directories are the
