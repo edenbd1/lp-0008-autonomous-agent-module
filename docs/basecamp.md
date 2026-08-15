@@ -285,9 +285,13 @@ buyer                                       seller
   ok  the discovered card advertises a price to pay: 1 LEZ
   ok  and a public account to pay it into: Public/BzYks91a…
   ok  this agent opened an A2A task addressed to the other one
+  <-  agent-spend: 1 LEZ -> Public/BzYks91a…, window 9000, policy 6FscNXjN…
+  <-  agent-spend: spel exited 0 after 767 s
+  <-  agent-spend: submitted e2c59e8a…
+  <-  agent-spend: e2c59e8a… is in block 9373
   ok  it paid the price the peer's card advertised, 1 LEZ
   ok  and settled it on chain, from inside the loaded module, with no owner in
-      the path: <64 hex>
+      the path: e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be
                                               ok  the card this agent was handed
                                                   advertises no price, so there
                                                   is nothing to pay
@@ -300,6 +304,19 @@ The seller's two lines are the control, and they are the same code path: one
 `agent.task` call, one card, and the answer differs only because the card does.
 Without them "the module reported a transaction hash" would be indistinguishable
 from "the module reports a transaction hash whenever it opens a task".
+
+**And the harness is not the last word either.** `scripts/record-settlement.py`
+decodes the payee's balance out of that transaction's own committed post-state —
+`getAccount` cannot answer it, because this chain has no historical-state RPC —
+and refuses to write anything unless it rose by exactly the price. For this run:
+`hash_ok=1`, block 9373, `recipient_balance=1` where it held 0, and the anchored
+ledger `6FscNXjN…` at `window_start=9000, spent=1`. The per-period total on chain
+moved by the price, which is the part that says the policy program ran rather
+than that a transfer happened beside it.
+
+The proof took **767 seconds**, and that number is worth having: it is why
+`TaskPort::pay` blocks, why the signer confirms inclusion itself rather than
+handing back a hash to be checked later, and why this harness is not in CI.
 
 **The refusals are a separate harness, because this one costs money.**
 `./scripts/delivery-in-plugin.sh signers` needs no second agent, no key and no

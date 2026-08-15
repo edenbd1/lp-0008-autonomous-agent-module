@@ -59,6 +59,8 @@
 #include <cstdlib>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "interface.h"
 #include "logos_provider_object.h"
@@ -269,8 +271,9 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     // Everything else in this mode is the same on both sides, because both sides
     // do both roles and one binary then proves both directions. A payment cannot
     // be: somebody sells and somebody buys, and running it symmetrically would
-    // move money twice to demonstrate it once — on a testnet where the payer
-    // holds five LEZ and the faucet is gone.
+    // move money twice to demonstrate it once — on a testnet whose faucet is
+    // gone, where the agents hold a handful of LEZ between them, and where an
+    // account at zero cannot sign at all.
     //
     // So the seller sets `LP0008_PRICE` and its published card carries a price;
     // the buyer sets `LP0008_PAY_SIGNER` and `LP0008_POLICY_SOURCE` and pays it.
