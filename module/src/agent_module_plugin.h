@@ -363,6 +363,32 @@ private:
     /// plugin boundary except these two strings. See @ref delivery_.
     void applySetting(const std::string &key, const std::string &value);
 
+    /// Run the command configured under `settingKey` with `input` on its stdin,
+    /// and return what it wrote to stdout with trailing newlines removed.
+    ///
+    /// THE ONE DELEGATION MECHANISM IN THIS MODULE, AND WHY THERE IS ONLY ONE
+    ///
+    /// A loaded plugin has no crypto library, no wallet and no HTTP client, and
+    /// it is never going to have them: it is a 4 MB Qt plugin that Basecamp
+    /// drops into a directory. What it does have is a process. `card_signer`
+    /// established the shape — a command named in `meta.configure`, the input on
+    /// stdin, one line of output, checked character by character before anything
+    /// believes it — and `agent.card` produces a real BIP-340 signature through
+    /// it from inside a loaded module. `pay_signer` and `policy_source` are the
+    /// same shape and this is the same function, rather than a second mechanism
+    /// with its own quoting and its own temp-file rules.
+    ///
+    /// Empty means the setting is unset, the command could not be run, or it
+    /// wrote nothing. Every caller treats all three the same way — as a refusal
+    /// — because from here they are indistinguishable and the safe reading of an
+    /// unanswered signer is that nothing was signed.
+    ///
+    /// @param maxBytes stop reading after this much. A signature is 86 bytes and
+    ///        a policy record is under 200; a command that streams forever must
+    ///        not be able to exhaust this process's memory through here.
+    std::string runConfiguredCommand(const char *settingKey, const std::string &input,
+                                     std::size_t maxBytes = 65536) const;
+
     /// Sign `signingInput` by running the operator's signer, or empty.
     ///
     /// The curve arithmetic is deliberately somebody else's: BIP-340 over
@@ -374,6 +400,52 @@ private:
     /// satisfies it by delegating. Empty means the key refused or none is
     /// configured, and an unsigned card is not published.
     std::string signWithConfiguredSigner(const std::string &signingInput) const;
+
+    /// Settle `amount` LEZ into `payAccount` by running the operator's
+    /// `pay_signer`, and return the settlement transaction hash — or empty.
+    ///
+    /// WHY THIS IS NOT A SECOND SPENDING PATH
+    ///
+    /// `examples/agent-console/console.cpp` leaves `WalletPort::spend` null and
+    /// argues that "a console that could sign would be a second, unaudited
+    /// spending path around the anchored policy". That argument is about a tool
+    /// an OPERATOR drives, and it is right about one: a human with a console is
+    /// not the agent acting alone, and the console's ability to spend would be
+    /// additional to the agent's rather than the same as it.
+    ///
+    /// It does not carry over to here, and the reason is checkable rather than
+    /// rhetorical. The command this runs performs the policy program's `spend`
+    /// instruction — the *autonomous* branch, the same one
+    /// `scripts/a2a-task.sh` performs — so the per-transaction and per-period
+    /// limits in the agent's anchored policy account are applied by the chain to
+    /// this payment exactly as they are to that one. There is no branch here
+    /// that reaches `authenticated_transfer` without going through the policy.
+    /// A payment this module makes is refused on chain, with an error code, the
+    /// moment it is outside the envelope its owner anchored.
+    ///
+    /// What the delegate genuinely does add is that whoever can run the
+    /// configured command can spend up to that envelope. That is already true of
+    /// `card_signer`, which is a signing oracle for the same key, and it is true
+    /// of every agent that holds its own key at all — which is the premise the
+    /// anchored policy exists to bound. See `docs/security-model.md`.
+    std::string payWithConfiguredSigner(const std::string &payAccount,
+                                        std::uint64_t amount) const;
+
+    /// One decimal field of the agent's ANCHORED envelope, read from the chain
+    /// through the operator's `policy_source`, or empty for "not known".
+    ///
+    /// `field` is `per_tx`, `per_period` or `spent`. Empty is the answer for an
+    /// unconfigured module, an unreachable sequencer and a policy account that
+    /// holds something this build cannot decode, and `agent.task` reads all
+    /// three of those as *outside the envelope* — which holds the payment for
+    /// the owner rather than making it. Unknown is never zero and never
+    /// unlimited.
+    ///
+    /// Read on every call rather than cached at `start()`: `meta.configure`
+    /// arrives after `start()`, the running total moves with every settlement,
+    /// and a limit remembered from an hour ago is a limit the owner may since
+    /// have re-anchored downwards.
+    std::string anchoredEnvelopeField(const char *field) const;
 
     /// Publish one approval request over this module's own Delivery node, and
     /// answer it from the owner's reply. Started once per correlation id.

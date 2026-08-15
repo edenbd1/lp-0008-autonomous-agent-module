@@ -6,6 +6,8 @@
 #   ./scripts/delivery-in-plugin.sh            # both single-process harnesses
 #   ./scripts/delivery-in-plugin.sh peers      # two loaded modules, two nodes
 #   ./scripts/delivery-in-plugin.sh approval   # an owner approves, then denies
+#   ./scripts/delivery-in-plugin.sh signers    # the envelope and the signer, no chain
+#   ./scripts/delivery-in-plugin.sh settle     # discover, serve and PAY, one flow
 #
 # This script owns the paths, the way scripts/exercise-nodes.sh does. Nothing
 # below is a rebuild made for the occasion: every harness runs against the
@@ -126,6 +128,25 @@ clang++ -std=c++17 -o "$WORK/bin/logos_core_delivery_test" \
 
 filter() { grep -vE "^(DBG|INF|WRN|NOT|NTC|TRC|ERR|\[) " ; }
 
+if [ "$MODE" = "signers" ]; then
+    # What the module does with what its two delegates SAY. Costs nothing, needs
+    # no second agent and no key, and it is the mode to run when either delegate
+    # changes — `settle` below moves real money on a testnet with no faucet, so
+    # it can be run once and it only proves the happy path.
+    A="${LP0008_AGENT:-5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ}"
+    rm -rf "$WORK/signers"; mkdir -p "$WORK/signers"
+    say "[3/4] the envelope and the signer, against stubs"
+    ( cd "$WORK/signers" && "$WORK/bin/plugin_delivery_test" \
+        "$MODDIR/agent_plugin.dylib" signers "$A" ) > "$WORK/signers.log" 2>&1; rc=$?
+    filter < "$WORK/signers.log" | grep -E "^  (ok|FAIL|<-)|^[0-9]\.|failure"
+    say "[4/4] result"
+    [ "$rc" -eq 0 ] || { echo "FAILED — log at $WORK/signers.log" >&2; exit 1; }
+    echo "Unknown limits are outside the envelope, a price over the anchored"
+    echo "limits never reaches the signer, and neither an empty answer nor a"
+    echo "diagnostic from the signer becomes a settlement."
+    exit 0
+fi
+
 if [ "$MODE" = "approval" ]; then
     # The composition that was wired and unwatched: a loaded module holds an
     # above-threshold spend, publishes it over Logos Messaging to an owner on
@@ -204,6 +225,108 @@ if [ "$MODE" = "peers" ]; then
     echo "Two modules loaded through QPluginLoader, each with its own Delivery"
     echo "node, published a signed Agent Card on the public network and"
     echo "discovered the other's. Neither could satisfy its own assertion."
+    exit 0
+fi
+
+if [ "$MODE" = "settle" ]; then
+    # DISCOVER, SERVE AND PAY, IN ONE FLOW.
+    #
+    # `peers` above proves the first two: two loaded modules find each other's
+    # signed cards on the public network and each reads the other's A2A request
+    # off its own task topic. `scripts/a2a-task.sh` proves the third: a real
+    # settlement on the public testnet, signed by an agent's own account with no
+    # owner key anywhere in the path. What neither proves is that they are one
+    # thing — and a criterion that reads "discover each other via Agent Cards,
+    # execute a task following the A2A lifecycle, and transfer LEZ payment
+    # autonomously" is one sentence with one subject.
+    #
+    # This mode is that sentence. The buyer is handed no price, no payee and no
+    # instruction to pay: it reads all three off the seller's card, which arrived
+    # over Waku, checks the price against the envelope its owner anchored on
+    # chain, and settles through the policy program from inside the loaded
+    # module. Both processes run the same binary and the same code path.
+    #
+    # WHAT THIS COSTS, WHICH IS WHY THE DEFAULT PRICE IS 1
+    #
+    # A settlement is real money on a testnet whose faucet is gone. The paying
+    # agent held 10 LEZ when this was written and an account at zero cannot sign
+    # at all, so the demonstration is priced at the smallest amount that is not
+    # zero, and `agent-spend.py --max-amount` refuses more than it is told even
+    # if a card asks for it.
+    #
+    # The buyer's identity is its SHIELDED account and its card is signed by the
+    # PUBLIC one it is paid into — the split `artifacts/agents.tsv` records, and
+    # the reason for it is that `spel` resolves `Private/<id>` only for accounts
+    # the signing wallet holds keys for, while a card has to be checkable by a
+    # stranger who holds nothing.
+    #
+    # WHICH TWO OF THE THREE AGENTS TRANSACT IS A FACT ABOUT WHO HOLDS LEZ.
+    #
+    # `scripts/a2a-task.sh` says the same thing and for the same reason: an
+    # envelope is a ceiling, not a balance, and a payer that cannot afford the
+    # task produces the least useful demonstration available — a policy check
+    # that passes and a transfer that fails. All three agents are deployed and
+    # anchored; the storage agent is the buyer here because it is the one with a
+    # balance, and the blockchain agent is the seller because its receiving
+    # account holds nothing, so the movement this produces is 0 -> price and
+    # cannot be confused with anything already on that account.
+    CLIENT="${LP0008_CLIENT:-9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE}"
+    CLIENT_PAY="${LP0008_CLIENT_PAY:-5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ}"
+    CLIENT_POLICY="${LP0008_CLIENT_POLICY:-6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe}"
+    CLIENT_WALLET="${LP0008_CLIENT_WALLET:-$HOME/.lp0008-agents/storage}"
+    SERVER="${LP0008_SERVER:-A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu}"
+    SERVER_PAY="${LP0008_SERVER_PAY:-BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu}"
+    SERVER_WALLET="${LP0008_SERVER_WALLET:-$HOME/.lp0008-agents/blockchain}"
+    PRICE="${LP0008_PRICE:-1}"
+    # The v0.2.2+ wallet, not whatever is first on PATH. A wallet that cannot
+    # read this wallet home cannot resync it, and `agent-spend.py` refuses to
+    # prove against a state it could not resync — which is the honest failure,
+    # but it is better to name the binary here than to discover it after a node
+    # has spent four minutes joining the network.
+    WALLET_BIN="${WALLET_BIN:-$HOME/logos/src/lez-v0.2.2/target/release/wallet}"
+    [ -x "$WALLET_BIN" ] || die "no LEZ wallet at $WALLET_BIN (set WALLET_BIN)"
+    command -v "${SPEL_BIN:-spel}" >/dev/null || die "no spel on PATH (set SPEL_BIN)"
+    [ -d "$CLIENT_WALLET" ] || die "no payer wallet home at $CLIENT_WALLET"
+
+    SPEND="python3 $ROOT/scripts/agent-spend.py --policy $CLIENT_POLICY"
+    say "[3/4] the envelope the buyer's owner anchored, read off the chain"
+    $SPEND --envelope || die "the anchored policy could not be read"
+
+    RUN="s$(date +%H%M%S)"
+    rm -rf "$WORK/c" "$WORK/s"; mkdir -p "$WORK/c" "$WORK/s"
+    say "[3/4] two loaded modules, run id $RUN, price $PRICE LEZ"
+    echo "  buyer  $CLIENT  (paid from, shielded; card signed by $CLIENT_PAY)"
+    echo "  seller $SERVER  (paid into Public/$SERVER_PAY)"
+    ( cd "$WORK/c" && \
+      LP0008_PAY_ACCOUNT="$CLIENT_PAY" \
+      LP0008_POLICY_SOURCE="$SPEND --envelope" \
+      LP0008_PAY_SIGNER="env WALLET_BIN=$WALLET_BIN $SPEND --wallet-home $CLIENT_WALLET --agent $CLIENT --max-amount $PRICE --settle" \
+      "$WORK/bin/plugin_delivery_test" "$MODDIR/agent_plugin.dylib" peer \
+        "$RUN" "$CLIENT" "python3 $ROOT/scripts/sign-agent-card.py --wallet-home $CLIENT_WALLET --account $CLIENT_PAY --sign-input" "$SERVER" \
+        > "$WORK/c.log" 2>&1; echo "$?" > "$WORK/c.rc" ) &
+    ( cd "$WORK/s" && \
+      LP0008_PAY_ACCOUNT="$SERVER_PAY" \
+      LP0008_PRICE="$PRICE" \
+      "$WORK/bin/plugin_delivery_test" "$MODDIR/agent_plugin.dylib" peer \
+        "$RUN" "$SERVER" "python3 $ROOT/scripts/sign-agent-card.py --wallet-home $SERVER_WALLET --account $SERVER_PAY --sign-input" "$CLIENT" \
+        > "$WORK/s.log" 2>&1; echo "$?" > "$WORK/s.rc" ) &
+    wait
+    say "buyer";  filter < "$WORK/c.log" | grep -E "^  (ok|FAIL|<-)|^[0-9]\.|failure"
+    say "seller"; filter < "$WORK/s.log" | grep -E "^  (ok|FAIL)|^[0-9]\.|failure"
+    rc=$(( $(cat "$WORK/c.rc") + $(cat "$WORK/s.rc") ))
+    TX=$(grep -oE 'settled it on chain.*: [0-9a-f]{64}' "$WORK/c.log" | tail -1 \
+         | grep -oE '[0-9a-f]{64}')
+    say "[4/4] result"
+    [ "$rc" -eq 0 ] || { echo "FAILED — logs at $WORK/c.log and $WORK/s.log" >&2; exit 1; }
+    echo "Two loaded modules discovered each other's signed Agent Cards on the"
+    echo "public network, ran the A2A lifecycle across their own Delivery nodes,"
+    echo "and the buyer paid the seller's advertised price on the public testnet"
+    echo "from inside the plugin, with no owner in the path."
+    echo
+    echo "settlement $TX"
+    echo "the claim that money moved belongs to the transaction, not to this line:"
+    echo "  python3 scripts/use-cases/settlement-facts.py --tx $TX \\"
+    echo "      --recipient $SERVER_PAY --policy $CLIENT_POLICY"
     exit 0
 fi
 

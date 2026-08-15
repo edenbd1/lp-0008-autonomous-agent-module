@@ -22,9 +22,9 @@
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "8a3a3e720669185ab9cb33db3e3d88b617d8d5cd02be2ceb230d3630224bc5d9",
-    "module/src/agent_module_plugin.h": "22ddcbab70e3e3aae5575f36acd1c9ef6ed2161a8f1fa7df6292649ddf38d895",
-    "module/src/agent_skills.cpp": "cb3f811297d410130d21b7619bc1c45c5a429fcb682beeaa334139d2e60fbcd9",
+    "module/src/agent_module_plugin.cpp": "ea3c26dbbf1b0d99c7a9991257ac0c4e2d67fc56798162339eb2f0a578d2a758",
+    "module/src/agent_module_plugin.h": "9d3816d8e3d8b9f07d218612f874ed2853a16a39f1f33217bf7d944a9b61203c",
+    "module/src/agent_skills.cpp": "4b5fcadd8b7f27c2874760aa44e2ba174319e4d09c63f8acb512967cd2fb4e70",
     "module/src/agent_skills.h": "06cf76ee24578aa3068494f70611987b772b02285f39a72be566d5aac004a665",
     "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",
     "module/src/delivery_runtime.h": "5cd0c108bdf342f2a260cd6043b22dc1f5ae3d9bc981537878aa7e5a53227892",
@@ -46,7 +46,7 @@
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
   "package": "module/agent.lgx",
-  "package_root_hash": "4393ad024b9fa63d21efcea2601d46c6f96cf91ab1a887316e84df539afd81a4",
+  "package_root_hash": "d7fb4646e7de719cc27b2b4afce66e6a45fd35a00e2ebbbd4e3c23f6b99cbfd8",
   "toolchain": {
     "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
     "host": "darwin-arm64",
@@ -55,9 +55,9 @@
   },
   "variants": {
     "darwin-arm64": {
-      "bytes": 4136352,
+      "bytes": 4177136,
       "main": "agent_plugin.dylib",
-      "sha256": "68d219743f5e57cf602526eda445d36e03d1195bf192cf4225c08b528c9a5f75"
+      "sha256": "649d4b78832eeb6810123c701cab45274dfa89b70f40b19e37b610590628a754"
     }
   }
 }

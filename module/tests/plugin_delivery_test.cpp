@@ -50,6 +50,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QPluginLoader>
+#include <QRegularExpression>
 #include <QString>
 #include <QVariant>
 
@@ -263,13 +264,36 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     const QString board = QStringLiteral("lp0008cards") + runId;
     const QString topic = QStringLiteral("/lp-0008/1/owner-") + board + "/json";
 
+    // THE PAYMENT HALF, WHICH IS DELIBERATELY ASYMMETRIC.
+    //
+    // Everything else in this mode is the same on both sides, because both sides
+    // do both roles and one binary then proves both directions. A payment cannot
+    // be: somebody sells and somebody buys, and running it symmetrically would
+    // move money twice to demonstrate it once — on a testnet where the payer
+    // holds five LEZ and the faucet is gone.
+    //
+    // So the seller sets `LP0008_PRICE` and its published card carries a price;
+    // the buyer sets `LP0008_PAY_SIGNER` and `LP0008_POLICY_SOURCE` and pays it.
+    // Neither knows which the other is: each reads the other's card off the
+    // public topic and acts on what it says.
+    const QString payAccount = qEnvironmentVariableIsSet("LP0008_PAY_ACCOUNT")
+                                   ? qEnvironmentVariable("LP0008_PAY_ACCOUNT")
+                                   : me;
+    const QString price = qEnvironmentVariable("LP0008_PRICE");
+    const QString paySigner = qEnvironmentVariable("LP0008_PAY_SIGNER");
+    const QString policySource = qEnvironmentVariable("LP0008_POLICY_SOURCE");
+    const bool expectPay = !paySigner.isEmpty();
+
     step("1. configure this agent's identity and start its node");
-    const std::pair<const char *, QString> settings[] = {
+    std::vector<std::pair<const char *, QString>> settings{
         {"agent_account", me},
-        {"pay_account", me},
+        {"pay_account", payAccount},
         {"card_signer", signer},
         {"agent_name", QStringLiteral("lp0008-agent-") + me.left(6)},
     };
+    if (!price.isEmpty()) settings.push_back({"price_per_task", price});
+    if (!paySigner.isEmpty()) settings.push_back({"pay_signer", paySigner});
+    if (!policySource.isEmpty()) settings.push_back({"policy_source", policySource});
     for (const auto &kv : settings) {
         const QJsonObject s = call(
             p, "meta.configure",
@@ -299,6 +323,30 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     check(card.value("url").toString().endsWith(me), "the card names this agent's account");
     check(!card.value("signatures").toArray().isEmpty(), "and carries a signature");
     note("card: " + cardText.left(200) + QStringLiteral("..."));
+
+    // THE INBOX IS OPENED BEFORE DISCOVERY, NOT AFTER IT.
+    //
+    // These four lines used to live at the top of step 4, and the assertion that
+    // the first read is empty was a race that this run lost: the two processes
+    // leave the discovery loop up to one poll apart, whichever leaves first
+    // publishes its A2A request, and the other one's "first" read then finds it
+    // already waiting. The claim was never about timing — it is that
+    // `messaging.receive` subscribes on first use and reports only what really
+    // arrived — so it is made here, where neither agent has minted a task yet
+    // and the answer is empty for a reason instead of by luck.
+    //
+    // It is also strictly safer: a Waku node buffers what its relay shard
+    // carries, and opening the inbox this early is one less way for the peer's
+    // request to be published into a topic nobody was listening on.
+    const QString myTask = QStringLiteral("t") + runId + me.left(6);
+    const QString theirTask = QStringLiteral("t") + runId + other.left(6);
+    const QString myInbox =
+        QStringLiteral("/lp-0008/1/task-") + me + "-" + theirTask + "/json";
+    QJsonObject inbox =
+        call(p, "messaging.receive", QStringLiteral(R"({"topic":"%1"})").arg(myInbox));
+    check(inbox.value("ok").toBool(), "messaging.receive answers, and subscribes on first use");
+    check(inbox.value("total").toInt() == 0,
+          "and its first answer is empty, because neither agent has opened a task yet");
 
     step("3. publish it, and watch the topic for the other agent's card");
     note("topic " + topic);
@@ -339,12 +387,25 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     check(published, "this agent published its own signed card on the topic");
     check(sawOther,
           "and discovered the OTHER agent's signed Agent Card over the public network");
-    if (sawOther) {
-        note("discovered: " +
-             QString::fromUtf8(QJsonDocument(seen).toJson(QJsonDocument::Compact)));
-        check(seen.value("signed").toBool(),
-              "which is signed - `require_signed` was on, so an unsigned card would not be in "
-              "this list at all");
+    if (!sawOther) return 1;
+    note("discovered: " +
+         QString::fromUtf8(QJsonDocument(seen).toJson(QJsonDocument::Compact)));
+    check(seen.value("signed").toBool(),
+          "which is signed - `require_signed` was on, so an unsigned card would not be in "
+          "this list at all");
+
+    // The price this agent is about to be asked for, read off the card that
+    // arrived over the network rather than out of anything either process was
+    // told. `expectPay` is the buyer; there is no configuration on this side
+    // naming the price, the payee, or that there is one.
+    const QJsonObject theirCard = seen.value("card").toObject();
+    const double advertised = seen.value("price").toDouble();
+    if (expectPay) {
+        check(advertised > 0,
+              QStringLiteral("the discovered card advertises a price to pay: %1 LEZ")
+                  .arg(advertised));
+        check(seen.value("pay_account").toString().startsWith(QLatin1String("Public/")),
+              "and a public account to pay it into: " + seen.value("pay_account").toString());
     }
 
     step("4. and then one serves the other: an A2A request, sent and READ");
@@ -352,27 +413,62 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     // `/lp-0008/1/task-<agent>-<task>/json`; until `messaging.receive` existed
     // the peer had no skill that could read that topic, so two agents could
     // find each other and neither could serve the other. Both sides do both
-    // roles here, so one binary proves both directions.
-    const QString myTask = QStringLiteral("t") + runId + me.left(6);
-    const QString theirTask = QStringLiteral("t") + runId + other.left(6);
-    const QString myInbox =
-        QStringLiteral("/lp-0008/1/task-") + me + "-" + theirTask + "/json";
-
-    // Subscribe before anyone sends: Waku relay carries no history, so a topic
-    // joined after the fact is a topic nothing will ever arrive on. The first
-    // read is what subscribes, and it is expected to be empty.
-    QJsonObject inbox =
-        call(p, "messaging.receive", QStringLiteral(R"({"topic":"%1"})").arg(myInbox));
-    check(inbox.value("ok").toBool(), "messaging.receive answers, and subscribes on first use");
-    check(inbox.value("total").toInt() == 0,
-          "and its first answer is empty, because nothing has been sent yet");
-
+    // roles here, so one binary proves both directions. The inbox was opened
+    // before discovery — see the note above step 3.
+    //
+    // WITH THE CARD, which is the whole difference between this and the version
+    // of this harness that proved discovery and payment as two separate halves.
+    // `agent.task` takes the price and the payee off the card it is handed —
+    // the peer's own signed document, discovered a moment ago on the public
+    // topic — checks that price against the envelope its owner anchored on
+    // chain, sends the A2A request, and settles. One call, one flow.
+    const QString cardArg =
+        QString::fromUtf8(QJsonDocument(theirCard).toJson(QJsonDocument::Compact));
+    note(expectPay ? "this call blocks while the settlement is proved and confirmed"
+                   : "this task is free, so nothing is settled for it");
+    const auto paidFrom = std::chrono::steady_clock::now();
     r = call(p, "agent.task",
              QStringLiteral(R"({"agent_address":"%1","skill":"storage.upload",)"
-                            R"("task_id":"%2","params":{"path":"/tmp/x"}})")
-                 .arg(other, myTask));
+                            R"("task_id":"%2","params":{"path":"/tmp/x"},"card":%3})")
+                 .arg(other, myTask, cardArg));
+    const auto paidMs = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now() - paidFrom)
+                            .count();
+    note("agent.task: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact))
+                              .left(400));
     check(r.value("ok").toBool() && r.value("state").toString() == QLatin1String("submitted"),
-          "this agent opened an A2A task addressed to the other one");
+          "this agent opened an A2A task addressed to the other one: " +
+              r.value("error").toString());
+
+    // THE SETTLEMENT, OR THE ABSENCE OF ONE, AND BOTH ARE ASSERTED.
+    //
+    // A hash is only evidence if the same code path can also produce no hash.
+    // The seller runs this identical block against a card advertising nothing,
+    // and has to come back with an empty `settlement_tx` — so "the module
+    // reports a transaction hash" is distinguished from "the module reports a
+    // transaction hash whenever it is asked to open a task".
+    const QString settlement = r.value("settlement_tx").toString();
+    const double paidPrice = r.value("price").toDouble();
+    note(QStringLiteral("price %1, settlement_tx '%2', %3 s")
+             .arg(paidPrice).arg(settlement).arg(paidMs));
+    if (expectPay) {
+        check(paidPrice == advertised,
+              QStringLiteral("it paid the price the peer's card advertised, %1 LEZ")
+                  .arg(advertised));
+        // 64 lower-case hex. The module refuses anything else out of the
+        // signer, and the signer refuses to print a hash that is not in a block,
+        // so a non-empty value here is a transaction the chain has taken.
+        static const QRegularExpression hex(QStringLiteral("\\A[0-9a-f]{64}\\z"));
+        check(hex.match(settlement).hasMatch(),
+              "and settled it on chain, from inside the loaded module, with no owner in the "
+              "path: " + settlement);
+    } else {
+        check(paidPrice == 0,
+              "the card this agent was handed advertises no price, so there is nothing to pay");
+        check(settlement.isEmpty(),
+              "and no settlement hash came back for it — the same code path, and it reports "
+              "nothing when nothing was paid");
+    }
 
     bool served = false;
     QString servedText;
@@ -401,6 +497,164 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
 
     std::fprintf(stderr, "\n%s (%d failure(s))\n",
                  failures ? "FAILED" : "two loaded modules discovered each other", failures);
+    return failures ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// signers: what the module does with what its pay_signer and policy_source say
+// ---------------------------------------------------------------------------
+//
+// The `settle` mode below costs a real settlement on a testnet with no faucet,
+// so it can be run once and it proves the happy path. THIS mode is the other
+// eleven-twelfths of the behaviour, it costs nothing, and it is the one to run
+// when either delegate changes.
+//
+// The two decisions being pinned:
+//
+//   1. WHAT COUNTS AS AN ENVELOPE. `agent.task` reads three decimal strings out
+//      of `policy_source`. Anything it cannot read is *unknown*, and unknown is
+//      OUTSIDE — which holds the payment for the owner rather than making it.
+//      A source that returns nothing, a source that returns prose, and a source
+//      that returns a limit smaller than the price all have to reach the same
+//      refusal, and none of them may reach the signer.
+//
+//   2. WHAT COUNTS AS A SETTLEMENT. `pay_signer` is a command an operator names,
+//      and `agent.task` writes what it prints into the task record as proof the
+//      task was paid for. So a signer that prints nothing, and a signer that
+//      prints a diagnostic, must both leave the task unpaid — the difference
+//      between the two is exactly the difference between a settlement and a
+//      sentence.
+//
+// The last case here hands the module 64 characters of hex that name no
+// transaction, and asserts the module reports them. That is not a claim that
+// anything settled: the module cannot check a hash against a chain it has no
+// client for, which is precisely why `scripts/agent-spend.py` confirms inclusion
+// itself and prints nothing until a block holds the transaction. It is here as
+// the positive control, because without it "the payment did not settle" is
+// equally consistent with a module that never runs its signer at all.
+
+int runSigners(const QString &path, const QString &me)
+{
+    LogosProviderObject *p = bringUpModule(path);
+    if (!p) return 1;
+
+    const auto configure = [&](const char *key, const QString &value) {
+        const QJsonObject r = call(p, "meta.configure",
+                                   QStringLiteral(R"({"key":"%1","value":%2})")
+                                       .arg(QString::fromUtf8(key),
+                                            QString::fromUtf8(QJsonDocument(
+                                                QJsonObject{{"v", value}}).toJson(
+                                                QJsonDocument::Compact))
+                                                .section(':', 1)
+                                                .chopped(1)));
+        check(r.value("ok").toBool(),
+              QStringLiteral("meta.configure %1").arg(QString::fromUtf8(key)) +
+                  (r.value("ok").toBool() ? QString() : ": " + r.value("error").toString()));
+    };
+    // A priced task addressed to a peer that does not exist. Nothing here waits
+    // on an answer: `agent.task` sends the request and settles, and it is the
+    // settling that is under test.
+    const auto task = [&](int price, int n) {
+        return call(p, "agent.task",
+                    QStringLiteral(R"({"agent_address":"%1","skill":"storage.upload",)"
+                                   R"("task_id":"signers%2","price":%3,)"
+                                   R"("pay_account":"Public/%1","params":{}})")
+                        .arg(me).arg(n).arg(price));
+    };
+
+    step("1. an envelope nobody anchored: every price is outside it");
+    configure("agent_account", me);
+    QJsonObject r = task(1, 1);
+    note("agent.task: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("outside the owner's envelope")),
+          "with no policy_source the envelope is unknown, and unknown is outside: " +
+              r.value("error").toString());
+    check(r.value("submitted").toBool() == false && r.value("reason").toString().contains(
+              QLatin1String("not known to this process")),
+          "and the reason names the envelope, not the transport: " +
+              r.value("reason").toString());
+
+    step("2. a policy_source that answers with prose is not an envelope");
+    configure("policy_source", QStringLiteral("printf 'per_tx is twenty five'"));
+    r = task(1, 2);
+    check(!r.value("ok").toBool() &&
+              r.value("reason").toString().contains(QLatin1String("not known to this process")),
+          "an unparseable answer is unknown, which is outside — it is not zero and it is not "
+          "unlimited: " + r.value("reason").toString());
+
+    step("3. a policy_source with a hole in it is not an envelope either");
+    // Two fields of three. `outsideEnvelope` refuses on the FIRST unreadable
+    // one, so a source that answers two questions and not the third must not
+    // produce a comparison against a total nobody supplied.
+    configure("policy_source",
+              QStringLiteral(R"(printf '{"per_tx":"25","per_period":"250"}')"));
+    r = task(1, 3);
+    check(!r.value("ok").toBool() &&
+              r.value("reason").toString().contains(QLatin1String("period total is unknown")),
+          "a missing running total is unknown, and assuming zero is how a period limit becomes "
+          "decorative: " + r.value("reason").toString());
+
+    step("4. a real envelope, and a price above it");
+    configure("policy_source",
+              QStringLiteral(R"(printf '{"per_tx":"25","per_period":"250","spent":"240"}')"));
+    r = task(26, 4);
+    check(!r.value("ok").toBool() &&
+              r.value("reason").toString().contains(QLatin1String("per-transaction limit of 25")),
+          "26 is over the per-transaction limit: " + r.value("reason").toString());
+    r = task(20, 5);
+    check(!r.value("ok").toBool() &&
+              r.value("reason").toString().contains(QLatin1String("per-period limit of 250")),
+          "and 20 is over what is left of the period, with 240 already spent: " +
+              r.value("reason").toString());
+
+    step("5. inside the envelope — and now the transport is what is missing");
+    configure("policy_source",
+              QStringLiteral(R"(printf '{"per_tx":"25","per_period":"250","spent":"0"}')"));
+    r = task(1, 6);
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString() == QLatin1String("delivery node is not started"),
+          "1 LEZ is inside, so the owner is not asked and the next thing to fail is the node: " +
+              r.value("error").toString());
+
+    step("6. start the node, because the signer is only reached past it");
+    check(call(p, "meta.configure", QStringLiteral(R"({"key":"delivery","value":"on"})"))
+              .value("ok").toBool(), "meta.configure('delivery','on')");
+    const bool up = waitReady(p, 240);
+    check(up, "the module's own Delivery node came up");
+    if (!up) return 1;
+
+    step("7. a signer that says nothing has not settled anything");
+    configure("pay_signer", QStringLiteral("printf ''"));
+    r = task(1, 7);
+    note("agent.task: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("did not settle")),
+          "the request went out and the payment did not: " + r.value("error").toString());
+
+    step("8. and a signer that prints a diagnostic has not settled anything either");
+    configure("pay_signer", QStringLiteral("printf 'error: this signer holds no key'"));
+    r = task(1, 8);
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("did not settle")),
+          "a sentence is not a transaction hash, and the module refuses it rather than writing "
+          "it into the task record: " + r.value("error").toString());
+
+    step("9. the positive control — the module does run its signer and does report it");
+    const QString fake =
+        QStringLiteral("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    configure("pay_signer", QStringLiteral("printf '%1'").arg(fake));
+    r = task(1, 9);
+    check(r.value("ok").toBool() && r.value("settlement_tx").toString() == fake,
+          "64 hex characters come back as the settlement hash — which is what makes steps 7 "
+          "and 8 mean 'refused' rather than 'never called'. NOTHING SETTLED HERE: this hash "
+          "names no transaction, and it is agent-spend.py, not the module, that refuses to "
+          "print one before a block holds it");
+
+    std::fprintf(stderr, "\n%s (%d failure(s))\n",
+                 failures ? "FAILED"
+                          : "the module's envelope and its signer both refuse what they should",
+                 failures);
     return failures ? 1 : 0;
 }
 
@@ -512,13 +766,21 @@ int main(int argc, char **argv)
         std::fprintf(stderr,
                      "usage: %s <plugin> probe\n"
                      "       %s <plugin> peer <run-id> <me> <signer-cmd> <other>\n"
-                     "       %s <plugin> approval <me> <owner> <recipient> <amount>\n",
-                     argv[0], argv[0], argv[0]);
+                     "       %s <plugin> approval <me> <owner> <recipient> <amount>\n"
+                     "       %s <plugin> signers <me>\n",
+                     argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     const QString path = QString::fromUtf8(argv[1]);
     const QString mode = QString::fromUtf8(argv[2]);
     if (mode == QLatin1String("probe")) return runProbe(path);
+    if (mode == QLatin1String("signers")) {
+        if (argc < 4) {
+            std::fprintf(stderr, "signers needs <me>\n");
+            return 2;
+        }
+        return runSigners(path, QString::fromUtf8(argv[3]));
+    }
     if (mode == QLatin1String("approval")) {
         if (argc < 7) {
             std::fprintf(stderr, "approval needs <me> <owner> <recipient> <amount>\n");

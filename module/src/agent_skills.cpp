@@ -1594,7 +1594,7 @@ std::string ConfigureSkill::parameterSchema() const
            R"("per_tx","per_period","period_blocks","price_per_task","discovery_topic",)"
            R"("approval_timeout_blocks","approval_timeout_ms","approval_resend_ms",)"
            R"("delivery","agent_account","agent_name","pay_account","card_signer",)"
-           R"("owner_channel_account"]},)"
+           R"("pay_signer","policy_source","owner_channel_account"]},)"
            R"("value":{"type":"string"}}})";
 }
 
@@ -1635,7 +1635,8 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
         }
     } else if (key == "owner_address" || key == "discovery_topic" ||
                key == "agent_account" || key == "agent_name" || key == "pay_account" ||
-               key == "card_signer" || key == "owner_channel_account") {
+               key == "card_signer" || key == "pay_signer" || key == "policy_source" ||
+               key == "owner_channel_account") {
         if (value.empty()) return fail("'" + key + "' cannot be empty");
     } else if (key == "policy_hash") {
         if (!isLowerHex64(value)) {
@@ -1654,7 +1655,7 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
                     "per_tx, per_period, period_blocks, price_per_task, discovery_topic, "
                     "approval_timeout_blocks, approval_timeout_ms, approval_resend_ms, "
                     "delivery, agent_account, agent_name, pay_account, card_signer, "
-                    "owner_channel_account");
+                    "pay_signer, policy_source, owner_channel_account");
     }
 
     if (!port_.set || !port_.set(key, value)) {

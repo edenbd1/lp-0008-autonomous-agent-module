@@ -282,16 +282,19 @@ void AgentModuleImpl::applySetting(const std::string &key, const std::string &va
     }
 }
 
-std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signingInput) const
+std::string AgentModuleImpl::runConfiguredCommand(const char *settingKey,
+                                                  const std::string &input,
+                                                  std::size_t maxBytes) const
 {
-    const std::string signer = setting("card_signer");
-    if (signer.empty() || signingInput.empty()) {
+    const std::string command = setting(settingKey);
+    if (command.empty()) {
         return {};
     }
     // The input goes in on stdin, never on the command line: a signing input is
     // attacker-influenced (it contains the peer-visible card, which carries
     // every registered skill's name) and a shell interpolation of it would be a
-    // command injection with the agent's key on the other end.
+    // command injection with the agent's key on the other end. The same is true
+    // of a payment instruction, whose recipient comes out of a stranger's card.
     //
     // Through a file rather than a second pipe, and `mkstemp` rather than a
     // name: `popen` is one-directional on every platform this builds for —
@@ -314,13 +317,16 @@ std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signing
         return {};
     }
     const std::string inputPath(pathBuffer.data());
-    const ssize_t written = write(fd, signingInput.data(), signingInput.size());
+    ssize_t written = 0;
+    if (!input.empty()) {
+        written = write(fd, input.data(), input.size());
+    }
     close(fd);
-    if (written < 0 || static_cast<std::size_t>(written) != signingInput.size()) {
+    if (written < 0 || static_cast<std::size_t>(written) != input.size()) {
         unlink(inputPath.c_str());
         return {};
     }
-    std::unique_ptr<FILE, int (*)(FILE *)> pipe(popen((signer + " < " + inputPath).c_str(), "r"),
+    std::unique_ptr<FILE, int (*)(FILE *)> pipe(popen((command + " < " + inputPath).c_str(), "r"),
                                                 pclose);
     if (!pipe) {
         unlink(inputPath.c_str());
@@ -328,7 +334,12 @@ std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signing
     }
     std::string out;
     char buffer[256];
-    while (std::fgets(buffer, static_cast<int>(sizeof buffer), pipe.get()) != nullptr) {
+    // Bounded. `pay_signer` is a command an operator names, and a command that
+    // never stops printing would otherwise grow this string until the module
+    // that loaded it dies — inside Basecamp, taking the host's other modules
+    // with it. Reading stops; the pipe is still closed and drained by `pclose`.
+    while (out.size() < maxBytes &&
+           std::fgets(buffer, static_cast<int>(sizeof buffer), pipe.get()) != nullptr) {
         out += buffer;
     }
     pipe.reset();
@@ -336,6 +347,15 @@ std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signing
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) {
         out.pop_back();
     }
+    return out;
+}
+
+std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signingInput) const
+{
+    if (signingInput.empty()) {
+        return {};
+    }
+    const std::string out = runConfiguredCommand("card_signer", signingInput);
     // A signer that printed a diagnostic instead of a signature would otherwise
     // become a `signatures` entry no verifier can check, and a card carrying an
     // unverifiable signature is worse than an unsigned one: it claims to have
@@ -346,6 +366,65 @@ std::string AgentModuleImpl::signWithConfiguredSigner(const std::string &signing
         if (!allowed) return {};
     }
     return out;
+}
+
+std::string AgentModuleImpl::payWithConfiguredSigner(const std::string &payAccount,
+                                                     std::uint64_t amount) const
+{
+    // Nothing to settle, and saying so is not a failure — but it must not reach
+    // the signer either. A zero-amount `spend` is a proof the agent pays for and
+    // a transaction that moves nothing.
+    if (payAccount.empty() || amount == 0) {
+        return {};
+    }
+    // JSON on stdin, built through the library rather than concatenated: the
+    // recipient is copied out of a stranger's Agent Card, and a hand-built
+    // document would let a quote in it forge the amount field beside it.
+    const std::string request = dumpSafe(json{{"recipient", payAccount},
+                                              {"amount", std::to_string(amount)}}) + "\n";
+    const std::string out = runConfiguredCommand("pay_signer", request);
+
+    // A LEZ transaction hash, and nothing else. This is the same discipline the
+    // card signer applies to a signature, and here it is the difference between
+    // a settlement and a sentence: `agent.task` writes whatever comes back into
+    // the task record as `settlement_tx` and reports the task as paid, so a
+    // signer that printed "error: insufficient balance" would otherwise leave a
+    // paid task behind a payment that never happened. 64 lower-case hex, which
+    // is what `spel` prints and what `getTransaction` accepts.
+    if (out.size() != 64) {
+        return {};
+    }
+    for (const char c : out) {
+        const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!hex) return {};
+    }
+    return out;
+}
+
+std::string AgentModuleImpl::anchoredEnvelopeField(const char *field) const
+{
+    const std::string out = runConfiguredCommand("policy_source", {});
+    if (out.empty()) {
+        return {};
+    }
+    auto parsed = json::parse(out, nullptr, false);
+    if (!parsed.is_object() || !parsed.contains(field) || !parsed[field].is_string()) {
+        return {};
+    }
+    const std::string value = parsed[field].get<std::string>();
+    // Decimal digits, and at least one. `agent.task` parses this with
+    // `decimalToU64` and treats a parse failure as *unknown*, which is outside
+    // the envelope — so a source that answered `"25 LEZ"` or `"-1"` would hold
+    // the payment for the owner rather than pass a wrong number into the
+    // comparison. Checked here as well so the refusal is the same whichever of
+    // the three fields is malformed.
+    if (value.empty() || value.size() > 20) {
+        return {};
+    }
+    for (const char c : value) {
+        if (c < '0' || c > '9') return {};
+    }
+    return value;
 }
 
 bool AgentModuleImpl::publishApprovalOverDelivery(const std::string &requestJson)
@@ -719,13 +798,56 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     if (!ports.task.subscribe) {
         ports.task.subscribe = [node](const std::string &topic) { return node->subscribe(topic); };
     }
-    // `pay` and `refund` are deliberately NOT wired here, and this is the line
-    // in this file that most needs its reason written down. A settlement needs a
-    // wallet holding a private key and a sequencer to submit to; this module has
-    // neither, and inventing a `pay` that returned a transaction hash for a
-    // transfer nothing performed is the exact failure every port in this file is
-    // shaped to avoid. Unwired, `agent.task` runs the A2A lifecycle for a free
-    // task and refuses a priced one as unpayable — which is the truth.
+    // ---- the payment half of the A2A lifecycle ----------------------------
+    //
+    // This block used to be a paragraph saying why it could not exist. It said:
+    // "a settlement needs a wallet holding a private key and a sequencer to
+    // submit to; this module has neither, and inventing a `pay` that returned a
+    // transaction hash for a transfer nothing performed is the exact failure
+    // every port in this file is shaped to avoid."
+    //
+    // The second half of that is still the rule and is enforced harder than it
+    // was — `payWithConfiguredSigner` refuses anything that is not 64 hex
+    // characters, so a `pay` that returns a hash returns something the chain can
+    // be asked about. The first half was the same mistake this file has now made
+    // three times under three names: a module that cannot be HANDED a capability
+    // is not a module that cannot HAVE one. `card_signer` already proves it —
+    // `agent.card` produces a real BIP-340 signature from inside a loaded plugin
+    // by running a command — and a settlement is the same delegation with a
+    // different command on the other end of it.
+    //
+    // Unconfigured, both of these answer exactly as the unwired ports did.
+    // `policy_source` unset means the envelope is unknown, which `agent.task`
+    // reads as *outside* it: a priced task is held for the owner and nothing is
+    // sent and nothing is paid, which is what a module with no configuration
+    // did before this block existed and is what it should keep doing.
+    if (!ports.task.pay) {
+        ports.task.pay = [this](const std::string &payAccount, std::uint64_t amount) {
+            return payWithConfiguredSigner(payAccount, amount);
+        };
+    }
+    // `refund` stays unwired, and that is not an oversight. Nothing in this
+    // module calls it: `agent.cancel` cancels a task the peer has not settled,
+    // and there is no instruction in the anchored policy program that reverses a
+    // settlement — a refund would have to be a fresh payment signed by the
+    // PAYEE, whose key this agent does not hold. Wiring it to the payer's signer
+    // would produce a "refund" that debits the party owed the money.
+    //
+    // The three envelope readings, from the agent's own anchored policy account
+    // on chain. Not from `meta.configure`: `per_tx` and `per_period` are
+    // configurable keys, `meta.configure` reports them as NOT effective, and
+    // making them effective here would turn the anchored envelope into a number
+    // an operator types — which is the thing `crates/agent-policy-core`'s header
+    // argues at length is worth nothing.
+    if (!ports.task.perTxLimit) {
+        ports.task.perTxLimit = [this] { return anchoredEnvelopeField("per_tx"); };
+    }
+    if (!ports.task.perPeriodLimit) {
+        ports.task.perPeriodLimit = [this] { return anchoredEnvelopeField("per_period"); };
+    }
+    if (!ports.task.spentThisPeriod) {
+        ports.task.spentThisPeriod = [this] { return anchoredEnvelopeField("spent"); };
+    }
     if (!ports.discovery.fetch) {
         ports.discovery.fetch = [node](const std::string &topic) { return node->received(topic); };
     }

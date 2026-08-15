@@ -642,7 +642,7 @@ $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 That prints root hash
-`4393ad024b9fa63d21efcea2601d46c6f96cf91ab1a887316e84df539afd81a4`. Rebuilding
+`d7fb4646e7de719cc27b2b4afce66e6a45fd35a00e2ebbbd4e3c23f6b99cbfd8`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
