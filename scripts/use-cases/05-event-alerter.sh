@@ -60,6 +60,12 @@ WORK="${ALERTER_WORK:-${TMPDIR:-/tmp}/lp0008-usecase-05}"
 RUN="$WORK/run.env"
 TOPIC="${ALERTER_TOPIC:-/lp0008/1/owner-alerts/proto}"
 SELF="${ALERTER_SELF_TRIGGER:-0}"
+MANIFEST="${ALERTER_MANIFEST:-artifacts/alerts.tsv}"
+# Re-check every alert this repository has ever raised, against the chain, with
+# no wallet and no messaging node. That is what CI can run: a runner has no
+# agent keys and must not be given any, and an alert nobody can re-verify a week
+# later was never evidence.
+VERIFY_ONLY="${ALERTER_VERIFY_ONLY:-0}"
 # 20 minutes at 15-second polls. Blocks are 60 seconds apart and a claim needs
 # one to be built, so a window shorter than a few blocks would report a slow
 # chain as a missing event.
@@ -222,12 +228,111 @@ claim() {
   ok "submitted — the watcher is not told this hash; it finds it in the blocks"
 }
 
+# `verify_recorded` — every alert in the manifest, re-derived and re-fetched.
+# The manifest holds identifiers only. The claim account is re-derived from the
+# agent id through the IDL, the transaction is re-fetched and its bytes re-hashed,
+# the owner is re-decoded from the account, and the recorded values are compared
+# against those — never used in place of them.
+verify_recorded() {
+  rule "recorded alerts, re-checked against the chain"
+  [ -s "$MANIFEST" ] || { bad "no alerts recorded at $MANIFEST"; return; }
+  local n=0
+  local agents; agents=$(column_of "$MANIFEST" agent)
+  local a
+  for a in $agents; do
+    [ -n "$a" ] || continue
+    local rec_claim rec_owner rec_tx rec_block
+    rec_claim=$(field "$MANIFEST" "$a" claim_account)
+    rec_owner=$(field "$MANIFEST" "$a" owner)
+    rec_tx=$(field "$MANIFEST" "$a" claim_tx)
+    rec_block=$(field "$MANIFEST" "$a" block)
+    n=$((n + 1))
+    echo
+    echo "  agent $a"
+    echo "    $rec_tx"
+    # The address, derived rather than believed.
+    local pda
+    pda=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda claim --agent "$a" 2>/dev/null \
+      | tail -n1 | tr -d '[:space:]')
+    if [ -n "$pda" ] && [ "$pda" = "$rec_claim" ]; then
+      ok "  PDA([\"agent-owner/v1\", agent]) is the recorded claim account"
+    else
+      bad "  the agent derives ${pda:-<nothing>}, the manifest records $rec_claim"
+      continue
+    fi
+    # The transaction, re-fetched and re-hashed.
+    local f blk
+    f=$(settlement_facts "$rec_tx")
+    if [ "$(kv "$f" found)" = "1" ] && [ "$(kv "$f" hash_ok)" = "1" ]; then
+      blk=$(kv "$f" block)
+      ok "  the chain holds it, in block $blk, and its bytes hash to it"
+    else
+      bad "  getTransaction returns null — this claim is not on chain"
+      continue
+    fi
+    if [ "$blk" = "$rec_block" ]; then
+      ok "  in the block the manifest records"
+    else
+      bad "  the chain says block $blk, the manifest records $rec_block"
+    fi
+    # The owner, decoded out of the account the claim wrote.
+    local owner
+    owner=$(claim_record "$rec_claim" owner) || { bad "  the claim account holds no claim record"; continue; }
+    if [ "$owner" = "$rec_owner" ]; then
+      ok "  it still names owner $owner"
+    else
+      bad "  the chain says the owner is $owner, the manifest records $rec_owner"
+    fi
+    local own_words; own_words=$(owner_of "$rec_claim")
+    if [ -n "$PID" ] && [ "$own_words" = "$PID" ]; then
+      ok "  and the account is owned by this repository's policy program"
+    else
+      bad "  the claim account is owned by $own_words, not $PID"
+    fi
+  done
+  echo
+  if [ "$n" -ge 1 ]; then
+    ok "$n alert(s), each re-verified from the chain"
+  else
+    bad "the manifest records no alert at all"
+  fi
+}
+
 case "${1:-watch}" in
   prepare) prepare; exit $FAILED ;;
   claim)   claim;   exit $FAILED ;;
   watch)   ;;
   *) die "usage: $0 [prepare|claim|watch]" ;;
 esac
+
+if [ "$VERIFY_ONLY" = "1" ]; then
+  PID=$("$SPEL" program-id "$PROGRAM" 2>/dev/null | awk -F': *' '/ProgramId \(decimal\)/ {print $2}')
+  [ -n "$PID" ] || bad "could not read the ProgramId out of $PROGRAM"
+  verify_recorded
+  rule "the controls, each shown red"
+  GHOST_AGENT=$(hex_id "$IMPOSSIBLE")
+  GHOST_PDA=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda claim --agent "$GHOST_AGENT" 2>/dev/null \
+    | tail -n1 | tr -d '[:space:]')
+  [ -n "$GHOST_PDA" ] || bad "control A: could not derive the unclaimed control account"
+  printf '  %-30s %s\n' "an agent nobody claimed" "$GHOST_PDA"
+  if [ "$(owner_of "$GHOST_PDA")" = "0,0,0,0,0,0,0,0" ]; then
+    ok "control A: it reads as the default account, so the detector does not fire"
+  else
+    bad "control A: the unclaimed control account is owned by $(owner_of "$GHOST_PDA")"
+  fi
+  if claim_record "$GHOST_PDA" owner >/dev/null 2>&1; then
+    bad "control A: an unclaimed account produced a claim record"
+  else
+    ok "control A: and it yields no claim record — 'unreadable' cannot read as 'absent'"
+  fi
+  if rpc getTransaction "[\"$IMPOSSIBLE\"]" | grep -q '"result":null'; then
+    ok "control B: a transaction hash that cannot exist returns null"
+  else
+    bad "control B: the control hash did not return null"
+  fi
+  finish "Use case 5 re-verified: every recorded alert is still on chain, at the block
+recorded, naming the owner recorded, in an account derived from the agent's own id."
+fi
 
 # ------------------------------------------------------------------ watch ----
 [ -f "$RUN" ] || prepare
@@ -422,7 +527,23 @@ else
   bad "control B: no alert was published, so the payload check proves nothing"
 fi
 
-rule "7. what this is, and what it is not"
+rule "7. recorded, so it can be re-checked without re-running"
+# Identifiers only. Everything a reader would want to believe about them is
+# re-derived or re-fetched by ALERTER_VERIFY_ONLY=1, which needs no wallet, no
+# messaging node and no second process — which is what CI runs.
+if [ "$FIRED" = "1" ] && [ -n "${EV_TX:-}" ] && [ "$FAILED" -eq 0 ]; then
+  HDR='agent\tclaim_account\towner\tclaim_tx\tblock'
+  [ -s "$MANIFEST" ] && [ "$(head -n1 "$MANIFEST")" = "$(printf "$HDR")" ] \
+    || printf "$HDR\n" > "$MANIFEST"
+  if ! grep -q "	$EV_TX	" "$MANIFEST" 2>/dev/null; then
+    printf '%s\t%s\t%s\t%s\t%s\n' "$AGENT" "$PDA" "$CLAIMED_OWNER" "$EV_TX" "$EV_BLOCK" >> "$MANIFEST"
+  fi
+  ok "appended to $MANIFEST"
+else
+  note "nothing recorded: an alert is only evidence if the run that raised it passed"
+fi
+
+rule "8. what this is, and what it is not"
 cat <<'TXT'
    What it is: an owner learning, from the chain and without being told, that an
    agent has named them. `claim_agent` is signed by the agent and needs no

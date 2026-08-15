@@ -103,25 +103,52 @@ rule "2. the card is signed by the key that owns the account it wants paying"
 # The card is the whole trust story of a marketplace: it says "send money here".
 # An unsigned card is a document anyone on the discovery topic can rewrite, so
 # the client checks it before it looks at the price.
-if python3 scripts/use-cases/verify-agent-card.py \
-     --wallet-home "$AGENT_HOMES/$SERVER_CAT" < "$CARD" | sed 's/^/  /'; then
-  ok "the signature verifies against the advertised payment account"
+#
+# Where the verifying key comes from. A LEZ account id is not its public key, so
+# a checker needs the 32 bytes from somewhere. A wallet that holds the account
+# is the operator's path. A CI runner has no agent wallet and must not be given
+# one, so the same public key is published beside the card and used instead —
+# the same comparison against the same bytes, and a wrong key fails the
+# signature, which is what checking a signature is for. If neither is available
+# this fails rather than passing quietly: no key means no verification.
+PUBKEY_FILE="$CARDS/$SERVER_CAT.pub"
+CARD_KEY_KIND=
+if [ -f "$AGENT_HOMES/$SERVER_CAT/storage.json" ]; then
+  CARD_KEY_KIND=wallet
+  note "verifying against the wallet that holds $SERVER_PAY"
+elif [ -s "$PUBKEY_FILE" ]; then
+  CARD_KEY_KIND=published
+  note "no agent wallet here, so verifying against the published key $PUBKEY_FILE"
 else
-  bad "the card does not verify — a client agent must not pay against it"
+  bad "no key to verify the card against: no wallet home, and no $PUBKEY_FILE"
 fi
-# The control. A verifier that returns true regardless would pass the check
-# above just as happily, so change one field of the card — the price, the thing
-# a thief would most want to change — and require the verification to fail.
-if python3 -c "
+verify_card() { # reads a card on stdin
+  case "$CARD_KEY_KIND" in
+    wallet)    python3 scripts/use-cases/verify-agent-card.py \
+                 --wallet-home "$AGENT_HOMES/$SERVER_CAT" "$@" ;;
+    published) python3 scripts/use-cases/verify-agent-card.py \
+                 --public-key "$(cat "$PUBKEY_FILE")" "$@" ;;
+    *)         return 1 ;;
+  esac
+}
+if [ -n "$CARD_KEY_KIND" ]; then
+  if verify_card < "$CARD" | sed 's/^/  /'; then
+    ok "the signature verifies against the advertised payment account"
+  else
+    bad "the card does not verify — a client agent must not pay against it"
+  fi
+  # The control. A verifier that returns true regardless would pass the check
+  # above just as happily, so change one field of the card — the price, the thing
+  # a thief would most want to change — and require the verification to fail.
+  if python3 -c "
 import json
 card = json.load(open('$CARD'))
 card['x-logos']['pricePerTask'] = 1
-print(json.dumps(card))" \
-   | python3 scripts/use-cases/verify-agent-card.py \
-       --wallet-home "$AGENT_HOMES/$SERVER_CAT" --quiet 2>/dev/null; then
-  bad "control: a card with the price rewritten still verified — the check above is meaningless"
-else
-  ok "control: rewriting the price breaks the signature"
+print(json.dumps(card))" | verify_card --quiet 2>/dev/null; then
+    bad "control: a card with the price rewritten still verified — the check above is meaningless"
+  else
+    ok "control: rewriting the price breaks the signature"
+  fi
 fi
 
 rule "3. discovery, and the client's own limit"
@@ -165,12 +192,21 @@ else
   bad "$PRICE is above the anchored limit of $CLIENT_PER_TX — this task needs an approval"
 fi
 
-rule "4. the A2A task lifecycle"
-# A2A's states, in the order the specification gives them. The task id is
-# random per run so a transcript cannot be confused with an earlier one.
+rule "4. the A2A task lifecycle states, printed"
+# Printed, and that word is doing work. This is a `for` loop over three strings:
+# it does NOT drive `TaskStore`, and no transition is being demonstrated here.
+# The state machine that refuses illegal transitions is covered by unit tests,
+# not by this testnet run.
+#
+# docs/a2a-binding.md §7.1 says the same thing and says it first — "this
+# document will not describe a printed line as a transition" — and this script
+# must not claim more than the document discloses. What the chain and the
+# network can actually be asked about is the card and the settlement, which is
+# what every other section here checks.
 TASK_ID=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 echo "  task $TASK_ID"
-for state in submitted working completed; do printf '  state -> %s\n' "$state"; done
+for state in submitted working completed; do printf '  state -> %s (printed, not a TaskStore transition)\n' "$state"; done
+note "see docs/a2a-binding.md 7.1: the lifecycle is unit-tested, not shown here"
 
 if [ "$SETTLE" = "1" ]; then
   rule "5. settle a fresh task, on chain"
@@ -236,17 +272,30 @@ if [ -s "$SETTLEMENTS" ]; then
   # column: correct while that column was `task_id`, and silently wrong the
   # moment `program` took the front. Columns are named here and nothing is keyed
   # on which one happens to be first.
-  paste -d'\t' \
-    <(column_of "$SETTLEMENTS" task_id) \
-    <(column_of "$SETTLEMENTS" price) \
-    <(column_of "$SETTLEMENTS" settlement_tx) \
-    <(column_of "$SETTLEMENTS" server_pay_account) \
-    <(column_of "$SETTLEMENTS" client) \
-    <(column_of "$SETTLEMENTS" skill) \
-    <(column_of "$SETTLEMENTS" balance_before) \
-    <(column_of "$SETTLEMENTS" balance_after) > "$WORK6/settlements.tsv" \
-    || die "$SETTLEMENTS is missing a column this script needs"
-  while IFS=$'\t' read -r TASK PRICE_K TX PAY_K CLIENT_K SKILL_K REC_BEFORE REC_AFTER; do
+  # Each column is named, and each ROW is read as `name=value` pairs rather than
+  # destructured into positional variables.
+  #
+  # `paste <(column_of …) … | while IFS=$'\t' read -r a b c …` looks header-keyed
+  # and is not safe: tab is an IFS *whitespace* character, so `read` collapses
+  # consecutive tabs. One empty cell anywhere in a row and every field after it
+  # shifts left, exactly as a positional read does — demonstrated with
+  #     printf 'a\t\tc\n' | { IFS=$'\t' read -r x y z; }   ->  x=a  y=c  z=
+  # An empty `settlement_tx` therefore did not skip its row; it slid the payee
+  # into the price. `row_of` cannot do that: it emits one `header=value` line per
+  # column straight from awk, so an empty cell stays an empty value under its own
+  # name.
+  for _c in task_id price settlement_tx server_pay_account client skill \
+            balance_before balance_after; do
+    column_of "$SETTLEMENTS" "$_c" >/dev/null || die "$SETTLEMENTS has no $_c column"
+  done
+  N_ROWS=$(rows_of "$SETTLEMENTS"); ROW_I=1
+  while [ "$ROW_I" -le "$N_ROWS" ]; do
+    R=$(row_of "$SETTLEMENTS" "$ROW_I") || die "could not read row $ROW_I of $SETTLEMENTS"
+    ROW_I=$((ROW_I + 1))
+    TASK=$(kv "$R" task_id);            PRICE_K=$(kv "$R" price)
+    TX=$(kv "$R" settlement_tx);        PAY_K=$(kv "$R" server_pay_account)
+    CLIENT_K=$(kv "$R" client);         SKILL_K=$(kv "$R" skill)
+    REC_BEFORE=$(kv "$R" balance_before); REC_AFTER=$(kv "$R" balance_after)
     [ -n "$TX" ] || continue
     COUNT=$((COUNT + 1))
     echo
@@ -329,7 +378,7 @@ if [ -s "$SETTLEMENTS" ]; then
     [ "$LEDGER" = "$PREV_LEDGER" ] || SUM=0
     PREV_BAL=$BAL; PREV_SPENT=$SPENT; PREV_WINDOW=$WIN; PREV_LEDGER=$LEDGER
     SUM=$((SUM + PRICE_K))
-  done < "$WORK6/settlements.tsv"
+  done
 fi
 echo
 if [ "$COUNT" -ge 1 ]; then
