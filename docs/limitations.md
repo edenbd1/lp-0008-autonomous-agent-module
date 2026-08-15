@@ -579,28 +579,171 @@ was in the middle, because there is none. And `verdict: approved` unlocks the
 the chain's answer, and the reason no owner on this testnet can give it is three
 sections above.
 
-## deploy-agents.sh is one command, plus four things it cannot do for you
+## Two commands, not one, and what each needs before it will run
 
 The prize asks that "the owner can deploy the agent and configure it with a
-single CLI command on any machine using Logos Core headless".
-`SIGNER=… ./scripts/deploy-agents.sh` is a single command and does deploy and
-anchor all three agents. Two gaps, measured rather than estimated.
+single CLI command on any machine using Logos Core headless". That sentence has
+two halves and this repository answers them with two commands, because they
+deploy to two different places:
 
-**It is one command on a prepared machine, not on any machine.** Run here with
-nothing set it says `SIGNER: set SIGNER to a funded public account id` and exits
-1; run with `SIGNER` set and no LEZ toolchain it says `FAILED to create an
-account` three times and `3 of 3 agents did not deploy`. Four things must exist
-first: a `wallet` built from LEZ at the pinned revision, `spel` from
-`vendor/spel`, a wallet home holding `SIGNER`'s key, and testnet balance for the
-three funding floors (5 + 55 + 5). The last cannot be scripted — it needs a
-faucet.
+```sh
+SIGNER=<funded public account id> ./scripts/deploy-agents.sh   # on chain
+./scripts/logos-core-headless.sh storage                       # in Logos Core
+```
 
-**Nothing in that path is Logos Core.** `grep -rn 'logos_core' scripts/` returns
-nothing. The only thing in this repository that drives Logos Core is
-`module/tests/logos_core_load_test.cpp`, which does run it headless — no GUI,
-`logos_core_init` through `logos_core_load_module`, then `configure()` and
-`start()` on the loaded module. Wrapping install-plus-that into one command is
-perhaps thirty lines; what it would not buy is "on any machine", since it needs
-an installed Basecamp for `liblogos_core`, Qt 6.9.2 and three pinned SDK
-checkouts. Written down rather than half-built: a script that still failed the
-criterion would only make the gap harder to see.
+The first creates each agent's shielded identity, funds it, opens its receiving
+account and anchors its spending envelope on LEZ. The second installs the
+packaged module into Logos Core and runs the runtime **headless** — no GUI, no
+window, no display — loading the module and calling `configure()` and `start()`
+on it across the runtime's own transport, with the owner and policy account the
+first command anchored.
+
+Neither is one command on a *bare* machine, and the rest of this section is the
+exact list of what "prepared" means. It is written out because the reviewers for
+this programme clone the repository and follow the instructions.
+
+### What used to be here, and why it was worse than a missing list
+
+Until this was fixed, `deploy-agents.sh` could not be run by anybody who was not
+the author, and no prerequisite list said so. The three `deploy_agent` lines at
+the bottom of the script each passed a **hardcoded account id** as a sixth
+argument, which made the `${6:-$SIGNER}` fallback beside them unreachable.
+Setting `SIGNER` did nothing for anchoring: the script printed `owner $SIGNER`
+as its first line and then anchored with ids only the author's wallet held.
+
+It failed in the worst possible order, which is why it is worth recording rather
+than quietly correcting. `claim_agent` is signed by the AGENT, so it lands
+whatever id is passed in `--owner-id`; `create_policy` is signed by the OWNER, so
+that is the one that fails when the key is missing. Run against a wallet that
+did not hold those three ids, the script therefore:
+
+1. created an agent and **funded it with real balance**;
+2. landed `claim_agent`, permanently naming an owner the operator cannot sign for;
+3. only then failed, on `create_policy`, with `KeyNotFoundError`.
+
+`claim_agent` is declared `#[account(init)]`. A claim cannot be rewritten. So
+every agent that got that far was finished — funded, and impossible for anyone
+to ever anchor a policy over. Reproduced against stub `wallet`/`spel` binaries
+and a stub sequencer: three claims landed, three anchors failed, three agents
+lost, and the run reported `3 of 3 agents did not deploy` as though nothing had
+happened.
+
+The fix is not "use `$SIGNER` for all three" — one signer per agent is genuinely
+required, for the reasons in the section above on `create_policy` needing a
+signer some program already owns. It is that `resolve_signer` now provisions the
+three itself, in the operator's own wallet home, and records them in a
+`signers.tsv` beside the manifest — created on first run and gitignored,
+because it names accounts only that operator's wallet holds — so a resumed run
+reuses the same three rather than
+minting new ones the landed claims would refuse (6020). And the key is checked
+**before** anything is created, funded or claimed, so the failure above is now a
+refusal that costs nothing:
+
+```
+[storage] FAILED: ~/.lez-wallet holds no key for 2dA9APZgzcoX65YhNMJmsDC2v838ufLSjPyUdMknWoZd
+        Refusing to fund an agent or land a claim naming an owner
+        this machine cannot sign for: claim_agent is #[account(init)]
+        and a claim cannot be rewritten.
+```
+
+`SIGNER` is now honestly named in what the script prints: it is the **funder**
+and the account that deploys the program, not the owner. The owner of each agent
+is printed beside that agent and written to the `owner` column of the manifest.
+
+### Prerequisites for `./scripts/deploy-agents.sh`
+
+A stranger needs all five. Nothing here is fetched automatically and the script
+names whichever is missing rather than failing somewhere inside a transaction.
+
+1. **A `wallet` binary built from LEZ at the pinned revision**, on `PATH` or at
+   `WALLET_BIN`. Pin it: a wallet home is not portable between LEZ builds, and a
+   `wallet` from another revision refuses one it did not create with
+   `missing field 'accounts'` or `missing field 'sequencer_addr'` — which reads
+   like a corrupted home and is a version mismatch. Revision in
+   [`DEPLOYMENT.md`](DEPLOYMENT.md).
+2. **A `spel` binary**, built from `vendor/spel`, on `PATH` or at `SPEL_BIN`.
+3. **A wallet home holding `SIGNER`'s key**, at `LEE_WALLET_HOME_DIR`
+   (default `~/.lez-wallet`). The three anchoring signers are created here by
+   the script; keep this directory, because those keys are what may later call
+   `update_policy` and `approve_spend`.
+4. **Testnet balance on `SIGNER`** for the three funding floors — 5 + 55 + 5 =
+   65 LEZ, plus the transfers' own cost. **This is the one that cannot be
+   scripted.** It needs a faucet, and on this testnet a request to one is the
+   only way to get it. With `SIGNER` unset the script exits 1 saying
+   `set SIGNER to a funded public account id`; with `SIGNER` set but empty, the
+   funding step times out per agent and reports `FAILED to fund the agent`.
+5. **Network reach to the sequencer** at `SEQUENCER_URL`
+   (default `https://testnet.lez.logos.co`).
+
+Measured, with the program already on chain and no LEZ toolchain installed:
+
+```
+funder  <id>   (pays the agents; deploys the program)
+homes   signer ~/.lez-wallet
+
+program  697746f5…cb5370bf  already on chain
+
+[storage] FAILED to resolve an anchoring signer in ~/.lez-wallet
+[messaging] FAILED to resolve an anchoring signer in ~/.lez-wallet
+[blockchain] FAILED to resolve an anchoring signer in ~/.lez-wallet
+
+3 of 3 agents did not deploy; artifacts/agents.tsv left unchanged
+```
+
+Exit 1, and the manifest is not written — it is built in a temporary file beside
+the real one and moved over it only once every agent has anchored, because a run
+that fails is not entitled to delete the record of the one that worked. This
+used to fail three steps later, at `FAILED to create an account`, having already
+created wallet homes; the signer is resolved first now precisely so that a
+machine which cannot anchor never gets as far as spending.
+
+If the sequencer itself is unreachable, the program-deploy step waits twelve
+minutes before giving up. That is deliberate — blocks are 60 seconds apart and a
+deploy that is merely slow must not be called dead — but it means an offline
+machine looks like a hang for the first twelve minutes rather than an error.
+
+### Prerequisites for `./scripts/logos-core-headless.sh`
+
+This is the half that is actually *Logos Core*, and it is the half that cannot
+be made to work on an arbitrary machine — not for want of scripting, but because
+`liblogos_core` ships inside the Logos app and there is no headless
+distribution of it to download. Each item below is checked before anything is
+built, and the script prints the missing ones by name with what to do:
+
+1. **Logos Basecamp installed**, for four things inside it:
+   `liblogos_core` (`LOGOS_CORE_LIB`), the `logos_host` binary that runs core
+   modules in their own process (`LOGOS_HOST_PATH`), the app's embedded modules
+   directory (`LOGOS_EMBEDDED_MODULES`), and its Qt plugins
+   (`QT_PLUGIN_PATH`). Measured against Basecamp 0.2.2 on macOS/darwin-arm64.
+2. **Qt 6.9.2** (`QT_ROOT`), including `qtremoteobjects` and a `libexec/moc`.
+   The `aqtinstall` line is in [`basecamp.md`](basecamp.md). An install with only
+   `lib` in it is the trap described there.
+3. **A `logos-cpp-sdk` checkout** (`LOGOS_CPP_SDK_ROOT`). The harness calls the
+   loaded module over the runtime's transport, and `liblogos_core`'s C API has no
+   "call a method" entry point.
+4. **`nlohmann/json`** headers (`EXTRA_INCLUDE_DIR`, default
+   `/opt/homebrew/include`).
+5. **`artifacts/agents.tsv`**, i.e. the first command has been run — it is where
+   the owner and policy account come from. Without a row for the requested
+   category the script says so and exits 1.
+
+**Linux is untested.** The paths in the script for it are the documented ones and
+nothing in this repository has ever run it against a Basecamp install on Linux.
+
+### What is still not one command
+
+Two things, stated plainly:
+
+- **The two halves are two commands.** They could be wrapped in a third, and
+  that wrapper would be honest only on a machine that has both a funded LEZ
+  wallet and an installed Basecamp. It is not written, because a command that
+  requires everything both of the above require, and then reports one exit code
+  for two unrelated failures, makes the gap harder to see rather than smaller.
+- **"On any machine" is not met, and cannot be from here.** The chain half needs
+  faucet-funded balance; the Logos Core half needs an installed Logos app. The
+  first is a testnet's policy and the second is upstream's packaging.
+
+What *is* met: on a prepared machine each half is a single command that takes no
+arguments beyond the agent's category, deploys, configures, and verifies itself
+by reading back what it wrote — the policy record byte for byte off the chain,
+and the owner and policy account out of the running module's `meta.status`.

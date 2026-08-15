@@ -42,6 +42,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 # program, and create_policy returns its signer as a post-state — a program
 # cannot hand back an account another program owns. Sharing one account makes
 # every anchor stop landing, silently, the moment the first agent is funded.
+#
+# So SIGNER is the FUNDER and the account that deploys the program. It is not
+# the account that anchors — see `resolve_signer` below, which provisions one
+# anchoring signer per agent instead of asking the operator to edit this file.
 FUNDER="${FUNDER:-$SIGNER}"
 RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
 WALLET="${WALLET_BIN:-wallet}"
@@ -68,6 +72,80 @@ LEDGER="${LEDGER:-artifacts/anchored.tsv}"
 # agent and a run can legitimately resume between them.
 anchored_tx() { # program what agent -> tx, if it was already done
   awk -F'\t' -v p="$1" -v w="$2" -v a="$3" 'NR>1 && $1==p && $2==w && $3==a {print $4; exit}' "$LEDGER"
+}
+
+# WHICH ACCOUNT ANCHORS, AND WHY IT IS NOT $SIGNER
+#
+# The three `deploy_agent` lines at the bottom of this script used to carry
+# three hardcoded account ids, passed as a sixth argument, which made the
+# `${6:-$SIGNER}` fallback beside them unreachable. Setting SIGNER did nothing
+# for anchoring: the script printed `owner $SIGNER` and then anchored — or
+# rather tried to — with an id only the author's wallet held. To use it at all
+# you had to edit this file, and no prerequisite list said so.
+#
+# It failed in the worst possible order. `claim_agent` is signed by the AGENT,
+# so it lands whatever is in `--owner-id`; `create_policy` is signed by the
+# OWNER, so it is the one that fails when the key is missing. A stranger's run
+# therefore funded an agent with real balance, landed a claim naming an owner
+# they cannot sign for, and only then failed — and `claim_agent` is
+# `#[account(init)]`, so that claim cannot be rewritten. The agent is finished:
+# no policy can ever be anchored over it, by anyone.
+#
+# One id per agent is genuinely required — the reasons are on `deploy_agent` —
+# so the fix is not "use $SIGNER for all three". It is to provision the three,
+# here, from the operator's own wallet home:
+#
+#   1. $SIGNER_<CATEGORY> from the environment, if set. Explicit control, for
+#      an operator who already has accounts they want to own these agents.
+#   2. the id already recorded for this (program, category), if there is one.
+#      A resumed run MUST reuse it: the claim on chain names that account and
+#      the program refuses any other signer (6020).
+#   3. otherwise a fresh public account, created in $SIGNER_HOME. That is
+#      exactly what the README told the reader to do by hand — `wallet account
+#      new public`, three times — and it is local and free: creating an account
+#      submits nothing. A never-used public account is also the only kind that
+#      reliably anchors, which is the whole of the constraint below.
+#
+# Recorded BEFORE the claim is signed, so that a run which dies between the two
+# steps resumes with the same owner rather than a new one the claim will refuse.
+SIGNERS="${SIGNERS:-artifacts/signers.tsv}"
+[ -f "$SIGNERS" ] || printf 'program\tcategory\tsigner\n' > "$SIGNERS"
+recorded_signer() { # program category -> signer id, if one was recorded
+  awk -F'\t' -v p="$1" -v c="$2" 'NR>1 && $1==p && $2==c {print $3; exit}' "$SIGNERS"
+}
+
+# Does the owner's wallet home actually hold this key? Asked before anything is
+# funded or claimed, because every failure that costs something is downstream of
+# this one being false.
+signer_available() { # account id
+  LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
+    "$WALLET" account list </dev/null 2>/dev/null \
+  | grep -qE "Public/$1([[:space:]]|$)"
+}
+
+signer_publics() {
+  LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
+    "$WALLET" account list </dev/null 2>/dev/null \
+  | grep -oE 'Public/[1-9A-HJ-NP-Za-km-z]{32,}' | sed 's|Public/||' | sort
+}
+
+resolve_signer() { # category -> anchoring signer id on stdout
+  local cat="$1" var id before after
+  var="SIGNER_$(printf '%s' "$cat" | tr '[:lower:]' '[:upper:]')"
+  id="${!var:-}"
+  if [ -n "$id" ]; then echo "$id"; return 0; fi
+
+  id=$(recorded_signer "$DEPLOY_TX" "$cat")
+  if [ -n "$id" ]; then echo "$id"; return 0; fi
+
+  before=$(signer_publics)
+  LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
+    "$WALLET" account new public </dev/null >/dev/null 2>&1
+  after=$(signer_publics)
+  id=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -n1)
+  [ -n "$id" ] || return 1
+  printf '%s\t%s\t%s\n' "$DEPLOY_TX" "$cat" "$id" >> "$SIGNERS"
+  echo "$id"
 }
 # Each agent is funded so it can pay for real; spend moves balance, not just proof.
 FUND_AMOUNT="${FUND_AMOUNT:-40}"
@@ -186,7 +264,12 @@ d=bytes(json.load(sys.stdin)['result']['data'])
 print(d[:73].hex() if len(d)>=73 else '')"
 }
 
-echo "owner  $SIGNER"
+# Not "owner". This account funds the agents and deploys the program; the
+# account that owns each agent is resolved per agent and printed beside it.
+# The old header here said `owner $SIGNER` and then anchored with something
+# else, which is the single most misleading line this script ever printed.
+echo "funder  $SIGNER   (pays the agents; deploys the program)"
+echo "homes   signer $SIGNER_HOME"
 echo
 
 # The program has to be on chain before anything can call it, and spel does not
@@ -322,7 +405,7 @@ pay_account() { # category -> public account id on stdout
   echo "$id"
 }
 
-deploy_agent() { # category per_tx per_period period_blocks fund [signer]
+deploy_agent() { # category per_tx per_period period_blocks fund
   local cat="$1" per_tx="$2" per_period="$3" period="$4" fund="${5:-$FUND_AMOUNT}"
   # Whether one signer can anchor all three depends on the signer, and the rule
   # is narrow. A signer that still has the DEFAULT program owner anchors exactly
@@ -331,12 +414,36 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
   # transaction with `DeclaredAccountMissingFromOutput`. A signer already owned
   # by a program — anything that has ever received a transfer — is exempt from
   # both and can anchor repeatedly (`DumJ4LCB…`, nonces 29 and 30, blocks 8050
-  # and 8051). Fresh signers are passed below because they are unambiguous;
-  # `SIGNER` may be reused if it is program-owned.
-  local signer="${6:-$SIGNER}"
+  # and 8051). One per agent is therefore the only shape that is right for both
+  # kinds of account, which is why `resolve_signer` provisions one per agent
+  # rather than reusing $SIGNER — and $SIGNER is the funder, which rules it out
+  # separately.
+  local signer; signer=$(resolve_signer "$cat")
+  if [ -z "$signer" ]; then
+    echo "[$cat] FAILED to resolve an anchoring signer in $SIGNER_HOME" >&2; return 1
+  fi
+
+  # Before anything is spent or claimed. `claim_agent` is single-use, and it is
+  # signed by the agent rather than by the owner, so an owner whose key is
+  # missing does not stop the claim — it lands, names an account nobody here can
+  # sign for, and leaves a funded agent that can never be anchored. Nothing
+  # downstream can undo that, so it is checked first and costs nothing.
+  if ! signer_available "$signer"; then
+    echo "[$cat] FAILED: $SIGNER_HOME holds no key for $signer" >&2
+    echo "        Refusing to fund an agent or land a claim naming an owner" >&2
+    echo "        this machine cannot sign for: claim_agent is #[account(init)]" >&2
+    echo "        and a claim cannot be rewritten." >&2
+    echo "        Either unset SIGNER_$(printf '%s' "$cat" | tr '[:lower:]' '[:upper:]')" >&2
+    echo "        and let this script create the account, or point" >&2
+    echo "        LEE_WALLET_HOME_DIR at the wallet home that holds that key." >&2
+    return 1
+  fi
+
   echo "  owner  $signer"
   echo "         create_policy takes no owner argument: this account signs, and"
   echo "         the program writes the signer's own id into the policy record"
+  echo "         its key is in $SIGNER_HOME — keep it, it is what may later"
+  echo "         call update_policy and approve_spend for this agent"
   echo "[$cat] new shielded account"
   local seed; seed=$(new_agent "$cat")
   if [ -z "$seed" ]; then echo "  FAILED to create an account" >&2; return 1; fi
@@ -484,9 +591,15 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
 # holding the DEFAULT program owner works exactly once, because on its second
 # program transaction its pre-state is no longer `Account::default()`, the SPEL
 # macro drops it from the output to dodge LEZ rule 7, and the state machine then
-# rejects the transaction for an account being declared and missing. Make three
-# more the same way if you are re-anchoring — the ids below are only useful to a
-# wallet that holds their keys.
+# rejects the transaction for an account being declared and missing.
+#
+# Those three accounts used to be written out here as literal ids, which is why
+# this script could not be run by anybody who was not the author. `resolve_signer`
+# creates them now, in the operator's own wallet home, and records them in
+# `artifacts/signers.tsv` so a resumed run reuses the same three. Set
+# `SIGNER_STORAGE` / `SIGNER_MESSAGING` / `SIGNER_BLOCKCHAIN` to override.
+# The ids of the anchors this repository already published are in the `owner`
+# column of `artifacts/agents.tsv`, where they are evidence rather than input.
 #
 # THE FUNDING FIGURES ARE FLOORS, NOT TRANSFERS. `fund_agent` sends nothing when
 # the agent already holds at least the amount named, and on a re-anchor it never
@@ -498,9 +611,9 @@ deploy_agent() { # category per_tx per_period period_blocks fund [signer]
 # for the demo path to work end to end: the messaging agent is the payer in
 # `scripts/a2a-task.sh` and two settlements at its 25-per-transaction ceiling
 # need 50 of them.
-deploy_agent storage     50   500  1000   5  2dA9APZgzcoX65YhNMJmsDC2v838ufLSjPyUdMknWoZd || failures=$((failures + 1))
-deploy_agent messaging   25   250  1000  55  H3VSrUkvPRqU1ruS2bpqrhETE9364hfeapXQReA9yaTZ || failures=$((failures + 1))
-deploy_agent blockchain 200  1000  1000   5  G64pMjF9MR2vZjjwCyCFsC7DvG4uUPJC7quJiih9uvCc || failures=$((failures + 1))
+deploy_agent storage     50   500  1000   5 || failures=$((failures + 1))
+deploy_agent messaging   25   250  1000  55 || failures=$((failures + 1))
+deploy_agent blockchain 200  1000  1000   5 || failures=$((failures + 1))
 
 # Nothing is written over the real manifest until every agent has anchored.
 # A partial manifest is not a smaller success, it is a file that claims three

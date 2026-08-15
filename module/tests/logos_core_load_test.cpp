@@ -303,7 +303,8 @@ int main(int argc, char **argv)
     if (argc < 6) {
         fprintf(stderr,
                 "usage: %s <liblogos_core> <embedded-modules-dir> "
-                "<user-modules-dir> <persistence-dir> <module-name>\n",
+                "<user-modules-dir> <persistence-dir> <module-name> "
+                "[owner-address] [policy-account-hex]\n",
                 argv[0]);
         return 2;
     }
@@ -313,6 +314,26 @@ int main(int argc, char **argv)
     const char *userDir = argv[3];
     const char *persistence = argv[4];
     const char *moduleName = argv[5];
+
+    // What this agent is configured to BE, optionally. Defaulted so the
+    // invocation recorded in docs/basecamp.md keeps working unchanged; supplied
+    // by `scripts/logos-core-headless.sh`, which reads the owner and the policy
+    // account out of `artifacts/agents.tsv` and so configures the loaded module
+    // with the envelope that is actually anchored on chain for that agent
+    // rather than with a placeholder. The read-back below is what makes the
+    // difference visible: `configure() was accepted` is a much weaker statement
+    // than `the running module reports this owner and this policy account`.
+    const char *owner =
+        argc > 6 ? argv[6] : "0x00000000000000000000000000000000000000a9";
+    static char defaultPolicy[65];
+    memset(defaultPolicy, 'a', 64);
+    defaultPolicy[64] = '\0';
+    const char *policyHex = argc > 7 ? argv[7] : defaultPolicy;
+    if (strlen(policyHex) != 64) {
+        fprintf(stderr, "  FAIL  policy account must be 64 hex characters, got %zu\n",
+                strlen(policyHex));
+        return 2;
+    }
 
     // Before anything else, and before logos_core_init: the runtime's module
     // transport needs an existing QCoreApplication to attach its event loop to.
@@ -389,10 +410,12 @@ int main(int argc, char **argv)
     // than a card — deliberately, so an unstarted agent is never mistaken for
     // an empty one.
     QString why;
+    note(QStringLiteral("configure(owner=%1, policy=%2)")
+             .arg(QString::fromUtf8(owner), QString::fromUtf8(policyHex)));
     const QVariant configured = client->invokeRemoteMethod(
         target, QStringLiteral("configure"),
-        QVariant(QStringLiteral("0x00000000000000000000000000000000000000a9")),
-        QVariant(QString(64, QLatin1Char('a'))));
+        QVariant(QString::fromUtf8(owner)),
+        QVariant(QString::fromUtf8(policyHex)));
     check(resultOk(configured, &why),
           QStringLiteral("configure() is accepted across the transport%1")
               .arg(why.isEmpty() ? QString() : QStringLiteral(": ") + why));
@@ -529,6 +552,24 @@ int main(int argc, char **argv)
                                                         QVariant(QStringLiteral("{}")))
                                    .toString();
     const QJsonObject status = QJsonDocument::fromJson(statusJson.toUtf8()).object();
+
+    // Read back what this agent was configured to be, from the module the
+    // runtime is running, over the runtime's own transport. `configure()`
+    // returning ok says the call was accepted; this says the binding took, and
+    // it is the difference between "Logos Core loaded a module" and "Logos Core
+    // is running THIS agent, under the policy account anchored for it on chain".
+    check(status.value(QStringLiteral("configured")).toBool(),
+          "the running module reports itself configured");
+    check(status.value(QStringLiteral("started")).toBool(),
+          "the running module reports itself started");
+    check(status.value(QStringLiteral("owner")).toString() == QString::fromUtf8(owner),
+          QStringLiteral("and bound to the owner it was configured with (%1)")
+              .arg(status.value(QStringLiteral("owner")).toString()));
+    check(status.value(QStringLiteral("policy_hash")).toString()
+              == QString::fromUtf8(policyHex),
+          QStringLiteral("and to the policy account it was configured with (%1)")
+              .arg(status.value(QStringLiteral("policy_hash")).toString()));
+
     const QJsonValue durability = status.value(QStringLiteral("durability"));
     note(QStringLiteral("meta.status durability: %1")
              .arg(durability.isObject()

@@ -218,14 +218,30 @@ envelope on chain:
 SIGNER=<a funded public account id> ./scripts/deploy-agents.sh
 ```
 
-You need `spel` and a LEZ `wallet` on `PATH` (or `SPEL_BIN` / `WALLET_BIN`
-pointing at them), a wallet home holding `SIGNER`'s key, and enough testnet
-balance to fund three agents. Versions are pinned in
-[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — and pin them, because a wallet
+**Before you run it, you need all five of these.** Nothing is fetched
+automatically, and the fourth needs a faucet:
+
+1. a LEZ `wallet` binary at the pinned revision, on `PATH` or at `WALLET_BIN`;
+2. `spel`, built from `vendor/spel`, on `PATH` or at `SPEL_BIN`;
+3. a wallet home holding `SIGNER`'s key, at `LEE_WALLET_HOME_DIR`
+   (default `~/.lez-wallet`);
+4. **testnet balance on `SIGNER`** — 65 LEZ covers the three funding floors
+   (5 + 55 + 5). This is the step that cannot be scripted;
+5. network reach to `SEQUENCER_URL`.
+
+Pin the versions ([`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)), because a wallet
 home is not portable between LEZ builds: a `wallet` from a different revision
 refuses one it did not create, with `missing field 'accounts'` or
 `missing field 'sequencer_addr'`. That reads like a corrupted home and is a
 version mismatch.
+
+You do **not** need to edit this script. It used to require that — three
+hardcoded account ids at the bottom of it made the `SIGNER` fallback beside them
+unreachable — and the failure that caused was expensive rather than merely
+annoying: it funded an agent, landed its single-use `claim_agent` naming an
+owner your wallet cannot sign for, and only then failed. That agent could never
+be anchored by anyone afterwards. The full account is in
+[`docs/limitations.md`](docs/limitations.md).
 
 For each agent the script creates a fresh **private** account in its own wallet
 home, funds it with an `auth-transfer` to its keys, finds the account that ended
@@ -238,21 +254,27 @@ the guest declares, rather than a second implementation of them — and submits
 
 | Variable | Default | What it is |
 |---|---|---|
-| `SIGNER` | *required* | funded public account id; the default owner and funder |
+| `SIGNER` | *required* | funded public account id. The **funder**, and the account that deploys the program — not the owner |
 | `FUNDER` | `$SIGNER` | account that pays the agents — see below |
+| `SIGNER_STORAGE`, `SIGNER_MESSAGING`, `SIGNER_BLOCKCHAIN` | created for you | the account that anchors each agent's policy, and owns it afterwards |
 | `AGENT_HOMES` | `~/.lp0008-agents` | where agent keys live, deliberately outside the repository |
-| `LEE_WALLET_HOME_DIR` | `~/.lez-wallet` | the signer's wallet home |
+| `LEE_WALLET_HOME_DIR` | `~/.lez-wallet` | the signer's wallet home; the anchoring signers are created here |
 | `SEQUENCER_URL` | `https://testnet.lez.logos.co` | JSON-RPC endpoint |
 | `WALLET_BIN`, `SPEL_BIN` | `wallet`, `spel` | binaries to use |
 | `FUND_AMOUNT` | `40` | per-agent funding, overridden per category in the script |
 | `MANIFEST`, `LEDGER` | `artifacts/agents.tsv`, `artifacts/anchored.tsv` | what it writes |
+| `SIGNERS` | a `signers.tsv` beside the manifest | which local account anchors which agent. Created on first run, gitignored: it names accounts only your wallet holds |
 
 ### Each policy needs its own signer, and why
 
-The three `deploy_agent` lines at the bottom of the script each pass a
-**separate public account** as the anchoring signer. That is not tidiness, and
-it is the single thing most likely to waste your afternoon if you skip it.
-Three independent constraints stack up:
+Each agent is anchored by a **separate public account**, created for you in
+`LEE_WALLET_HOME_DIR` and recorded in a `signers.tsv` beside the manifest so a
+resumed run reuses the same three. Set `SIGNER_STORAGE` / `SIGNER_MESSAGING` /
+`SIGNER_BLOCKCHAIN` if you would rather supply your own — the script checks your
+wallet home actually holds the key *before* it funds or claims anything, and
+refuses the run if not. That is not tidiness, and it is the single thing most
+likely to waste your afternoon if you skip it. Three independent constraints
+stack up:
 
 - **`spel` builds every transaction against nonce 0**, while the sequencer
   checks the nonce for exact equality. A signer's *second* program transaction
@@ -269,10 +291,13 @@ Three independent constraints stack up:
   program owns. Sharing one account makes every anchor stop landing, silently,
   the moment the first agent is funded.
 
-So: create three public accounts that have never signed anything
-(`wallet account new public`), put their ids on the `deploy_agent` lines, and
-keep `FUNDER` separate from all three. The full reasoning, with the sequencer's
-own error text, is in [`docs/limitations.md`](docs/limitations.md).
+So: three public accounts that have never signed anything, and a `FUNDER` that
+is none of them. `wallet account new public`, three times, is exactly what the
+script does for you — the accounts are local and free to create, and creating
+them submits nothing. Keep the wallet home afterwards: those three keys are what
+may later call `update_policy` and `approve_spend` for each agent. The full
+reasoning, with the sequencer's own error text, is in
+[`docs/limitations.md`](docs/limitations.md).
 
 ### Re-running it
 
@@ -350,6 +375,65 @@ configure(ownerAddress, policyHashHex)   // then start()
 A second `configure` is refused: the binding is the agent's identity, not a
 preference. `status()` reports what it is bound to and whether it is running.
 §5 is how to make both calls from a shell.
+
+### Doing it in Logos Core, headless, in one command
+
+The criterion this repository is answering names **Logos Core headless**, and
+until recently nothing in `scripts/` touched Logos Core at all —
+`grep -rn 'logos_core' scripts/` returned nothing. This is the command that
+closes it:
+
+```sh
+./scripts/logos-core-headless.sh storage       # or messaging, or blockchain
+```
+
+It installs `module/agent.lgx` into the user modules directory Logos Core reads
+(flattening the platform variant, which is what an installed module is — Basecamp
+0.2.2 has no "install from file" button), builds the headless harness if it is
+not already built, and then drives the **real `liblogos_core` shipped inside the
+Logos app** through the same C API and in the same order as the app's own
+`main.cpp`:
+
+```
+logos_core_init → logos_core_add_modules_dir (embedded, then user)
+                → set_persistence_base_path → set_access_policy
+                → logos_core_start → logos_core_load_module("agent")
+                → configure(owner, policy_account) → start()
+```
+
+No GUI, no window, no display. The owner and policy account are read out of
+`artifacts/agents.tsv` **by header name**, so what the module is configured with
+is the envelope actually anchored on chain for that agent, and the harness reads
+both back out of the running module's `meta.status` afterwards — so the run
+asserts that Logos Core is running *this* agent under *that* envelope, not
+merely that a module loaded. Recorded output:
+
+```
+agent     storage  <the storage agent's id, from the manifest>
+owner     <its owner, from the manifest>
+policy    <its policy account, from the manifest>
+...
+  ok    the runtime discovers the module in the user modules directory
+  ok    logos_core_load_module() reports success
+  ok    the module is in the runtime's loaded set
+  ok    configure() is accepted across the transport
+  ok    start() is accepted across the transport
+  ok    the loaded module lists all 22 documented skills
+  ok    the running module reports itself configured
+  ok    and bound to the owner it was configured with
+  ok    and to the policy account it was configured with
+
+all steps confirmed (0 failure(s))
+```
+
+**It needs a prepared machine, and it says which piece is missing when it is
+not.** Logos Basecamp installed (for `liblogos_core`, `logos_host`, the embedded
+modules directory and its Qt plugins), Qt 6.9.2 with `qtremoteobjects`, a
+`logos-cpp-sdk` checkout, and `nlohmann/json`. That cannot be reduced: there is
+no headless distribution of `liblogos_core` to download — it ships inside the
+app. Linux paths are in the script and are **untested**. The full list, with
+what to set and where each comes from, is in
+[`docs/limitations.md`](docs/limitations.md).
 
 `meta.configure` exists as a skill and takes `per_tx`, `per_period` and
 `period_blocks` among its keys — and it is worth being exact about what that
@@ -831,6 +915,8 @@ examples/agent-console            §5 — the module's dispatcher, from a shell
 examples/skills/notary-digest     §5 — a third-party skill, outside module/src
 scripts/demo.sh                   §1 — the whole thing from a clean clone
 scripts/deploy-agents.sh          §3 — three agents, funded and anchored
+scripts/logos-core-headless.sh    §4 — installs the module and runs Logos Core
+                                  headless: load, configure, start
 scripts/verify-deployment.sh      checks docs/DEPLOYMENT.md and artifacts/
                                   against the chain, and fails if they disagree
 scripts/check-package-fresh.py    checks module/agent.lgx against module/src,

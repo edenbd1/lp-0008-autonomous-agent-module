@@ -169,6 +169,16 @@ equality, so a signer's second program transaction is built stale, submitted,
 given a hash, and then silently dropped. Nothing reports it — which is why this
 is written down rather than discovered again.
 
+The three signers for the anchors recorded here were made by hand, and their ids
+were written into `scripts/deploy-agents.sh` as literals. That is no longer how
+the script works, and the change matters to anyone reproducing this: those three
+ids are in the `owner` column of `artifacts/agents.tsv` as **evidence**, not as
+input. The script now creates one signer per agent in the operator's own wallet
+home, records them so a resumed run reuses them, and refuses to fund or claim
+anything when it is handed a signer whose key that wallet does not hold — which
+is what the literals silently did to every reader who was not the author. See
+[`limitations.md`](limitations.md).
+
 Each agent has **two** accounts, and the split is forced rather than chosen. The
 shielded account is the agent: it holds the balance and signs its own payments.
 The public account is where other agents pay it, because `spel` can resolve a

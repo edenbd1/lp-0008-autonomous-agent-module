@@ -499,6 +499,19 @@ ls   # agent_plugin.dylib  manifest.json  metadata.json  variant
 
 ## Running the two checks
 
+Harness 2 — install, then Logos Core headless — is also
+`./scripts/logos-core-headless.sh <category>`, which does everything in this
+section in one command: unpacks `module/agent.lgx` into the user modules
+directory, flattens the variant, compiles the SDK translation units and the
+harness if they are not already built, and runs it. It additionally passes the
+owner and policy account from `artifacts/agents.tsv`, so the module is
+configured with the envelope anchored on chain for that agent rather than with
+the placeholder below; the harness defaults to the placeholder when those
+arguments are absent, so the invocation recorded here still works unchanged.
+
+The by-hand version is kept because it is what the wrapper does, and because
+when the wrapper fails it is the way to find out where.
+
 Both harnesses are plain compiles — no CMake target, so they cannot silently
 stop being built.
 

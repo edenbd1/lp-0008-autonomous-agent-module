@@ -116,6 +116,52 @@ jobs:
             || { echo "the cannot-exist control did not run"; exit 1; }
           rm -f verify.out
 
+      # scripts/logos-core-headless.sh cannot RUN here: it drives the real
+      # liblogos_core out of an installed Logos Basecamp, and there is no
+      # Basecamp on a GitHub runner and no headless install of one. That is
+      # exactly why the thing worth testing here is its refusal.
+      #
+      # A reviewer on an unprepared machine meets this gate and nothing else, so
+      # the gate is the documented interface: it must exit non-zero and name
+      # every missing piece individually, rather than failing somewhere inside a
+      # compile with a Qt header error. This asserts that, and asserts it did
+      # NOT get as far as installing anything — a gate that lets the run past it
+      # and fails later is the failure mode being guarded against.
+      #
+      # This step passes by RUNNING, not by skipping: the runner genuinely lacks
+      # all four prerequisites, so the refusal below is the real one.
+      - name: The headless deploy names its prerequisites instead of failing inside a compile
+        run: |
+          set -e
+          bash -n ./scripts/logos-core-headless.sh
+          rc=0
+          LOGOS_CORE_LIB=/nonexistent/liblogos_core \
+          LOGOS_HOST_PATH=/nonexistent/logos_host \
+          LOGOS_EMBEDDED_MODULES=/nonexistent/modules \
+          QT_ROOT=/nonexistent/qt \
+          LOGOS_CPP_SDK_ROOT=/nonexistent/sdk \
+            ./scripts/logos-core-headless.sh storage > headless.out 2>&1 || rc=$?
+          cat headless.out
+          [ "$rc" -eq 1 ] \
+            || { echo "expected exit 1 from the prerequisite gate, got $rc"; exit 1; }
+          if grep -q SKIPPED headless.out; then
+            echo "logos-core-headless.sh reported SKIPPED"; exit 1
+          fi
+          # Each prerequisite named on its own, with where it was expected.
+          for want in "liblogos_core" "logos_host" "embedded modules directory" \
+                      "Qt 6.9.2" "logos-cpp-sdk checkout"; do
+            grep -q "missing: .*$want" headless.out \
+              || { echo "the gate did not name: $want"; exit 1; }
+          done
+          grep -q "prerequisite(s) missing" headless.out \
+            || { echo "no prerequisite summary was printed"; exit 1; }
+          # It must have stopped AT the gate. Anything below means the gate let
+          # an unprepared machine through to the part that cannot work.
+          if grep -qE "^install |installed, main=|^build " headless.out; then
+            echo "the gate let the run reach the install/build stage"; exit 1
+          fi
+          rm -f headless.out
+
       # SUBMISSION-DRAFT.md's evidence sections are generated from the chain and
       # from the committed binary by scripts/submission-evidence.py. --check
       # re-fetches every figure and fails if the document has drifted from what
@@ -467,6 +513,14 @@ jobs:
       #     no Basecamp on a GitHub runner and no headless install of one, so
       #     this is the packaged-artifact check and it stays manual.
       #     docs/basecamp.md carries the invocation and the recorded output.
+      #     `./scripts/logos-core-headless.sh <category>` is the one-command
+      #     form — it installs the .lgx, builds this harness and runs it,
+      #     configured with the owner and policy account from
+      #     artifacts/agents.tsv. What CI *can* assert about it without a
+      #     Basecamp is that its prerequisite gate refuses an unprepared
+      #     machine and names each missing piece; that is the "headless deploy
+      #     names its prerequisites" step in the `binaries` job above, and it
+      #     passes by running the refusal rather than by skipping.
       #
       #   module/tests/owner_channel_live.cpp
       #     Two processes, two Delivery nodes, the public network. Blocked by

@@ -9,5 +9,16 @@ build/
 
 # Agent wallet homes never belong in the repository.
 artifacts/agents/
+
+# Which local account anchors which agent. Per-operator state, deliberately not
+# committed: `deploy-agents.sh` reads this file to resume a run with the same
+# owner, so shipping the author's ids in it would make every stranger's run
+# resolve three accounts their wallet cannot sign for — which is the bug this
+# file exists to stop repeating. The owners of the deployment this repository
+# publishes are in artifacts/agents.tsv, as evidence rather than as input.
+artifacts/signers.tsv
 _external/
 build-basecamp/
+# scripts/logos-core-headless.sh builds the headless harness and keeps the
+# module's persistence base here.
+build-headless/
