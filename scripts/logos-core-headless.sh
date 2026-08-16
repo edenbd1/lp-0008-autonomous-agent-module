@@ -34,15 +34,28 @@
 # `meta.status` afterwards, so what is asserted is that the runtime is running
 # THIS agent under THAT envelope, not merely that a module loaded.
 #
+# WHERE IT RUNS
+#
+# macOS arm64 and x86-64 Linux, out of the same `module/agent.lgx` — it installs
+# the variant for the machine it is on, and refuses rather than installing
+# another platform's binary into a directory that would then look complete.
+#
 # WHAT IT DOES NOT DO, AND WILL NOT PRETEND TO
 #
-# It is one command on a machine that has Logos Basecamp installed, Qt 6.9.2,
-# and a logos-cpp-sdk checkout. It cannot be one command on a bare machine:
-# `liblogos_core` ships inside the app and there is no headless distribution of
-# it to fetch. Every one of those is checked below and named in the error when
-# it is missing, so a machine that cannot run this says which piece it lacks
-# instead of failing somewhere inside a compile. docs/limitations.md carries the
-# same list as prose.
+# It is one command on a PREPARED machine: a Logos Core runtime, Qt 6.9.2 and a
+# logos-cpp-sdk checkout. Every one of those is checked below and named in the
+# error when it is missing, so a machine that cannot run this says which piece
+# it lacks instead of failing somewhere inside a compile. docs/limitations.md
+# carries the same list as prose.
+#
+# This comment used to say the runtime half "cannot be one command on a bare
+# machine: liblogos_core ships inside the app and there is no headless
+# distribution of it to fetch". The first clause is true on every platform. The
+# second was true of the macOS .dmg and was never checked against the Linux
+# build, which is an AppImage — a SquashFS image behind an ELF runtime, on the
+# same release page, that unpacks with no installer, no root, no FUSE and no
+# display. `scripts/fetch-logos-core.sh` does that in one checksum-pinned
+# command and leaves the tree where the Linux defaults below already look.
 #
 # --alongside
 #
@@ -106,25 +119,57 @@ case "$(uname -s)" in
     CORE_RPATH=(-Wl,-undefined,dynamic_lookup -Wl,-rpath,"$APP/Contents/Frameworks")
     EXTRA_INC="${EXTRA_INCLUDE_DIR:-/opt/homebrew/include}"
     DEFAULT_VARIANT="darwin-arm64"
+    # Nothing to prepend: `-rpath QT_ROOT/lib` is linked into the harness ahead of
+    # the app's Frameworks directory, so one Qt serves both.
+    RUN_LD_PATH=""
     ;;
   Linux)
-    # Untested: this repository has never had a Logos Basecamp install on Linux
-    # to run it against. The paths are the documented ones, and the checks below
-    # will say which is missing rather than guessing.
-    APP="${LOGOS_APP:-}"
-    CORE_LIB="${LOGOS_CORE_LIB:-}"
-    HOST_BIN="${LOGOS_HOST_PATH:-}"
-    EMBEDDED_DIR="${LOGOS_EMBEDDED_MODULES:-}"
-    QT_PLUGINS="${QT_PLUGIN_PATH:-}"
+    # The Linux Logos app is an AppImage, and an unpacked AppImage and an
+    # installed app are the same tree under a different root — `usr/lib`,
+    # `usr/bin`, `usr/modules`. `scripts/fetch-logos-core.sh` unpacks one with a
+    # checksum-pinned download and no installer, no root and no FUSE, and leaves
+    # it exactly here, so the default needs no environment at all.
+    APP="${LOGOS_APP:-$ROOT/_external/logos-core/squashfs-root}"
+    CORE_LIB="${LOGOS_CORE_LIB:-$APP/usr/lib/liblogos_core.so}"
+    HOST_BIN="${LOGOS_HOST_PATH:-$APP/usr/bin/logos_host}"
+    EMBEDDED_DIR="${LOGOS_EMBEDDED_MODULES:-$APP/usr/modules}"
+    QT_PLUGINS="${QT_PLUGIN_PATH:-$APP/usr/lib/qt/plugins}"
     USER_MODULES="${LOGOS_MODULES_DIR:-$HOME/.local/share/Logos/LogosBasecamp/modules}"
-    QT_ROOT="${QT_ROOT:-$HOME/logos/Qt/6.9.2/gcc_64}"
+    # Basecamp publishes an AppImage for both Linux architectures, and both are
+    # pinned in scripts/fetch-logos-core.sh, so neither the variant nor the Qt
+    # directory can be a constant. aqt's own naming: `gcc_64` for x86-64,
+    # `gcc_arm64` for aarch64.
+    case "$(uname -m)" in
+      x86_64|amd64)  DEFAULT_VARIANT="linux-amd64"; QT_ARCH_DIR=gcc_64 ;;
+      aarch64|arm64) DEFAULT_VARIANT="linux-arm64"; QT_ARCH_DIR=gcc_arm64 ;;
+      *) die "no Logos Basecamp AppImage is published for $(uname -m)" ;;
+    esac
+    QT_ROOT="${QT_ROOT:-$HOME/logos/Qt/6.9.2/$QT_ARCH_DIR}"
     QT_INC=(-I"$QT_ROOT/include" -I"$QT_ROOT/include/QtCore"
             -I"$QT_ROOT/include/QtRemoteObjects" -I"$QT_ROOT/include/QtNetwork")
     QT_LINK=(-L"$QT_ROOT/lib" -lQt6Core -lQt6RemoteObjects -lQt6Network
              -Wl,-rpath,"$QT_ROOT/lib")
-    CORE_RPATH=(-Wl,--allow-shlib-undefined)
+    # The harness LINKS the runtime here, where macOS only defers to it.
+    # `-undefined dynamic_lookup` is a Mach-O feature and has no ELF equivalent
+    # for an executable: `--allow-shlib-undefined` governs undefined symbols in
+    # shared libraries, not in the program, so the link ends in
+    # `undefined reference to TokenManager::instance()` and six more. Every one
+    # of them is exported by `liblogos_core.so`, so the honest fix is to say so.
+    # This does not change what is being tested: the runtime is still opened by
+    # path at run time, and `token_manager.cpp` is still not compiled in — a
+    # second copy of that singleton is the failure the note below describes.
+    CORE_RPATH=(-Wl,--allow-shlib-undefined
+                -L"$(dirname "$CORE_LIB")" -llogos_core
+                -Wl,-rpath,"$(dirname "$CORE_LIB")")
     EXTRA_INC="${EXTRA_INCLUDE_DIR:-/usr/include}"
-    DEFAULT_VARIANT="linux-amd64"
+    # Qt from QT_ROOT first, then the app's own directory for everything else it
+    # bundles (boost, spdlog, its own OpenSSL). A dependency is resolved from
+    # LD_LIBRARY_PATH before the object's own DT_RUNPATH, and `liblogos_core.so`
+    # has `RUNPATH: $ORIGIN` — so without this line the process would load Qt
+    # twice under one soname each and the first one to be needed would decide.
+    # This is the same ordering macOS gets for free: there, `-rpath QT_ROOT/lib`
+    # is linked into the harness ahead of the app's Frameworks directory.
+    RUN_LD_PATH="$QT_ROOT/lib:$APP/usr/lib"
     ;;
   *) die "unsupported platform: $(uname -s)" ;;
 esac
@@ -152,8 +197,12 @@ need() { # path description how-to-get-it
     missing=$((missing + 1))
   fi
 }
+case "$(uname -s)" in
+  Linux) HOW_TO_GET_CORE="run ./scripts/fetch-logos-core.sh — it unpacks the published Linux AppImage (checksum-pinned, no installer, no root, no FUSE, no display). Or set LOGOS_APP/LOGOS_CORE_LIB at an existing install." ;;
+  *)     HOW_TO_GET_CORE="install Logos Basecamp from the .dmg, or set LOGOS_CORE_LIB. On macOS it ships inside the app and there is no separate download; on Linux ./scripts/fetch-logos-core.sh unpacks it from the AppImage." ;;
+esac
 need "$CORE_LIB"  "liblogos_core (the Logos Core runtime)" \
-     "install Logos Basecamp, or set LOGOS_CORE_LIB. It ships inside the app; there is no standalone headless build to download."
+     "$HOW_TO_GET_CORE"
 need "$HOST_BIN"  "logos_host (runs core modules in their own process)" \
      "set LOGOS_HOST_PATH. Without it the runtime logs 'logos_host not found' and the load fails."
 need "$EMBEDDED_DIR" "the app's embedded modules directory" \
@@ -166,8 +215,9 @@ need "$LGX"       "the packaged module" \
      "module/agent.lgx is committed; run module/package-basecamp.sh to rebuild it."
 [ "$missing" -eq 0 ] || die "
 $missing prerequisite(s) missing. This command is one command on a prepared
-machine; docs/limitations.md lists what 'prepared' means and why none of it can
-be fetched automatically."
+machine; docs/limitations.md lists what 'prepared' means, and which of these can
+be fetched (on Linux, the runtime: ./scripts/fetch-logos-core.sh) and which
+cannot."
 
 # ── the agent this run configures ─────────────────────────────────────────
 #
@@ -212,21 +262,35 @@ echo
 # Basecamp 0.2.2 has no "install from file" button — its Package Manager reads a
 # configured repository only — so this is the install path, not a shortcut past
 # one.
-VARIANT="${LGX_VARIANT:-}"
-if [ -z "$VARIANT" ]; then
-  VARIANT=$(tar tzf "$LGX" | sed -n 's|^variants/\([^/]*\)/$|\1|p' | head -n1)
-  [ -n "$VARIANT" ] || VARIANT="$DEFAULT_VARIANT"
-fi
+# THE VARIANT FOR THIS MACHINE, not the first one in the archive.
+#
+# This used to read `tar tzf … | head -n1`, which was right for exactly as long
+# as every package carried one variant. The moment `module/agent.lgx` gained a
+# `linux-amd64` variant beside the `darwin-arm64` one, a Linux run installed the
+# **dylib** — tar lists them alphabetically — and got as far as a `main` the
+# package really does contain before anything complained. There is no fallback
+# to "whatever is in there": a variant for another platform is a module
+# directory that looks complete and can never load, and Basecamp reports a
+# module that fails to load to nobody.
+#
+# Checked per package rather than once, because `--alongside` installs four and
+# the companions are built on the machine that is about to run them.
+VARIANT="${LGX_VARIANT:-$DEFAULT_VARIANT}"
 
 install_package() { # package-path module-name
-  local pkg="$1" name="$2" dest="$USER_MODULES/$2" main
+  local pkg="$1" name="$2" dest="$USER_MODULES/$2" main have
+  have=$(tar tzf "$pkg" | sed -n 's|^variants/\([^/]*\)/$|\1|p')
+  printf '%s\n' "$have" | grep -qxF "$VARIANT" \
+    || die "$pkg has no '$VARIANT' variant, which is the one this machine needs.
+It carries: $(printf '%s ' $have)
+Build and package one (docs/basecamp.md), or set LGX_VARIANT deliberately."
   echo "install   $pkg  variant $VARIANT"
   echo "          -> $dest"
   rm -rf "$dest"
   mkdir -p "$dest" || die "could not create $dest"
   tar xzf "$pkg" -C "$dest" || die "could not unpack $pkg"
   [ -d "$dest/variants/$VARIANT" ] \
-    || die "$pkg has no variant '$VARIANT' (has: $(tar tzf "$pkg" | sed -n 's|^variants/\([^/]*\)/$|\1|p' | tr '\n' ' '))"
+    || die "$pkg has no variant '$VARIANT' (has: $(printf '%s ' $have))"
   mv "$dest/variants/$VARIANT"/* "$dest/" && rm -rf "$dest/variants"
   printf '%s' "$VARIANT" > "$dest/variant"
   # The manifest's `main` must name a file that is really there: a `main` naming
@@ -346,6 +410,8 @@ else
   echo "run       headless: init → add_modules_dir → start → load_module($MODULE_NAME) → configure → start"
 fi
 echo
+[ -z "$RUN_LD_PATH" ] \
+  || export LD_LIBRARY_PATH="$RUN_LD_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 LOGOS_HOST_PATH="$HOST_BIN" QT_PLUGIN_PATH="$QT_PLUGINS" QT_QPA_PLATFORM=offscreen \
   "$HARNESS" "$CORE_LIB" "$EMBEDDED_DIR" "$USER_MODULES" "$PERSISTENCE" \
              "$MODULE_NAME" "$OWNER" "$POLICY_HEX"

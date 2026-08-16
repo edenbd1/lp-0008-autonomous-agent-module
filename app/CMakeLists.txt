@@ -82,6 +82,24 @@ else()
     target_link_options(agent_ui PRIVATE -Wl,--allow-shlib-undefined)
 endif()
 
+# ELF has no `@rpath`: DT_RUNPATH is the search path, and CMake's default for a
+# build tree is the absolute directory the Qt it linked lives in — which resolves
+# on the machine that built it and nowhere else. That is the same defect the
+# Homebrew note above describes, arriving through a different mechanism, and
+# `app/package-ui.sh` refuses a plugin carrying it. `$ORIGIN` is the plugin's own
+# directory, which is what Basecamp unpacks a variant into and what
+# `LogosModule.cmake` already sets for the core module.
+#
+# macOS is left alone deliberately: the frameworks are already referenced as
+# `@rpath/...`, the committed `darwin-arm64` variant was built without this, and
+# a change that moves those bytes for no behavioural reason would make the
+# shipped package disagree with its own record.
+if(NOT APPLE)
+    set_target_properties(agent_ui PROPERTIES
+        BUILD_WITH_INSTALL_RPATH ON
+        INSTALL_RPATH "$ORIGIN")
+endif()
+
 # Basecamp resolves `main` from the manifest inside the plugin directory, and
 # the packaging script writes `agent_ui` there. The default `lib` prefix would
 # make the manifest name a file that is not present — which fails the load

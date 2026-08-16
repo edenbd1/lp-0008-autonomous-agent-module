@@ -994,18 +994,67 @@ Basecamp installs each into the right directory when told to, by `type`.
 Cost to close: publishing both to a package repository Basecamp can be pointed
 at. Nothing in either package changes.
 
-## Only `darwin-arm64`, for the UI plugin as well
+## CLOSED for x86-64: both packages now carry a `linux-amd64` variant
 
-`app/agent-ui.lgx` carries one variant, the same as `module/agent.lgx`, and a
-reviewer on Linux cannot open either. The plugin itself is portable — plain Qt
-Widgets, no macOS-specific code, and `app/CMakeLists.txt` already takes the ELF
-branch for the link options — so this is a build-and-package job on a Linux
-host or in a container, against a Qt at or below Basecamp's 6.9.2, not a design
-problem. LP-0002 ships two variants from the same shape and its Linux half was
-verified against the AppImage's own Qt.
+This section used to say that `app/agent-ui.lgx` and `module/agent.lgx` each
+carried one variant and "a reviewer on Linux cannot open either", and that
+closing it was "one container build per package". That estimate was right about
+the shape and wrong about the cost, and the difference is worth recording
+because three separate things had to be found first.
 
-Cost to close: one container build per package, plus `lgx add --variant
-linux-amd64` on each.
+Both packages now carry `darwin-arm64` **and** `linux-amd64`:
+
+```
+$ lgx manifest module/agent.lgx
+Variants:       darwin-arm64, linux-amd64
+                darwin-arm64 -> agent_plugin.dylib
+                linux-amd64 -> agent_plugin.so
+```
+
+and `./scripts/logos-core-headless.sh storage` on x86-64 Linux loads,
+configures and starts the module out of that package with **all steps confirmed
+(0 failure(s))** — the same 42 assertions the macOS run makes. The full
+procedure is in [`basecamp.md`](basecamp.md) under "Linux, and the
+`linux-amd64` variant"; the three findings, in the order they cost time:
+
+1. **The runtime did not have to be installed.** See the next section — this is
+   the one that also emptied the `[UPSTREAM]` half of the deployment criterion.
+2. **Official Qt for Linux needs its `icu` archive.** It links ICU 73 by soname,
+   no distribution ships that, and the failure surfaces inside the
+   `cpp-generator` sub-build as `undefined reference to ucnv_open_73`.
+3. **The plugin was missing a symbol on both platforms and only ELF said so.**
+   `logos-module-builder` at `5396513` does not compile `logos_types.cpp`, so
+   `operator<<(QDataStream&, const LogosResult&)` was undefined in every build
+   this repository has ever shipped. Mach-O binds lazily and never faulted; ELF
+   loads the module, joins it to the runtime, hands out a client, and then dies
+   on the first call across the transport with `symbol lookup error`, looking
+   exactly like the Qt-mismatch timeout. `module/CMakeLists.txt` compiles it in
+   now, on both platforms, which is why the `darwin-arm64` binary changed in the
+   same commit.
+
+**What is still not covered.** Basecamp 0.2.2 publishes three artefacts — a
+macOS arm64 `.dmg` and Linux `x86_64` and `aarch64` AppImages — and this covers
+two of the three. There is no `linux-arm64` variant, and `linux-arm64` is now
+genuinely "one container build per package": the toolchain is written down, the
+aarch64 AppImage's sha256 is already pinned in
+[`scripts/fetch-logos-core.sh`](../scripts/fetch-logos-core.sh), and that route
+was exercised there (it is the one that unpacks with `--appimage-extract`, no
+tools at all). It is not built, so it is not claimed.
+
+**And one capability the Linux variant does not have.**
+`logos-messaging/logos-delivery` publishes no `liblogosdelivery.so` and never
+has — re-checked against the release API while this was written; the current
+`nightly` carries `nwaku-amd64-linux-nightly.tar.gz`, which holds executables
+and no library. The `linux-amd64` plugin therefore carries the delivery code
+path (every one of its literals is in the binary, which
+`scripts/check-package-fresh.py` asserts against both variants) and no library
+beside it, so `meta.configure("delivery","on")` there will report the file it
+could not open rather than starting a node. That was **not** exercised on Linux
+— what was exercised is everything in the load/configure/start path, which is
+what the deployment criterion names. Closing it needs an upstream release asset
+or a Nim build of the library, exactly as
+[`module/third-party/liblogosdelivery/README.md`](../module/third-party/liblogosdelivery/README.md)
+sets out.
 
 ## deploy-agents.sh is one command, plus four things it cannot do for you
 
@@ -1134,31 +1183,71 @@ machine looks like a hang for the first twelve minutes rather than an error.
 
 ### Prerequisites for `./scripts/logos-core-headless.sh`
 
-This is the half that is actually *Logos Core*, and it is the half that cannot
-be made to work on an arbitrary machine — not for want of scripting, but because
-`liblogos_core` ships inside the Logos app and there is no headless
-distribution of it to download. Each item below is checked before anything is
-built, and the script prints the missing ones by name with what to do:
+This is the half that is actually *Logos Core*. Each item is checked before
+anything is built, and the script prints the missing ones by name with what to
+do about them, so a machine that cannot run this says which piece it lacks
+instead of failing inside a compile.
 
-1. **Logos Basecamp installed**, for four things inside it:
-   `liblogos_core` (`LOGOS_CORE_LIB`), the `logos_host` binary that runs core
-   modules in their own process (`LOGOS_HOST_PATH`), the app's embedded modules
-   directory (`LOGOS_EMBEDDED_MODULES`), and its Qt plugins
-   (`QT_PLUGIN_PATH`). Measured against Basecamp 0.2.2 on macOS/darwin-arm64.
+**A retraction first, because this list used to open on it.** It said the half
+"cannot be made to work on an arbitrary machine ... because `liblogos_core`
+ships inside the Logos app and there is no headless distribution of it to
+download". The first clause is true everywhere. The second was checked against
+the macOS `.dmg` and never against the Linux build, and the Linux build of the
+same app is an **AppImage**: an ELF runtime with a SquashFS image appended,
+published on the same release page, which unpacks with no installer, no root, no
+FUSE and no display. So on Linux the runtime *is* fetchable, and the criterion
+entry that blamed upstream for it was blaming upstream for something upstream
+publishes.
+
+Run once, then nothing below needs setting:
+
+```sh
+./scripts/fetch-logos-core.sh      # Linux only; ~278 MB, checksum-pinned
+```
+
+1. **A Logos Core runtime** — `liblogos_core` (`LOGOS_CORE_LIB`), the
+   `logos_host` binary that runs core modules in their own process
+   (`LOGOS_HOST_PATH`), the app's embedded modules directory
+   (`LOGOS_EMBEDDED_MODULES`), and its Qt plugins (`QT_PLUGIN_PATH`).
+   - **Linux:** `./scripts/fetch-logos-core.sh`. It pins the AppImage by sha256,
+     refuses to unpack anything that does not match, and leaves the tree at
+     `_external/logos-core/squashfs-root`, which is where the script looks by
+     default. `LOGOS_APP` points it at an installed app instead.
+     Needs `squashfs-tools` only on a host that cannot execute the AppImage
+     itself (a cross-architecture container); on a native host the AppImage
+     unpacks itself.
+   - **macOS:** install LogosBasecamp from the `.dmg`. There is no AppImage to
+     unpack there and no headless build published, so this one really is an app
+     install. Measured against Basecamp 0.2.2 on darwin-arm64.
 2. **Qt 6.9.2** (`QT_ROOT`), including `qtremoteobjects` and a `libexec/moc`.
-   The `aqtinstall` line is in [`basecamp.md`](basecamp.md). An install with only
-   `lib` in it is the trap described there.
-3. **A `logos-cpp-sdk` checkout** (`LOGOS_CPP_SDK_ROOT`). The harness calls the
-   loaded module over the runtime's transport, and `liblogos_core`'s C API has no
-   "call a method" entry point.
+   The AppImage carries Qt's libraries and not its SDK, so this is a separate
+   download on both platforms. The `aqtinstall` lines are in
+   [`basecamp.md`](basecamp.md); an install with only `lib` in it is the trap
+   described there, and on Linux the `icu` archive is required or every link
+   ends in `undefined reference to ucnv_open_73`.
+3. **A `logos-cpp-sdk` checkout** (`LOGOS_CPP_SDK_ROOT`), pinned at `c87f343`.
+   The harness calls the loaded module over the runtime's transport, and
+   `liblogos_core`'s C API has no "call a method" entry point.
 4. **`nlohmann/json`** headers (`EXTRA_INCLUDE_DIR`, default
-   `/opt/homebrew/include`).
+   `/opt/homebrew/include` on macOS, `/usr/include` on Linux —
+   `apt install nlohmann-json3-dev`).
 5. **`artifacts/agents.tsv`**, i.e. the first command has been run — it is where
-   the owner and policy account come from. Without a row for the requested
-   category the script says so and exits 1.
+   the owner and policy account come from. **For the agents this repository
+   publishes that file is committed**, so a fresh clone has it and this
+   prerequisite costs nothing; it is only for your own agents that the on-chain
+   command has to run first. Without a row for the requested category the script
+   says so and exits 1.
+6. **A C++17 compiler and a libstdc++ new enough for the runtime.** On Linux the
+   floor is upstream's, not ours: the libraries inside Basecamp's AppImage want
+   `GLIBC_2.38`, `CXXABI_1.3.15` and `GLIBCXX_3.4.32`. Debian bookworm (glibc
+   2.36, gcc 12) builds the harness and then dies on `version GLIBC_2.38 not
+   found (required by liblogos_core.so)`. Ubuntu 24.04 is above the line.
 
-**Linux is untested.** The paths in the script for it are the documented ones and
-nothing in this repository has ever run it against a Basecamp install on Linux.
+**Linux is no longer untested.** Exercised on x86-64 Linux — Ubuntu 24.04,
+`liblogos_core.so` out of `LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage`,
+official Qt 6.9.2, the committed `module/agent.lgx` — with all steps confirmed
+and zero failures. The transcript is in [`basecamp.md`](basecamp.md). It has
+**not** been run on `linux-arm64`, and no `linux-arm64` variant is packaged.
 
 ### Additional prerequisites for `--alongside`
 
@@ -1166,17 +1255,17 @@ nothing in this repository has ever run it against a Basecamp install on Linux.
 and messaging modules into the same runtime, and those have to be built first by
 `./scripts/build-companion-modules.sh`. That script needs everything above plus:
 
-6. **`lgx`** (`LGX_BIN`), the packager from `logos-co/logos-package` that
+7. **`lgx`** (`LGX_BIN`), the packager from `logos-co/logos-package` that
    `module/package-basecamp.sh` already needs.
-7. **A `logos-module-builder` and a `logos-module` checkout**
+8. **A `logos-module-builder` and a `logos-module` checkout**
    (`LOGOS_MODULE_BUILDER_ROOT`, `LOGOS_MODULE_ROOT`) — the same two the agent
    module's own build needs, and the same pinned revisions.
-8. **Go**, for `status-im/go-wallet-sdk`'s `make static-library`, which is what
+9. **Go**, for `status-im/go-wallet-sdk`'s `make static-library`, which is what
    `logos-wallet-module` links.
-9. **Nim and nimble** on `PATH`, for `liblogosdelivery`. Nimble installs Nim
+10. **Nim and nimble** on `PATH`, for `liblogosdelivery`. Nimble installs Nim
    into `~/.nimble/bin` and does not add it to `PATH`; the script does that
    itself and says so if it still cannot find it.
-10. **A built Logos Storage library** (`STORAGE_SRC`), which
+11. **A built Logos Storage library** (`STORAGE_SRC`), which
     `scripts/exercise-nodes.sh` already documents how to produce.
 
 Each is checked by name before anything is built. The heaviest by far is
@@ -1191,18 +1280,37 @@ the transcript is in `basecamp.md`. What the list above says is what a *reviewer
 has to install to re-run it, which is the same class of prerequisite as the rest
 of this section and is longer than any of them.
 
-### What is still not one command
+### What is still not one command, and what the count actually turns on
 
-Two things, stated plainly:
-
-- **The two halves are two commands.** They could be wrapped in a third, and
-  that wrapper would be honest only on a machine that has both a funded LEZ
-  wallet and an installed Basecamp. It is not written, because a command that
-  requires everything both of the above require, and then reports one exit code
-  for two unrelated failures, makes the gap harder to see rather than smaller.
-- **"On any machine" is not met, and cannot be from here.** The chain half needs
-  faucet-funded balance; the Logos Core half needs an installed Logos app. The
-  first is a testnet's policy and the second is upstream's packaging.
+- **Deploying and configuring the published agent in Logos Core headless is one
+  command**, and that is the command the criterion's own instrument names. On a
+  prepared machine, `./scripts/logos-core-headless.sh storage` on a fresh clone
+  installs the packaged module, loads it, calls `configure()` and `start()` on
+  it across the runtime's transport, and reads the owner and policy account back
+  out of `meta.status`. It needs no chain access and no argument beyond the
+  category, because `artifacts/agents.tsv` is committed.
+- **Deploying an agent of your own is two**, and the second is
+  `SIGNER=… ./scripts/deploy-agents.sh`. That command does nothing a Logos Core
+  runtime does — it creates a shielded identity, funds it, and anchors a
+  spending envelope on LEZ — and the prize's own Scope lists that beside
+  deployment rather than inside it: "a CLI for agent deployment, configuration,
+  **and initial funding**". A reviewer can read the sentence either way, and
+  this submission does not rest a verdict on which; it states the reading and
+  the cost.
+- **A wrapper around both is writable and is not written.** It would be honest
+  only on a machine that has both a funded LEZ wallet and a Logos Core runtime,
+  and it would report one exit code for two unrelated failures — which hides the
+  gap rather than closing it. That is a choice, and it is the reason the box
+  below is not argued on the count.
+- **"On any machine" is still not literally true, and it is now much closer.**
+  Two of the three platforms the Logos app is published for are covered and
+  exercised: macOS arm64 and Linux x86-64. `linux-arm64` is unbuilt. And
+  "prepared" is still a real word: Qt 6.9.2, a `logos-cpp-sdk` checkout and
+  `nlohmann/json` are needed on both platforms, and an agent of your own needs
+  faucet-funded balance, which is a testnet's policy and cannot be scripted.
+  What is **no longer** true is the reason this used to give — that the Logos
+  Core half needs an installed GUI app because upstream publishes no headless
+  build. On Linux it publishes an AppImage, and one command unpacks it.
 
 What *is* met: on a prepared machine each half is a single command that takes no
 arguments beyond the agent's category, deploys, configures, and verifies itself

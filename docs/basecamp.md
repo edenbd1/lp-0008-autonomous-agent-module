@@ -512,9 +512,19 @@ Stated plainly, because a reviewer will check.
   configured package repository only — so a GUI install of a local `.lgx` is not
   something a reviewer can do either, which is why the module directory is
   populated by hand below.
-- **macOS arm64 only.** No `linux-amd64` variant is built or packaged, and
-  nothing here was run on Linux. The install paths given for Linux below are
-  read off Basecamp's `LogosBasecampPaths.h`, not tested.
+- ~~**macOS arm64 only.**~~ Closed, and it is worth saying what closed it,
+  because the sentence that stood here — "no `linux-amd64` variant is built or
+  packaged, and nothing here was run on Linux" — was true and the reason given
+  for it elsewhere was not. `docs/limitations.md` said the runtime half could
+  not be had because `liblogos_core` ships inside the app and there is no
+  headless distribution to fetch. That is true of the macOS `.dmg`. The Linux
+  build of the same app is an **AppImage** — a SquashFS image with an ELF
+  runtime in front of it — published on the same release page, and it unpacks
+  with no installer, no root, no FUSE and no display.
+  `scripts/fetch-logos-core.sh` does that, checksum-pinned, and
+  `scripts/logos-core-headless.sh` then runs against it with nothing set.
+  Both packages now carry a `linux-amd64` variant, and the run below is on
+  x86-64 Linux, green, from the committed package. See "Linux" below.
 - **The GUI click is now verified; two rows below it are not.** This bullet used
   to read "No click in the Basecamp GUI" and then "No owner-facing UI plugin",
   and both are closed — `app/` is the `ui` plugin, the tile is in Basecamp's
@@ -695,6 +705,146 @@ then silently falls through to the system Qt. `module/package-basecamp.sh`
 refuses to package a plugin that got this wrong, so the mistake cannot reach the
 committed artefact, but it is cheaper to catch here.
 
+### Linux, and the `linux-amd64` variant
+
+Two things had to be established before any of this could be written down, and
+both were assumptions this document previously recorded as facts.
+
+**1. The runtime is obtainable without installing anything.** `liblogos_core`
+does ship inside the app on every platform. On Linux the app is an
+**AppImage**, and an AppImage is an ELF runtime with a SquashFS filesystem
+appended — so "inside the app" and "fetchable" are not opposites there. One
+command, checksum-pinned, no installer, no root, no FUSE, no display:
+
+```sh
+./scripts/fetch-logos-core.sh
+```
+
+It takes `LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage` (sha256
+`b5dd636f…dd5ae`; `aarch64` is pinned too, at `9fed46b9…87ef2`), refuses to
+unpack anything that does not match, and unpacks it two ways: the AppImage's own
+`--appimage-extract`, which needs nothing at all, and `unsquashfs -o <offset>`
+when the runtime cannot execute — which is the case in a cross-architecture
+container. The offset is **where the ELF ends**, `e_shoff + e_shnum *
+e_shentsize`; do not search for the `hsqs` magic, because the runtime binary
+contains those four bytes 750 KB before the real superblock and `unsquashfs`
+then reports `Can't find a valid SQUASHFS superblock`, which reads exactly like
+a truncated download.
+
+What comes out is the same tree the macOS app has, under `usr/`:
+`usr/lib/liblogos_core.so`, `usr/bin/logos_host`, `usr/modules`,
+`usr/lib/qt/plugins`, and Basecamp's own Qt 6.9.2. What does **not** come out is
+Qt's SDK — no headers, no `moc` — so `aqtinstall` is still a prerequisite for
+building anything.
+
+**2. The Qt to build against, and the two things that bite on Linux only.**
+
+```sh
+python3 -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 \
+    -m qtremoteobjects --archives qtbase icu --outputdir ~/logos/Qt
+```
+
+`icu` is not optional there. Official Qt for Linux links ICU **73** by soname
+and no current distribution ships that, so without the archive every link ends
+in `undefined reference to ucnv_open_73` — inside the `cpp-generator` sub-build,
+which makes it look like a generator problem.
+
+And the distribution floor is set by upstream, not by us: the libraries inside
+Basecamp's own AppImage want `GLIBC_2.38`, `CXXABI_1.3.15` and
+`GLIBCXX_3.4.32`. On Debian bookworm (glibc 2.36, gcc 12) the harness builds and
+then dies with `version GLIBC_2.38 not found (required by liblogos_core.so)`.
+Ubuntu 24.04 — which is what `ubuntu-latest` is — is above that line, and any
+machine that can run Logos Core on Linux at all already is.
+
+```sh
+export LOGOS_MODULE_BUILDER_ROOT=~/logos/src/logos-module-builder
+export LOGOS_MODULE_ROOT=~/logos/src/logos-module
+export LOGOS_CPP_SDK_ROOT=~/logos/src/logos-cpp-sdk
+export CMAKE_PREFIX_PATH=~/logos/Qt/6.9.2/gcc_64   # the sub-build reads the env
+
+cmake -S module -B build-linux \
+      -DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH \
+      -DLOGOS_DELIVERY_ROOT=$PWD/_external/logos-delivery \
+      -DLOGOS_DELIVERY_LIBRARY_OPTIONAL=ON
+cmake --build build-linux -j"$(nproc)"
+
+module/package-basecamp.sh build-linux linux-amd64
+```
+
+`-DLOGOS_DELIVERY_LIBRARY_OPTIONAL=ON` is the one flag that has no macOS
+counterpart and it is not a shortcut: upstream publishes **no**
+`liblogosdelivery.so`, and never has (the audit is in
+`module/third-party/liblogosdelivery/README.md`, re-checked against the release
+API when this was written). The header is the build input; the library is opened
+by name at run time. So the `linux-amd64` plugin carries the delivery code path
+— every one of its string literals is in the binary, which is what
+`scripts/check-package-fresh.py` asserts against **both** variants — and there
+is no library beside it for `dlopen` to find. Without the flag CMake refuses,
+and says which of the three states to ask for.
+
+`package-basecamp.sh` **adds** the variant rather than replacing the package:
+one machine cannot build both binaries, so recreating it would silently drop the
+other. `scripts/write-package-record.py` carries the other variant's record
+forward only if the package still holds the exact bytes it was recorded for and
+those bytes still contain every string literal of the source being recorded —
+otherwise a stale sibling would inherit a fresh variant's provenance.
+
+**The symbol that only ELF notices.** `logos-module-builder` at `5396513`
+compiles eight of the SDK's translation units into every plugin and not
+`logos_types.cpp`, so the plugin references `operator<<(QDataStream&, const
+LogosResult&)` and never defines it. On Mach-O that is invisible — dyld binds
+lazily and `logos_host` never faulted. On ELF the module loads, joins the
+runtime's loaded set, hands out a client, and then the first call across the
+transport ends in
+
+```
+.logos_host.elf: symbol lookup error: agent_plugin.so:
+  undefined symbol: _ZlsR11QDataStreamRK11LogosResult
+```
+
+and `configure()` times out exactly the way a Qt mismatch does. `logos_host`
+links spdlog and Qt and not `liblogos_core`, on either platform, so nothing in
+that process can supply it; Basecamp's own `capability_module_plugin.so` has
+zero undefined Logos symbols. `module/CMakeLists.txt` now compiles
+`logos_types.cpp` into the plugin on both platforms, which is why the
+`darwin-arm64` variant was rebuilt in the same commit.
+
+**Running it.** With the runtime unpacked, nothing else has to be set:
+
+```sh
+QT_ROOT=~/logos/Qt/6.9.2/gcc_64 LOGOS_CPP_SDK_ROOT=~/logos/src/logos-cpp-sdk \
+  ./scripts/logos-core-headless.sh storage
+```
+
+```
+install   module/agent.lgx  variant linux-amd64
+          -> /root/.local/share/Logos/LogosBasecamp/modules/agent
+          installed, main=agent_plugin.so
+...
+  ok    logos_core_load_module() reports success
+  ok    the module is in the runtime's loaded set
+  ok    configure() is accepted across the transport
+  ok    start() is accepted across the transport
+  ok    the loaded module lists all 25 documented skills
+  ok    and bound to the owner it was configured with
+  ok    and to the policy account it was configured with
+
+all steps confirmed (0 failure(s))
+```
+
+That run is x86-64 Linux, from the committed `module/agent.lgx`, against
+`liblogos_core.so` out of the published AppImage — the same 42 assertions the
+macOS run makes, in the same order, with the same result. The environment it was
+performed in is recorded in `docs/limitations.md`.
+
+**The variant is chosen, not stumbled into.** `logos-core-headless.sh` used to
+install `tar tzf … | head -n1`, which was correct for exactly as long as the
+package held one variant; the first Linux run after `linux-amd64` was added
+installed the **dylib**, because tar lists `darwin-arm64` first. It now requires
+the variant this machine needs and names what the package has when that is
+missing. There is no fallback: a module directory holding another platform's
+binary is one that looks complete and can never load.
+
 ### The generated glue is committed
 
 `module/generated_code/` holds `logos-cpp-generator`'s output for this module —
@@ -855,11 +1005,19 @@ directory this document had already named:
 ```sh
 LGX="${LGX_BIN:-$HOME/logos/src/logos-package/build/lgx}"
 $LGX verify   module/agent.lgx    # contents match the manifest hashes
-$LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
+$LGX manifest module/agent.lgx    # type: core, two variants
+```
+
+`manifest` prints two variants now, and which one you get is the point of them:
+
+```
+Variants:       darwin-arm64, linux-amd64
+                darwin-arm64 -> agent_plugin.dylib
+                linux-amd64 -> agent_plugin.so
 ```
 
 That prints root hash
-`ca74731277f0ec7392a8fb445a21e165288c2e70e1ec68e8768a6a34652564d2`. Rebuilding
+`PLACEHOLDER_ROOT_HASH`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,

@@ -581,54 +581,103 @@ one of them — `meta.skills` — was documented in three headers before it exis
   carried the `PrivateForeign` account kind all along. The retraction, and what
   the fix actually was, is in [`docs/limitations.md`](docs/limitations.md).
 
-- [ ] **UNMET `[NOT BUILT + UPSTREAM]` — The owner can deploy the agent and
-  configure it with a single CLI command on any machine using Logos Core
-  headless.**
-  Three clauses, and the one that empties the box is not the one this entry used
-  to lead with. "A single CLI command" is arguable in this submission's favour;
-  **"on any machine"** is not arguable at all, and it is a conjunct.
+- [ ] **UNMET `[NOT BUILT]` — The owner can deploy the agent and configure it
+  with a single CLI command on any machine using Logos Core headless.**
+  Three clauses. Two of them are now met and the third has moved a long way and
+  is still short, which is why the box is still empty — but the reason it is
+  empty has changed completely, and the `[UPSTREAM]` half of the old label was
+  **withdrawn** rather than quietly dropped.
 
-  **The Logos Core half now exists and is one command.**
-  `./scripts/logos-core-headless.sh` (exit 0) installs `module/agent.lgx` into the
-  user modules directory the way Basecamp's own installer does, builds the harness
-  if it is not built, and runs load → `configure()` → `start()` headless — no GUI,
-  no window, no display — binding the agent to the owner and policy account
-  [`artifacts/agents.tsv`](artifacts/agents.tsv) actually records, then reading both
-  back out of `meta.status`. So what is asserted is that the runtime is running
-  *this* agent under *that* envelope, not merely that a module loaded. An earlier
-  draft of this entry said `grep -rn 'logos_core' scripts/` returns nothing; it no
-  longer does.
+  **The Logos Core half is one command, and it now runs on two platforms.**
+  `./scripts/logos-core-headless.sh storage` (exit 0) installs `module/agent.lgx`
+  into the user modules directory the way Basecamp's own installer does — picking
+  the variant for the machine it is on — builds the harness if it is not built,
+  and runs load → `configure()` → `start()` headless: no GUI, no window, no
+  display. It binds the agent to the owner and policy account
+  [`artifacts/agents.tsv`](artifacts/agents.tsv) actually records, then reads both
+  back out of `meta.status`, so what is asserted is that the runtime is running
+  *this* agent under *that* envelope rather than that a module loaded.
+  On a fresh clone it needs no chain access and no argument beyond the category,
+  because that manifest is committed.
 
-  **"With a single CLI command" — this is weaker against us than it reads.**
-  The criterion's own qualifier is *using Logos Core headless*, and every part of
-  this that Logos Core performs is one command:
-  `./scripts/logos-core-headless.sh` installs, loads, configures and starts. The
-  second command, `SIGNER=… ./scripts/deploy-agents.sh`, puts the identity and
-  spending envelope **on chain** — which no Logos Core runtime does, and which the
-  prize's own Scope lists *beside* deployment rather than inside it: "a CLI for
-  agent deployment, configuration, and initial funding." A reviewer could
-  reasonably read the sentence either way, so this submission does not rest the
-  verdict on it, in either direction. `[NOT BUILT]`: the wrapper is writable, and
-  is not written, for the reason in
-  [`docs/limitations.md`](docs/limitations.md) — one exit code for two unrelated
-  failures hides the gap rather than closing it.
+  **"With a single CLI command" — settled on the words, and not leaned on.**
+  The criterion's instrument is *using Logos Core headless*, and everything a
+  Logos Core runtime does here is that one command. The second command,
+  `SIGNER=… ./scripts/deploy-agents.sh`, puts a **new** agent's identity and
+  spending envelope on chain — which no Logos Core runtime performs, and which
+  the prize's own Scope lists beside deployment rather than inside it: "a CLI for
+  agent deployment, configuration, **and initial funding**". So: deploying and
+  configuring *the published agent* in Logos Core headless is one command;
+  standing up an agent of your own is two. A reviewer can read the sentence
+  either way and this submission does not rest a verdict on it in either
+  direction. `[NOT BUILT]`: the wrapper over both is writable and is not written,
+  because it would report one exit code for two unrelated failures and hide the
+  gap rather than close it.
 
-  **"On any machine" — no, and this is what empties the box.** `[UPSTREAM]`, and
-  plainly so:
+  **"On any machine" — the clause that empties the box, and the correction that
+  matters.** This entry used to say `[UPSTREAM]`, on the ground that
+  "`liblogos_core` ships **inside** `LogosBasecamp.app` and there is no headless
+  distribution of it to fetch". That was checked against the macOS `.dmg` and
+  never against the Linux build. The Linux build of the same app is an
+  **AppImage** — an ELF runtime with a SquashFS image appended, on the same
+  release page — and it unpacks with no installer, no root, no FUSE and no
+  display. `./scripts/fetch-logos-core.sh` does it in one checksum-pinned
+  command, in the shape the `storage-node` CI job already uses for `libstorage`.
+  So the runtime half was obtainable all along, and this document was blaming
+  upstream for something upstream publishes.
 
-  - `liblogos_core` ships **inside** `LogosBasecamp.app` and there is no headless
-    distribution of it to fetch, so the runtime half needs an installed GUI app;
-  - both shipped packages carry a **`darwin-arm64` variant only**, and the Linux
-    paths in the script have never been run against a Basecamp install on Linux —
-    the script says so in its own comments;
-  - it additionally needs Qt 6.9.2, a `logos-cpp-sdk` checkout and
-    `nlohmann/json`;
-  - and the on-chain half needs faucet-funded balance, which cannot be scripted.
+  With that, and with a `linux-amd64` variant now in **both** packages:
 
-  Every one of those is checked before anything is compiled and named in the
+  ```
+  install   module/agent.lgx  variant linux-amd64
+            installed, main=agent_plugin.so
+    ok    logos_core_load_module() reports success
+    ok    configure() is accepted across the transport
+    ok    start() is accepted across the transport
+    ok    the loaded module lists all 25 documented skills
+    ok    and bound to the owner it was configured with
+    ok    and to the policy account it was configured with
+  all steps confirmed (0 failure(s))
+  ```
+
+  — x86-64 Linux, Ubuntu 24.04, `liblogos_core.so` out of
+  `LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage`, from the committed
+  package: the same assertions as the macOS run, in the same order, with the same
+  result. Getting there needed three fixes worth naming, because each was a
+  defect and not a port: the script installed `tar tzf … | head -n1` and so
+  installed the **dylib** on Linux the moment the package gained a second
+  variant; official Qt for Linux needs its `icu` archive or every link ends in
+  `undefined reference to ucnv_open_73`; and the plugin has referenced
+  `operator<<(QDataStream&, const LogosResult&)` without defining it in every
+  build this repository has ever shipped — Mach-O binds lazily and never
+  faulted, ELF loads the module, joins it to the runtime, and then dies on the
+  first call across the transport looking exactly like a Qt mismatch.
+
+  **What is still missing, precisely:**
+
+  - **`linux-arm64`.** Basecamp 0.2.2 publishes three artefacts — macOS arm64
+    `.dmg`, Linux `x86_64` and `aarch64` AppImages — and this covers two.
+    The aarch64 AppImage's sha256 is pinned and that unpack route is exercised;
+    the variant is not built, so it is not claimed.
+  - **"Prepared" is still a real word.** Qt 6.9.2 with `qtremoteobjects` (plus
+    `icu` on Linux), a `logos-cpp-sdk` checkout at `c87f343`, and
+    `nlohmann/json` — the AppImage carries Qt's libraries and not its SDK, and
+    the harness is compiled.
+  - **An agent of your own needs a faucet.** `deploy-agents.sh` needs
+    testnet balance on `SIGNER`, which is a testnet's policy and cannot be
+    scripted. The published agents need none of this.
+  - **The `linux-amd64` variant has no Logos Delivery library**, because upstream
+    publishes none for Linux and never has. It carries the code path — asserted,
+    not claimed: `check-package-fresh.py` finds all 721 source literals in both
+    binaries — and no library beside it, so the transport cannot come up there.
+    That is outside this criterion and inside the messaging one, and it is stated
+    here so the two variants are not read as identical.
+
+  Every prerequisite is checked before anything is compiled and named in the
   error when it is missing, so a machine that cannot run this says which piece it
-  lacks instead of failing inside a compile. That is good behaviour for a
-  prerequisite, and it is not the same thing as "any machine".
+  lacks instead of failing inside a compile. The full list a stranger can follow
+  is in [`docs/limitations.md`](docs/limitations.md); the Linux procedure and
+  transcript are in [`docs/basecamp.md`](docs/basecamp.md).
 
 - [x] **MET — The owner can interact with the agent in real time from a separate
   Logos app instance using Logos Messaging, with no intermediary server.**
@@ -1725,14 +1774,22 @@ the same answer about what is missing and whose it is.
 |---|---|---|
 | CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
 | Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
-| Single CLI command, on any machine, Logos Core headless | `[NOT BUILT + UPSTREAM]` | The wrapper is writable. "On any machine" is not, from here: `liblogos_core` ships only inside the GUI app, the packages are `darwin-arm64`-only, and the on-chain half needs a faucet. |
+| Single CLI command, on any machine, Logos Core headless | `[NOT BUILT]` | Two of the three platforms the Logos app ships for are covered and exercised, out of one package. What is left is a `linux-arm64` variant, a prepared machine (Qt 6.9.2, `logos-cpp-sdk`, `nlohmann/json`), and a faucet for agents of your own. The `[UPSTREAM]` half was withdrawn: the Linux runtime is an AppImage and `./scripts/fetch-logos-core.sh` unpacks it. |
 
-**Two of the three are entirely ours, and the third is ours in one clause.**
-Nothing on this list is refused by the stack. Two passes ago this checklist said
-one of them was; that correction was recorded rather than made silently, and this
-pass is what came of it — the entry it defended is now built. A wrongly-blamed
-host is how an unbuilt thing stops being anyone's job, and the cost of leaving
-one standing is measurable: it was a criterion.
+**All three are entirely ours, and the last `[UPSTREAM]` label on this list is
+gone.** Nothing here is refused by the stack. Two earlier passes said otherwise;
+both corrections were recorded rather than made silently, and both entries they
+defended have since been built, which is the argument for recording them. The
+second is the one worth repeating, because it stood for the entire life of this
+submission and nobody had looked: the deployment criterion carried `[UPSTREAM]`
+on the ground that `liblogos_core` ships inside the app and there is no headless
+build to fetch. That was checked against the macOS `.dmg`. The Linux build of
+the same app is an **AppImage**, on the same release page, and one command
+unpacks it with no installer, no root and no display. A wrongly-blamed host is
+how an unbuilt thing stops being anyone's job, and the cost of leaving one
+standing is measurable: twice now it was a criterion.
+
+
 The breakdown line has twice disagreed with itself here — "Functionality 6 of 11"
 under a header saying 14 over a section holding 5, and "Supportability 3 of 6"
 over a section holding 5 met. Both are noted rather than quietly corrected,

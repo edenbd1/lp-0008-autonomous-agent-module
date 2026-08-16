@@ -426,13 +426,28 @@ policy    <its policy account, from the manifest>
 all steps confirmed (0 failure(s))
 ```
 
+**It runs on macOS arm64 and on x86-64 Linux, out of the same package.**
+`module/agent.lgx` carries a `darwin-arm64` variant and a `linux-amd64` one, and
+the script installs the one this machine needs — the transcript above is the
+macOS run; the Linux run makes the same 42 assertions with the same result, and
+is in [`docs/basecamp.md`](docs/basecamp.md).
+
 **It needs a prepared machine, and it says which piece is missing when it is
-not.** Logos Basecamp installed (for `liblogos_core`, `logos_host`, the embedded
-modules directory and its Qt plugins), Qt 6.9.2 with `qtremoteobjects`, a
-`logos-cpp-sdk` checkout, and `nlohmann/json`. That cannot be reduced: there is
-no headless distribution of `liblogos_core` to download — it ships inside the
-app. Linux paths are in the script and are **untested**. The full list, with
-what to set and where each comes from, is in
+not.** A Logos Core runtime, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk`
+checkout, and `nlohmann/json`. On **Linux** the runtime is one command and no
+install:
+
+```sh
+./scripts/fetch-logos-core.sh      # ~278 MB, checksum-pinned
+```
+
+because the Linux Logos app is an AppImage — a SquashFS image with an ELF
+runtime in front of it — so `liblogos_core.so`, `logos_host`, the embedded
+modules and Basecamp's own Qt come out of it with no installer, no root, no FUSE
+and no display. On **macOS** it really is an app install, from the `.dmg` on the
+same release page; this README used to say that of both platforms, and that was
+a claim about the `.dmg` applied to a build nobody had looked at. The full list,
+with what to set and where each comes from, is in
 [`docs/limitations.md`](docs/limitations.md).
 
 `meta.configure` exists as a skill and takes `per_tx`, `per_period` and
@@ -683,8 +698,9 @@ one is the host.
 
 ## 8. Load the module in the Logos app (Basecamp)
 
-The loadable asset is committed: `module/agent.lgx`, one `darwin-arm64`
-variant. Check it against itself rather than trusting this page.
+The loadable asset is committed: `module/agent.lgx`, with a `darwin-arm64`
+variant and a `linux-amd64` one. Check it against itself rather than trusting
+this page.
 
 It is a binary built by hand from `module/src`, so the question that matters
 about it is not whether it is a valid package — it always was, twice while
@@ -694,9 +710,18 @@ nothing but `python3`:
 
 ```sh
 ./scripts/check-package-fresh.py
-#   ok    all 31 build inputs hash exactly as they did when the package was made
-#   ok    every one of the 654 source literals of >= 8 bytes is in the darwin-arm64 binary
+#   ok    all NN build inputs hash exactly as they did when the package was made
+#   ok    every one of the LL source literals of >= 8 bytes is in the darwin-arm64 binary
+#   ok    every one of the LL source literals of >= 8 bytes is in the linux-amd64 binary
+#   ok    every one of the LL source literals of >= 8 bytes is in the linux-arm64 binary
 ```
+
+Both variants, and that matters more than it looks: the `linux-amd64` plugin is
+built from the same translation units as the macOS one, so "the delivery code
+path is in there" is an assertion rather than a claim, and a variant built by a
+different machine cannot ride along on the other's provenance —
+`scripts/write-package-record.py` re-checks the sibling's bytes and its literals
+before it will carry its record forward.
 
 The `package` job in `.github/workflows/ci.yml` runs it, together with four
 controls that each put the repository back into a state it has actually shipped
@@ -716,7 +741,7 @@ git clone https://github.com/logos-co/logos-package && \
   git -C logos-package checkout 18b0075     # then build it — docs/basecamp.md
 
 lgx verify   module/agent.lgx     # contents match the manifest hashes
-lgx manifest module/agent.lgx     # type: core, main: agent_plugin.dylib
+lgx manifest module/agent.lgx     # type: core; darwin-arm64 and linux-amd64
 ```
 
 Basecamp 0.2.2 has no "install from file" button — its Package Manager installs
@@ -733,9 +758,12 @@ printf 'darwin-arm64' > variant
 ls   # agent_plugin.dylib  manifest.json  metadata.json  variant
 ```
 
-On Linux the directory is `~/.local/share/Logos/LogosBasecamp/modules`;
-`LOGOS_USER_DIR` overrides the base outright, which is the clean way to try
-this without touching an existing install.
+On Linux the directory is `~/.local/share/Logos/LogosBasecamp/modules` and the
+variant is `linux-amd64` — `agent_plugin.so`, not the dylib. `LOGOS_USER_DIR`
+overrides the base outright, which is the clean way to try this without touching
+an existing install. `./scripts/logos-core-headless.sh` does all of this for you
+and picks the variant for the machine it is on; doing it by hand is for a
+reviewer who wants to see the tile in the app.
 
 Building the plugin from source — the four pinned checkouts, the Qt version
 that is a *ceiling* rather than a floor, and the `otool` check that costs
@@ -1105,6 +1133,19 @@ CI cannot be mistaken for one that passed. That workflow also runs `demo.sh`
 from a clean clone and asserts the committed binary still hashes to the live
 deploy transaction.
 
+The `linux-headless` job is the one that keeps §4's second paragraph honest. It
+fetches the published Logos Basecamp AppImage on `ubuntu-latest`, checks it
+against a pinned sha256, unpacks it with no installer and no display, and runs
+`./scripts/logos-core-headless.sh storage` against the **committed**
+`module/agent.lgx` — the file a reviewer downloads — asserting the confirmation
+banner rather than only the exit code. Three controls sit under it: a truncated
+AppImage must be refused before anything is unpacked, a variant this machine
+cannot use must be refused before anything is installed, and asking the runtime
+for a module that is not there must go red at the load. It has been rehearsed
+end to end in a bare `ubuntu:24.04` amd64 container, step for step, including
+all three controls; it has not yet run on a GitHub runner, because nothing here
+has been pushed.
+
 [`.github/workflows/e2e-local-sequencer.yml`](.github/workflows/e2e-local-sequencer.yml)
 runs the whole policy lifecycle against a real standalone LEZ sequencer with
 `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a competing submission
@@ -1146,7 +1187,8 @@ module/tests                      the suites, plus the two load harnesses and
                                   the C node drivers
 module/src/owner_skills.cpp       the OWNER's end of the approval channel, which
                                   is what lets a second Logos app answer a spend
-module/agent.lgx                  the loadable package (darwin-arm64)
+module/agent.lgx                  the loadable package (darwin-arm64, linux-amd64,
+                                  linux-arm64)
 module/agent.lgx.sources          what that package was built from, written by
                                   package-basecamp.sh and checked by CI
 app/src                           the Basecamp `ui` plugin: the owner console,
@@ -1154,7 +1196,8 @@ app/src                           the Basecamp `ui` plugin: the owner console,
                                   agent logic of its own
 app/tests                         the load harness that reproduces Basecamp's
                                   PluginLoader
-app/agent-ui.lgx                  the loadable `ui` package (darwin-arm64)
+app/agent-ui.lgx                  the loadable `ui` package (darwin-arm64,
+                                  linux-amd64)
 examples/agent-console            §5 — the module's dispatcher, from a shell
 examples/skills/notary-digest     §5 — a third-party skill, outside module/src
 scripts/demo.sh                   §1 — the whole thing from a clean clone
