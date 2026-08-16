@@ -762,12 +762,17 @@ of what arrived rather than because this process said so. The server publishes a
 A2A `TaskStatusUpdateEvent` on the task's topic (`agent.update`); the client
 reads that topic and applies what the **peer** published to its own `TaskStore`
 (`agent.poll`), refusing any frame that does not name the peer as its author.
-`./scripts/delivery-in-plugin.sh peers` (exit 0, both processes, nothing spent)
-walks two loaded modules through `submitted → working → completed` that way —
-each of them having first published a forged `completed` for its own task onto
-the very topic it reads, and counted it as refused. A Delivery node receives its
-own publications, so without that rule one process could produce this transcript
-alone.
+Each agent first publishes a forged `completed` for its *own* task onto the very
+topic it reads, and asserts that the poll counted it and refused it: a Delivery
+node receives its own publications, so without that rule one process could
+produce the whole transcript alone.
+
+That runs in the **same call as the payment**. `./scripts/delivery-in-plugin.sh
+settle` (exit 0, both processes) is discovery, an A2A task, a settlement on the
+public testnet, and then both stores walking `submitted → working → completed` on
+frames the other account published — one invocation.
+`./scripts/delivery-in-plugin.sh peers` is the identical code path with no price
+and no signer, which is the free way to re-check the lifecycle half.
 
 A loaded module also **pays** for the task it was served, in the same flow and
 the same call. `./scripts/delivery-in-plugin.sh settle` runs the two modules

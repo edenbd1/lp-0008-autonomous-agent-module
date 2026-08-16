@@ -324,30 +324,47 @@ buyer                                       seller
   ok  and a public account to pay it into: Public/BzYks91a…
   ok  this agent opened an A2A task addressed to the other one
   <-  agent-spend: resyncing ~/.lp0008-agents/storage
-  <-  agent-spend: Synced to block 9382
+  <-  agent-spend: Synced to block 9470
   <-  agent-spend: 1 LEZ -> Public/BzYks91a…, window 9000, policy 6FscNXjN…
-  <-  agent-spend: spel exited 0 after 418 s
-  <-  agent-spend: submitted 23046b54…
-  <-  agent-spend: 23046b54… is in block 9389
+  <-  agent-spend: spel exited 0 after 432 s
+  <-  agent-spend: submitted ed8c3514…
+  <-  agent-spend: ed8c3514… is in block 9477
   ok  it paid the price the peer's card advertised, 1 LEZ
   ok  and settled it on chain, from inside the loaded module, with no owner in
-      the path: 23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc
+      the path: ed8c351412409c81723ea7b90e2d9cdcb0841a33234894bfff8269af374b8cb3
                                               ok  the card this agent was handed
                                                   advertises no price, so there
                                                   is nothing to pay
                                               ok  and no settlement hash came
                                                   back for it
   ok  and READ the other agent's A2A request off its own task topic
+  ok  carrying the context id the other agent minted
+  ok  this agent publishes `working` for the task it was asked to do
+  ok  then `completed`, which agent.update marks final because the state is
+  ok  and it puts a forged `completed` for its OWN task on the topic it reads
+  ok  THIS agent's own TaskStore reached `completed`, and every transition into
+      it came off the wire
+  ok  applying 2 status update(s) the peer published
+  ok  all 2 of them published by A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu,
+      the OTHER account — none by this one
+  ok  while the forged update this agent published about its own task was read
+      back off the same topic and refused (1 of them)
+  ok  and the walk it records is submitted -> working -> completed
+                                              (and the same on the seller's side)
 ```
 
-**That transcript ends where the harness ended when it was run.** The lifecycle
-step that harness 4 shows above was added afterwards, and `settle` is the one
-mode that costs money, so it has not been re-run to fold the two into one
-transcript: the same `peer` code path now continues into `agent.update` and
-`agent.poll`, and a `settle` run would print harness 4's last ten lines as well
-as these. That is a 1 LEZ command rather than a change, and
-`SUBMISSION-DRAFT.md` states it as the first thing that criterion does not
-claim.
+**All three conjuncts, one invocation.** Discovery, the payment, and the
+lifecycle running BETWEEN the two processes are the same `SCRIPT_EXIT=0` — 37
+checks on the buyer, 34 on the seller, no failures on either. The lifecycle half
+is harness 4's, unchanged; what this adds is that it happens on the far side of
+a settlement rather than in a run with no money in it.
+
+**The two sides wait for very different things here, and that had to be built
+in.** A proof blocks the paying module for as long as it takes — 432 s in this
+run — and a module that is blocked publishes nothing. So the buyer unblocks to
+find its peer's updates already waiting, while the seller has to outwait a proof
+it cannot see: it polls for 480 rounds where the buyer polls for 40, and it knows
+to because its own card carries a price. Nothing in it times the peer.
 
 The seller's two lines are the control, and they are the same code path: one
 `agent.task` call, one card, and the answer differs only because the card does.
@@ -370,8 +387,18 @@ and why this harness is not in CI. A run the day before took 767 s for the same
 instruction with another proof on the machine — always check the wall clock
 before reading a duration as a property of the work.
 
-**Settlement 7 in the submission's table is the same flow, run once before this
-one, and it is on the page for a reason that is not redundancy.** That run was
+**Settlement 9 in the submission's table is this exact flow, run once before
+this one, and it is on the page for a reason that is not redundancy.** That run
+paid, and its buyer's task really did walk `submitted → working → completed` on
+the seller's frames — and the harness reported failure, because the assertion
+counted the updates its poll LOOP applied and the poll that opens the topic had
+already applied them both on the far side of the proof. The line beneath it then
+printed `ok` for "all of them published by the other account" about an empty
+list. `docs/limitations.md` has the full account; the fix was verified against a
+signer stub that sleeps rather than proves, which costs nothing and would have
+caught it first.
+
+**Settlement 7 is an older instance of the same lesson, one layer down.** That run was
 made by a version of `delivery-in-plugin.sh` two lines short of the committed
 one — the file was edited while bash was executing it, so the branch that shipped
 had never been run start to finish. Both lines were exercised separately and both

@@ -669,22 +669,20 @@ one of them — `meta.skills` — was documented in three headers before it exis
 - [x] **MET — Two or more agents discover each other via Agent Cards, execute a
   task following the A2A lifecycle, and transfer LEZ payment autonomously, without
   owner intervention.**
-  This is a conjunction, and it is met by **two runs of one harness**, which is
-  stated first because it is the thing a reviewer should check hardest.
+  This is a conjunction of three, and **one invocation does all three**:
+  `./scripts/delivery-in-plugin.sh settle`, `SCRIPT_EXIT=0` with both processes
+  at 0. Two loaded modules discover each other's signed Agent Cards on the public
+  network, one opens an A2A task with the other, pays for it on the public
+  testnet from inside the plugin — settlement 10, `ed8c3514…`, block 9477 — and
+  then **each agent's own `TaskStore` walks to `completed` on status updates the
+  other account published**, with the frame a self-satisfying harness would use
+  sitting on the same topic, counted and refused.
+
   `module/tests/plugin_delivery_test.cpp peer` is one code path. The runner hands
   the seller a price and the buyer a signer, tells neither which the other is,
   and both then run the same code — so one binary is buyer, seller, client and
   server, and every asymmetry in the transcripts below comes from a card that
-  arrived over the network. `./scripts/delivery-in-plugin.sh
-  settle` (exit 0) ran it with a price and produced settlement 8 —
-  `23046b54…`, block 9389. `./scripts/delivery-in-plugin.sh peers` (exit 0, and
-  **both** processes at 0) ran it without one and carried the task through the
-  A2A lifecycle over the network to `completed`. Nothing has run all three
-  conjuncts in a single process invocation since the lifecycle step was added,
-  and the reason is money: a settlement is real LEZ on a testnet whose faucet is
-  gone, and re-running `settle` to fold the two transcripts into one would spend
-  it for a claim the two transcripts already carry between them. That command is
-  the one to run to close even this gap.
+  arrived over the network.
 
   Two modules loaded through `QPluginLoader`, each with its own Delivery node,
   its own LEZ account, its own wallet and its own working directory, on one
@@ -702,8 +700,8 @@ one of them — `meta.skills` — was documented in three headers before it exis
   ok this agent opened an A2A task addressed to the other one
   ok it paid the price the peer's card advertised, 1 LEZ
   ok and settled it on chain, from inside the loaded module, with no owner in
-     the path: 23046b54… (block 9389; the proof took 418 s, the module blocked
-     for all of them, and the signer waited for inclusion before it would print
+     the path: ed8c3514… (block 9477; the proof took 432 s, the module blocked
+     for 465 of them, and the signer waited for inclusion before it would print
      the hash at all)
                                               ok the card this agent was handed
                                                  advertises no price, so there is
@@ -711,10 +709,24 @@ one of them — `meta.skills` — was documented in three headers before it exis
                                               ok and no settlement hash came back
                                                  for it
   ok and READ the other agent's A2A request off its own task topic
+  ok carrying the context id the other agent minted: b7661f426c4a732957f07363ef18d996
+  ok this agent publishes `working` for the task it was asked to do
+  ok signed with its own account — which agent.update reads off this module's
+     configuration, not off the call: 9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE
+  ok then `completed`, which agent.update marks final because the state is
+  ok and it puts a forged `completed` for its OWN task on the topic it reads
+  ok THIS agent's own TaskStore reached `completed`, and every transition into
+     it came off the wire
+  ok applying 2 status update(s) the peer published
+  ok all 2 of them published by A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu,
+     the OTHER account — none by this one
+  ok while the forged update this agent published about its own task was read
+     back off the same topic and refused (1 of them)
+  ok and the walk it records is submitted -> working -> completed
+                                              (and the same eleven lines on the
+                                               seller's side, 34 checks to the
+                                               buyer's 37, 0 failures each)
   ```
-
-  That transcript ends where the harness ended at `049faea`: with the request
-  read and nothing published back. The next section is what follows it now.
 
   The two-process shape is not decoration. A Delivery node receives its own
   published messages, so a single process can satisfy any "a card arrived"
@@ -730,27 +742,11 @@ one of them — `meta.skills` — was documented in three headers before it exis
   never advanced *from the wire*, because no skill ingested one. Two skills now
   do: `agent.update` publishes an A2A `TaskStatusUpdateEvent` on the task's
   topic, and `agent.poll` reads that topic and applies what the peer published to
-  the client's own `TaskStore`. `./scripts/delivery-in-plugin.sh peers` (exit 0,
-  both processes at 0, no money spent) is that, between the same two loaded
-  modules on the public network. Each side, symmetrically:
-
-  ```
-  ok  carrying the context id the other agent minted: 14f41545b80ea18eaebf535f8b085ebe
-  ok  this agent publishes `working` for the task it was asked to do
-  ok  signed with its own account — which agent.update reads off this module's
-      configuration, not off the call: 5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ
-  ok  and not final, because `working` is not terminal
-  ok  then `completed`, which agent.update marks final because the state is
-  ok  and it puts a forged `completed` for its OWN task on the topic it reads
-  ok  THIS agent's own TaskStore reached `completed`, and every transition into
-      it came off the wire
-  ok  applying 2 status update(s) the peer published
-  ok  all of them published by BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu, the
-      OTHER account — none by this one
-  ok  while the forged update this agent published about its own task was read
-      back off the same topic and refused (1 of them)
-  ok  and the walk it records is submitted -> working -> completed
-  ```
+  the client's own `TaskStore`. It is the second half of the transcript above —
+  the same invocation, the same two processes, after the money moved — and
+  `./scripts/delivery-in-plugin.sh peers` runs the identical code path with no
+  price and no signer, which is the free way to re-check it. Each side,
+  symmetrically:
 
   Three properties of that transcript are load-bearing, and each of them closes
   a way one process could have produced the whole thing alone:
@@ -818,16 +814,22 @@ one of them — `meta.skills` — was documented in three headers before it exis
   and a module that reads "I do not know" as "no limit" pays a task nobody
   configured it for.
 
-  **Four things this does not claim, and the first is the one to read.**
+  **What settlement 9 is, since a reviewer will find it on chain between these
+  two.** It is the first attempt at the run above: the money moved, the peer's
+  updates moved the buyer's task to `completed`, and the harness reported
+  failure four lines past the payment — because the assertion counted updates
+  applied by its poll *loop*, and in `settle` mode the poll that opens the topic
+  runs on the far side of a seven-minute proof and had already applied them
+  both. The line under it then printed `ok` for "all of them published by the
+  other account" about an empty list. Both defects were mine, both were
+  invisible in the mode that had been run, and `docs/limitations.md` carries the
+  whole account including the stub — a signer that sleeps 120 s and prints 64
+  hex — that reproduces the timing for nothing and would have caught it before
+  the LEZ was spent. Settlement 10 is the run whose transcript this is.
 
-  1. **No single run has done all three conjuncts since the lifecycle step
-     existed.** The payment is settlement 8 from a `settle` run at `049faea`;
-     the lifecycle is a `peers` run of the harness as committed here. Same file,
-     same code path, two invocations — and a reviewer who requires one
-     transcript should read this criterion as open until somebody spends 1 LEZ
-     running `./scripts/delivery-in-plugin.sh settle` again. That is a command,
-     not a change.
-  2. **Nothing dispatches.** The module does not read an inbound request, look
+  **Three things this does not claim, and the first is the one to read.**
+
+  1. **Nothing dispatches.** The module does not read an inbound request, look
      up the skill it names, run it, and publish the states that work moves
      through. A serving agent here is this module plus a host that calls
      `messaging.receive`, decides, and calls `agent.update` — in these runs the
@@ -838,13 +840,13 @@ one of them — `meta.skills` — was documented in three headers before it exis
      *owner* is in either path — that is the part the criterion asks about, and
      no run here waits on a human — but "autonomous" here means unattended, not
      model-driven.
-  3. **A status update is not authenticated.** `x-logos.from` is a string the
+  2. **A status update is not authenticated.** `x-logos.from` is a string the
      publisher chose. It stops one process satisfying an assertion about a peer
      by talking to itself, which is what the harness needed; it does not stop a
      third party on a public topic publishing an update in the peer's name and
      driving a task you opened to `failed`. Cards are signed and task traffic is
      not — `docs/a2a-binding.md` §7.3, including why half a fix was refused.
-  4. **The server keeps no record of what it serves.** `agent.update` publishes
+  3. **The server keeps no record of what it serves.** `agent.update` publishes
      without consulting any local state machine, because the module's `TaskStore`
      holds tasks this agent *opened*. Ordering on the serving side is therefore
      the host's discipline; the *client's* store is where an illegal sequence is
@@ -881,6 +883,8 @@ Every figure in this table is decoded out of the settlement transaction itself. 
 | 6 | [`ffafd2b0…721bb2da`](https://explorer.testnet.lez.logos.co/transaction/ffafd2b0f4ff9c1ca411e8da2dba06052c25790fc5c83e7351fbdee4721bb2da) | 8964 | 271,471 bytes | `storage.upload` | 5 LEZ | 105 | `7HH46tXh…` at 8,000 / 60 |
 | 7 | [`e2c59e8a…c61ef3be`](https://explorer.testnet.lez.logos.co/transaction/e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be) | 9373 | 271,471 bytes | `storage.upload` | 1 LEZ | 1 | `6FscNXjN…` at 9,000 / 1 |
 | 8 | [`23046b54…ce6ca3fc`](https://explorer.testnet.lez.logos.co/transaction/23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc) | 9389 | 271,471 bytes | `storage.upload` | 1 LEZ | 2 | `6FscNXjN…` at 9,000 / 2 |
+| 9 | [`31b185e2…19942531`](https://explorer.testnet.lez.logos.co/transaction/31b185e279738ca793382e90065ad15a9f63fd992820172c2419fdc519942531) | 9456 | 271,471 bytes | `storage.upload` | 1 LEZ | 3 | `6FscNXjN…` at 9,000 / 3 |
+| 10 | [`ed8c3514…374b8cb3`](https://explorer.testnet.lez.logos.co/transaction/ed8c351412409c81723ea7b90e2d9cdcb0841a33234894bfff8269af374b8cb3) | 9477 | 271,471 bytes | `storage.upload` | 1 LEZ | 4 | `6FscNXjN…` at 9,000 / 4 |
 
 Settlement 1: the sequencer's bytes hash to `4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1`, which is the hash cited, and those bytes were found inside block 8740 and in neither block 8739 nor 8741. The transaction touches 2 accounts.
   The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is **not** the program this repository ships. **This settlement was made under a superseded deployment.** Its policy account was derived from a different ImageID and no longer exists under the program deployed today. It is a real transaction and it resolves on the explorer, but it is not evidence about the program in this repository.
@@ -898,8 +902,12 @@ Settlement 7: the sequencer's bytes hash to `e2c59e8abc8c341e08021c6814db1fd151e
   The envelope it charged, `6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
 Settlement 8: the sequencer's bytes hash to `23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc`, which is the hash cited, and those bytes were found inside block 9389 and in neither block 9388 nor 9390. The transaction touches 2 accounts.
   The envelope it charged, `6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+Settlement 9: the sequencer's bytes hash to `31b185e279738ca793382e90065ad15a9f63fd992820172c2419fdc519942531`, which is the hash cited, and those bytes were found inside block 9456 and in neither block 9455 nor 9457. The transaction touches 2 accounts.
+  The envelope it charged, `6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+Settlement 10: the sequencer's bytes hash to `ed8c351412409c81723ea7b90e2d9cdcb0841a33234894bfff8269af374b8cb3`, which is the hash cited, and those bytes were found inside block 9477 and in neither block 9476 nor 9478. The transaction touches 2 accounts.
+  The envelope it charged, `6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
 
-**2 of the 8 settlements above predate the program this repository ships.** They are kept because they are on chain and a reviewer will find them, but the criterion they support is only supported by the 6 made under the current deployment.
+**2 of the 10 settlements above predate the program this repository ships.** They are kept because they are on chain and a reviewer will find them, but the criterion they support is only supported by the 8 made under the current deployment.
 
 What the chain cannot show, stated rather than implied: the payer is a shielded account, so only the credit side of each settlement is publicly readable. `getAccount` answers with a fully-populated default account — zero balance, zero nonce, zero owner — for a shielded address exactly as it does for one that has never existed, so it is not an existence check and no debit is quoted here. The debit is constrained anyway: LEZ rule 8 requires total balance to be preserved across every program in a transaction, so a transaction that credited 25 LEZ debited 25 LEZ.
 
@@ -1354,12 +1362,12 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
 
 **Tally: 16 MET, 7 UNMET, of the 23 criteria the prize lists** — Functionality
 7 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-3 of 6. The one that moved is the A2A conjunction — two agents discovering each
-other, running the lifecycle across the network, and paying — and it moved on two
-runs of one harness rather than one, which its entry states before it states
-anything else. The move before it was the shielded account: it can now be **paid**
-at, not only spent from, and the settlement that shows it is `5942d6cd…d53a03d61`
-in block 9360.
+3 of 6. Unchanged by the last run, and that is worth saying rather than leaving
+to inference: the A2A conjunction was already marked MET on two runs of one
+harness, and what a single invocation bought was the removal of its first
+caveat, not a criterion. The move before it was the shielded account: it can now
+be **paid** at, not only spent from, and the settlement that shows it is
+`5942d6cd…d53a03d61` in block 9360.
 
 The breakdown above already read "Functionality 6 of 11" while the header said
 14 and the section held 5 — the previous revision's count was one high in the
@@ -1400,15 +1408,16 @@ settlement hash, which is what makes the buyer's hash mean something.
 The rest of the lifecycle used to stop there: the task reached `submitted`, the
 far side read it, and nothing served it back over the wire because no skill
 ingested a peer's status update into the store. `agent.update` and `agent.poll`
-are that skill pair, and `./scripts/delivery-in-plugin.sh peers` (exit 0, both
-processes) is two loaded modules walking `submitted → working → completed` on
-frames published by the other account — with each side's own forged `completed`
-sitting on the same topic, counted and refused, so the transcript cannot be
-produced by one process talking to itself. What is *not* there is dispatch:
-nothing routes an inbound request to the skill it names, so the decision to serve
-is the host's and not the module's. This paragraph previously called the whole
-path "the part that has actually run", which read as one flow and was four; it is
-now two, and both seams are named.
+are that skill pair, and they run in the same call as the payment —
+`./scripts/delivery-in-plugin.sh settle`, exit 0 with both processes at 0, walks
+each agent's own store `submitted → working → completed` on frames published by
+the other account, with each side's own forged `completed` sitting on the same
+topic, counted and refused, so the transcript cannot be produced by one process
+talking to itself. What is *not* there is dispatch: nothing routes an inbound
+request to the skill it names, so the decision to serve is the host's and not
+the module's. This paragraph previously called the whole path "the part that has
+actually run", which read as one flow and was four; it is one flow now, and the
+seam that is left is named.
 
 The limits are not incidental. The **owner cannot approve an above-threshold
 spend** after anchoring a policy, which removes half of the spending-threshold

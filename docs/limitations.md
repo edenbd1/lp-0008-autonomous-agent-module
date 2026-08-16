@@ -747,6 +747,61 @@ about a frame this node published to itself. A bounded loop that never sees
 either fails, which is the honest outcome, because if the decoy never arrived
 then "it was refused" was never true.
 
+### And then the same step cost a settlement anyway, in a mode nobody had run
+
+The section above is about an assertion that was *sometimes* wrong. This is
+about one that was *always* wrong in a mode that had never been executed, which
+is worse, and it is the reason settlement 9 exists.
+
+`./scripts/delivery-in-plugin.sh peers` and `… settle` run the same harness. The
+difference is a price and a signer, and one consequence nobody had thought
+through: in `settle` the buyer blocks inside `agent.task` for as long as the
+proof takes — 434 s in this run — and the step opens its update topic *after*
+that call returns. In `peers` that opening poll runs before the peer can have
+answered, so it applies nothing and every update lands in the loop that follows.
+In `settle` it runs seven minutes later, the peer's `working` and `completed` are
+both already on the topic, and the opening poll applies them both. The loop then
+counted its own iterations, found none, and printed:
+
+```
+ok    THIS agent's own TaskStore reached `completed`, and every transition into
+      it came off the wire
+FAIL  applying 0 status update(s) the peer published
+ok    all of them published by A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu, the
+      OTHER account — none by this one
+```
+
+Read those three lines together. The task really did walk
+`submitted → working → completed` on the peer's frames; the assertion was
+measuring **where** they were applied rather than **whether** they were. And the
+line under the failure is worse than the failure: `!authors.contains(me) &&
+authors.count(other) == authors.size()` is true of an EMPTY list, so it reported
+that all applied updates came from the other account, about zero of them. A
+fresh instance of the exact defect this repository had spent the day removing,
+added by the person removing it.
+
+**Two things this cost, and one that it did not.** It cost a settlement: 1 LEZ,
+on a testnet with no faucet, for a run that proved what it was meant to prove and
+reported failure. It cost the run's transcript, which now reads as a broken
+lifecycle to anyone who does not read the history line. What it did *not* cost is
+the second settlement — because the fix was verified without one.
+
+**The stub that should have existed first.** A `pay_signer` is a command that
+reads stdin and prints 64 hex characters. So a command that reads stdin, sleeps
+120 seconds and prints 64 hex characters reproduces the entire asymmetry — one
+module blocked in `agent.task`, its peer publishing into a topic nobody is
+reading yet — with no chain, no proof and no money. Against the pre-fix binary
+the buyer exits 1 with `applying 0`; against the fixed one both processes exit 0
+with `applying 2` and `all 2 of them published by …`. That is a five-minute test
+of the mode that costs 1 LEZ to run for real, and it did not exist until after
+the LEZ was spent.
+
+The general form, for the next person: **a harness with two modes has two
+schedules, and an assertion is only as tested as the slowest one.** Anything that
+blocks — a proof, a confirmation, an owner wait — moves every later step past
+events that used to follow it, and the assertions written against the fast mode
+keep their shape while losing their meaning.
+
 ## The node runs are local, not CI
 
 Building the Delivery and Storage libraries takes tens of minutes and the runs
