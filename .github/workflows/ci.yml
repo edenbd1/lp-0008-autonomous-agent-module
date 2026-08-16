@@ -733,6 +733,237 @@ jobs:
           [ "${fails:-0}" -ge 5 ] \
             || { echo "the mutated build exited $rc having failed ${fails:-0} assertion(s): it died before the suite could test anything, so nothing was falsified here"; exit 1; }
 
+      # Criterion: "skill failures are isolated and do not affect concurrently
+      # running skills". Until this suite, nothing in module/tests/ started a
+      # second thread against the module, so the whole of the evidence for the
+      # word "concurrently" was a sequential try/catch: invoke a thrower, then
+      # invoke something else. This runs eight skills on eight threads with a
+      # rendezvous inside `invoke()` — every call demonstrably in flight at once
+      # — and throws from two of them while the other six are still in there.
+      #
+      # The suite's own footer records the mutation that justifies it: making
+      # `invoke`'s result buffer shared across calls leaves all 201 sequential
+      # assertions in this repository green, and turns this one red.
+      - name: Skill failures are isolated from skills running at the same time
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -Wall -Wextra \
+            -I_external/logos-cpp-sdk/cpp \
+            module/tests/concurrent_skills_test.cpp \
+            module/src/agent_module_plugin.cpp \
+            module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
+            module/src/task_persistence.cpp \
+            -pthread \
+            -o concurrent_skills_test
+          ./concurrent_skills_test | tee concurrent_skills.out
+          grep -qF "skill failures stay inside the skill that failed, concurrently" \
+            concurrent_skills.out \
+            || { echo "the suite exited 0 without reporting a full pass"; exit 1; }
+          passed=$(grep -c "^  ok  " concurrent_skills.out || true)
+          echo "concurrency assertions that ran and passed: ${passed:-0}"
+          [ "${passed:-0}" -ge 30 ] \
+            || { echo "only ${passed:-0} assertion(s) ran: a suite that is not there prints the pass banner too"; exit 1; }
+          rm -f concurrent_skills.out
+
+      # Negative control. The mutation is one keyword — the per-call result
+      # buffer becomes shared — and it is the whole argument for the step above:
+      # it leaves skills_test and module_recovery_test entirely green while
+      # every caller receives a neighbour's answer. If this control ever stops
+      # going red, the concurrency suite has stopped being able to see the
+      # defect it was written for.
+      - name: Negative control — the concurrency suite is falsifiable
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("module/src/agent_module_plugin.cpp")
+          src = p.read_text()
+          old = "    result = skill->invoke(paramsJson);\n"
+          new = """    {
+              static std::mutex mutantResultMutex;
+              static std::string mutantResult;
+              std::string mine = skill->invoke(paramsJson);
+              {
+                  std::lock_guard<std::mutex> lock(mutantResultMutex);
+                  mutantResult = std::move(mine);
+              }
+              std::this_thread::yield();
+              {
+                  std::lock_guard<std::mutex> lock(mutantResultMutex);
+                  result = mutantResult;
+              }
+          }
+          """
+          if old not in src:
+              raise SystemExit("the mutation no longer matches the source: it would test nothing")
+          pathlib.Path("shared_buffer_plugin.cpp").write_text(src.replace(old, new, 1))
+          PY
+          # `! cmd` on a line of its own is not a guard under `set -e`; the two
+          # controls already in this file say why, at length.
+          ! diff -q module/src/agent_module_plugin.cpp shared_buffer_plugin.cpp > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
+          clang++ -std=c++17 -w \
+            -I_external/logos-cpp-sdk/cpp -Imodule/src \
+            module/tests/concurrent_skills_test.cpp \
+            shared_buffer_plugin.cpp \
+            module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
+            module/src/task_persistence.cpp \
+            -pthread \
+            -o broken_concurrent_test
+          set +e
+          ./broken_concurrent_test > broken_concurrent.out 2>&1; rc=$?
+          set -e
+          fails=$(grep -c '^  FAIL' broken_concurrent.out || true)
+          echo "exit=$rc  failures=${fails:-0}"
+          [ "$rc" -ne 0 ] \
+            || { echo "a module that hands callers each other's answers passed the concurrency suite"; exit 1; }
+          # The count, not just the exit code: `rc != 0` is satisfied by a
+          # binary that died before running an assertion. The mutation is
+          # recorded in the suite's own footer as 4 FAILs, so a floor of 2 is
+          # under it and says "assertions ran and went red".
+          [ "${fails:-0}" -ge 2 ] \
+            || { echo "the mutated build exited $rc having failed ${fails:-0} assertion(s): it died before the suite could test anything"; exit 1; }
+          # And the same mutation against the SEQUENTIAL suite, which is the
+          # claim this whole pair of steps rests on: it must stay GREEN there.
+          # If it ever goes red, the concurrency suite is no longer covering
+          # anything the older one does not.
+          clang++ -std=c++17 -w \
+            -I_external/logos-cpp-sdk/cpp -Imodule/src \
+            module/tests/skills_test.cpp \
+            shared_buffer_plugin.cpp \
+            module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
+            module/src/task_persistence.cpp \
+            -o sequential_under_mutation
+          ./sequential_under_mutation > sequential_under_mutation.out 2>&1 \
+            || { echo "NOTE: the sequential suite now catches this too — the concurrency step's rationale needs rewording, not deleting"; }
+          rm -f shared_buffer_plugin.cpp broken_concurrent.out sequential_under_mutation.out
+
+      # Criterion: "the agent recovers from node restarts without losing pending
+      # task state". `module_recovery_test` covers it by destroying an
+      # AgentModuleImpl and building another over the same directory — a
+      # teardown, which runs every destructor and leaves the process alive. This
+      # one forks, execs itself, waits for the child to reach a state, SIGKILLs
+      # it, asserts WIFSIGNALED/WTERMSIG, and then asks a THIRD process what
+      # survived. It also measures the boundary in both directions: what a kill
+      # takes is the invoke that had not returned.
+      #
+      # It re-executes argv[0], so it has to be run as a path — `./` is enough.
+      - name: A node that is killed, not asked to stop
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -Wall -Wextra \
+            -I_external/logos-cpp-sdk/cpp \
+            module/tests/restart_kill_test.cpp \
+            module/src/agent_module_plugin.cpp \
+            module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
+            module/src/task_persistence.cpp \
+            -pthread \
+            -o restart_kill_test
+          ./restart_kill_test | tee restart_kill.out
+          grep -qF "a SIGKILLed node keeps every task its invokes had finished" restart_kill.out \
+            || { echo "the suite exited 0 without reporting a full pass"; exit 1; }
+          # The kill itself has to be visible in the log, or a suite that
+          # silently stopped forking would pass on its remaining assertions.
+          grep -qF "killed with SIGKILL" restart_kill.out \
+            || { echo "no assertion reported a SIGKILL: the suite is not killing anything"; exit 1; }
+          passed=$(grep -c "^  ok  " restart_kill.out || true)
+          echo "restart assertions that ran and passed: ${passed:-0}"
+          [ "${passed:-0}" -ge 15 ] \
+            || { echo "only ${passed:-0} assertion(s) ran"; exit 1; }
+          rm -f restart_kill.out
+
+      # Negative control. A snapshot path that is not stable across restarts —
+      # a plausible bug, and the one that shows why a killed process is not a
+      # destroyed object: in ONE process both "lives" share a pid and therefore
+      # share a file, so `module_recovery_test`'s own criterion assertion ("and
+      # both pending tasks are still there, which is the criterion") stays GREEN
+      # under this mutation. Here the criterion assertion is what fails.
+      - name: Negative control — the SIGKILL suite is falsifiable
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("module/src/agent_module_plugin.cpp")
+          src = p.read_text()
+          old = "std::move(port), dir + kTaskSnapshotFile, logos::agent::posixSnapshotFilePort());"
+          new = ('std::move(port), dir + kTaskSnapshotFile + "." + std::to_string(::getpid()),\n'
+                 '        logos::agent::posixSnapshotFilePort());')
+          if old not in src:
+              raise SystemExit("the mutation no longer matches the source: it would test nothing")
+          pathlib.Path("unstable_path_plugin.cpp").write_text(src.replace(old, new, 1))
+          PY
+          ! diff -q module/src/agent_module_plugin.cpp unstable_path_plugin.cpp > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
+          clang++ -std=c++17 -w \
+            -I_external/logos-cpp-sdk/cpp -Imodule/src \
+            module/tests/restart_kill_test.cpp \
+            unstable_path_plugin.cpp \
+            module/src/delivery_runtime.cpp \
+            module/src/spend_marker.cpp \
+            module/src/messaging_skills.cpp \
+            module/src/storage_skills.cpp \
+            module/src/inference.cpp \
+            module/src/wallet_skills.cpp \
+            module/src/program_skills.cpp \
+            module/src/agent_skills.cpp \
+            module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
+            module/src/task_persistence.cpp \
+            -pthread \
+            -o broken_restart_kill_test
+          set +e
+          ./broken_restart_kill_test > broken_restart_kill.out 2>&1; rc=$?
+          set -e
+          fails=$(grep -c '^  FAIL' broken_restart_kill.out || true)
+          echo "exit=$rc  failures=${fails:-0}"
+          [ "$rc" -ne 0 ] \
+            || { echo "a module whose snapshot path changes every restart passed the SIGKILL suite"; exit 1; }
+          # Recorded in the suite's footer as 9 FAILs; the floor is under it.
+          [ "${fails:-0}" -ge 4 ] \
+            || { echo "the mutated build exited $rc having failed ${fails:-0} assertion(s): it died before the suite could test anything"; exit 1; }
+          # And the assertion that names the criterion is one of the ones lost,
+          # which is the specific thing the in-process suite cannot notice.
+          grep -qF "FAIL and finds all three pending tasks, which is the criterion" \
+            broken_restart_kill.out \
+            || { echo "the mutation went red on other checks but not on the criterion itself"; exit 1; }
+          rm -f unstable_path_plugin.cpp broken_restart_kill.out
+
       # Same argument for inference. No model here and none needed: what has to
       # hold is that a backend which is down, slow, incoherent or actively
       # hostile cannot move money, and a fake answers that better than a real
@@ -961,6 +1192,13 @@ jobs:
       #     with caching and it is a real option, not an impossibility — it is
       #     simply not claimed here until it has been run and seen green.
       #     Driven meanwhile by scripts/exercise-nodes.sh, which owns the paths.
+      #     That Nim build now happens on a runner in
+      #     .github/workflows/alongside-companion-modules.yml, which needs
+      #     liblogosdelivery for logos-delivery-module and builds it from
+      #     source at the pinned revision. It is scheduled rather than on the
+      #     push path precisely because of the cost above. If it stays green,
+      #     this driver becomes a step of that job rather than an entry in
+      #     this list — but that is a claim to make after the runs, not here.
       #
       #   module/tests/plugin_delivery_test.cpp
       #   module/tests/logos_core_delivery_test.cpp
@@ -1359,6 +1597,407 @@ jobs:
             || { echo "it went red for some other reason"; cat cite.out; exit 1; }
           git checkout -- docs/basecamp.md
           rm -f cite.out
+
+  # WHY THIS JOB EXISTS
+  #
+  # `app/` was in no workflow. This file did not contain that string anywhere,
+  # which made three things true at once:
+  #
+  #   * `app/agent-ui.lgx` — the package a reviewer installs to get a window, and
+  #     the evidence for the usability criterion — was a committed binary nothing
+  #     tied to any source. module/agent.lgx has shipped stale twice; this one had
+  #     none of the machinery that was built to stop it.
+  #   * `app/tests/ui_plugin_load_test.cpp` was run by nothing. It is the only
+  #     executable evidence that the owner-facing half of this submission loads at
+  #     all, and its own header records it being watched failing against two other
+  #     real Qt plugins — a suite that is never run is a suite whose green is a
+  #     memory.
+  #   * scripts/check-docs.py's rule that "a suite absent from CI cannot be
+  #     mistaken for one that passed" read `module/tests/` only, so nothing even
+  #     reported the second point.
+  #
+  # The rule now reads both directories and this job is what makes it satisfiable.
+  #
+  # WHAT IT RUNS AGAINST: the committed package, unpacked, and not a rebuild. A
+  # rebuild here would test the source; what a reviewer installs is the .lgx.
+  #
+  # AND WHY IT IS HERE RATHER THAN ON THE SCHEDULE that
+  # `.github/workflows/alongside-companion-modules.yml` runs on. Its whole cost is
+  # an apt line, one aqtinstall of the Qt `linux-headless` already downloads, and
+  # one compile of one harness — the shape of job this file is already made of.
+  # The artefact it gates is the one a reviewer installs, and a package goes stale
+  # on the push that changes `app/src`, so the gate has to fire on that push and
+  # not the next morning.
+  owner-console:
+    name: The shipped owner console was built from the committed source, and loads
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------------
+      # Part 1: the package agrees with the source committed beside it.
+      #
+      # `scripts/check-package-fresh.py` is the same script the `package` job
+      # runs, and this is not a duplicate of that step. It prints one banner per
+      # committed artefact — the module package, the harness, and the console —
+      # and the `package` job asserts the first two. A single OK covering all
+      # three would go green on the console the first time its section was
+      # skipped, which is the failure mode this repository has already met on the
+      # harness. So the console's banner is asserted here, by the job that owns
+      # the console.
+      # ---------------------------------------------------------------------
+      - name: The console package agrees with the source committed beside it
+        run: |
+          set -e -o pipefail
+          ./scripts/check-package-fresh.py 2>&1 | tee console.out
+          grep -q "^OK the shipped owner console was built from the source" console.out \
+            || { echo "check-package-fresh.py exited 0 without reporting a full pass on the console"; exit 1; }
+          if grep -q SKIPPED console.out; then
+            echo "check-package-fresh.py reported SKIPPED"; exit 1
+          fi
+
+          # How many build inputs the console has, and how many it says it
+          # checked. Asked of the script's own APP_SOURCE_DIRS / APP_SOURCE_FILES
+          # / APP_SOURCE_SUFFIXES rather than spelled out here, for the reason the
+          # `package` job's equivalent block records: three hand-copied mirrors of
+          # a definition, kept in agreement by nobody, disagree by one the day a
+          # build input gains an unlisted extension — and the message then says
+          # "some were skipped", which is false and sends an operator to the
+          # package instead of to this arithmetic.
+          on_disk=$(python3 -c "
+          import importlib.util, os, sys
+          spec = importlib.util.spec_from_loader('cpf', loader=None)
+          m = importlib.util.module_from_spec(spec)
+          src = open('scripts/check-package-fresh.py', encoding='utf-8').read()
+          head = src.split('\ndef ', 1)[0].split('\nclass ', 1)[0]
+          exec(compile(head, 'check-package-fresh.py', 'exec'), m.__dict__)
+          n = 0
+          for d in m.APP_SOURCE_DIRS:
+              for root, _, files in os.walk(d):
+                  n += sum(1 for f in files if f.endswith(tuple(m.APP_SOURCE_SUFFIXES)))
+          n += sum(1 for f in m.APP_SOURCE_FILES if os.path.isfile(f))
+          if n < m.APP_MIN_INPUTS:
+              sys.exit('the inventory definition matched %d files: it is not seeing this tree' % n)
+          print(n)")
+          got=$(sed -n 's/^OK the shipped owner console.*commit: \([0-9][0-9]*\) build input(s) recorded.*/\1/p' console.out)
+          echo "console build inputs on disk=$on_disk  checked=${got:-none}"
+          [ -n "$got" ] || { echo "it exited 0 without saying how many it checked"; exit 1; }
+          [ "$got" -eq "$on_disk" ] \
+            || { echo "it checked $got of the $on_disk build inputs its own APP_SOURCE_DIRS/APP_SOURCE_FILES/APP_SOURCE_SUFFIXES select — some were skipped"; exit 1; }
+
+          # One checked variant per variant the package ships. Derived from the
+          # manifest, not written down: the packages went from one variant to two
+          # to three, and a number typed here is a number that stops being true on
+          # the commit that adds the fourth — in the direction that passes.
+          want=$(python3 -c "import json,tarfile;print(len(json.loads(tarfile.open('app/agent-ui.lgx','r:gz').extractfile('manifest.json').read())['main']))")
+          got=$(sed -n 's/^OK the shipped owner console.*unchanged, \([0-9][0-9]*\) variant(s).*/\1/p' console.out)
+          echo "console variants shipped=$want  checked=${got:-none}"
+          [ -n "$got" ] && [ "$got" -eq "$want" ] \
+            || { echo "$want console variant(s) shipped and ${got:-0} checked"; exit 1; }
+
+          # And that the second layer really read the binaries. 111 literals
+          # today; a floor rather than an equality, because literals come and go
+          # with ordinary edits and only "essentially none" is a defect.
+          lits=$(sed -n 's/.*and \([0-9][0-9]*\) literal(s) found in each of them.*/\1/p' console.out)
+          echo "console literals cross-checked against each shipped binary=${lits:-none}"
+          [ -n "$lits" ] && [ "$lits" -ge 60 ] \
+            || { echo "the consoles were barely read: ${lits:-0} literals"; exit 1; }
+          rm -f console.out
+
+      # Control 1, and it is the defect itself rather than an analogue: move the
+      # source, repackage nothing. This is the state module/agent.lgx has actually
+      # shipped in twice, and the state app/agent-ui.lgx had no way of leaving.
+      - name: Negative control — console source moves, package does not
+        run: |
+          set -euo pipefail
+          sed -i 's|lp0008AgentConsole|lp0008AgentConsoleV2|' app/src/agent_console.cpp
+          ! git diff --quiet app/src/agent_console.cpp \
+            || { echo "the control edited nothing; agent_console.cpp no longer has that name"; exit 1; }
+          set +e
+          ./scripts/check-package-fresh.py > stale.out 2>&1; rc=$?
+          set -e
+          cat stale.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a stale console package passed the freshness check"; exit 1; }
+          grep -q "app/src/agent_console.cpp has changed since the console was packaged" stale.out \
+            || { echo "it went red without naming the file that changed"; exit 1; }
+          # And the literal check fired on EVERY shipped console, not just the one
+          # that happens to be sorted first. The number is derived from the
+          # manifest for the reason above.
+          want=$(python3 -c "import json,tarfile;print(len(json.loads(tarfile.open('app/agent-ui.lgx','r:gz').extractfile('manifest.json').read())['main']))")
+          n=$(grep -c "source literals are absent from the .* console" stale.out)
+          [ "$n" -eq "$want" ] \
+            || { echo "the literal check fired on $n of the $want shipped consoles"; exit 1; }
+          git checkout -- app/src/agent_console.cpp
+          rm -f stale.out
+
+      # Control 2. The record is a record, so the obvious way past it is to
+      # rewrite it by hand and never rebuild — which is the only thing anyone
+      # would do if the record were the whole guard. Require the second layer to
+      # catch it alone; without this step the literal check is decoration sitting
+      # behind a hash comparison that already fired.
+      - name: Negative control — a rewritten console record cannot cover for a stale binary
+        run: |
+          set -euo pipefail
+          sed -i 's|lp0008AgentConsole|lp0008AgentConsoleV2|' app/src/agent_console.cpp
+          python3 - <<'PY'
+          import hashlib, json
+          rec = json.load(open("app/agent-ui.lgx.sources"))
+          p = "app/src/agent_console.cpp"
+          assert p in rec["built_from"], "the record does not cover the file being forged"
+          rec["built_from"][p] = hashlib.sha256(open(p, "rb").read()).hexdigest()
+          json.dump(rec, open("app/agent-ui.lgx.sources", "w"), indent=2, sort_keys=True)
+          print("record rewritten by hand for", p, "- nothing was rebuilt")
+          PY
+          set +e
+          ./scripts/check-package-fresh.py > forged.out 2>&1; rc=$?
+          set -e
+          cat forged.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a hand-written console record was enough to pass"; exit 1; }
+          # Layer 1 must be SATISFIED — otherwise this proves nothing about layer
+          # 2 — and layer 2 must be the thing that went red.
+          grep -q "build inputs hash exactly as they did when the console was packaged" forged.out \
+            || { echo "the forgery did not actually satisfy the record check"; exit 1; }
+          grep -q "source literals are absent from the darwin-arm64 console" forged.out \
+            || { echo "the literal check is not what caught it"; exit 1; }
+          git checkout -- app/src/agent_console.cpp app/agent-ui.lgx.sources
+          rm -f forged.out
+
+      # Control 3, and it is the one the module package never had. Put another
+      # platform's binary under a variant name and make the record agree with
+      # those bytes, so the sha256 comparison and the record-versus-header
+      # comparison both PASS and only "is this the architecture the variant name
+      # claims" can fire. app/README.md tells an installer to flatten one variant
+      # into the plugins directory and says in as many words that a directory
+      # holding another platform's binary "looks complete and can never load"; the
+      # install path for the module made exactly this mistake once already.
+      - name: Negative control — a variant holding another platform's binary
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, io, json, tarfile
+          src = tarfile.open("app/agent-ui.lgx", "r:gz")
+          members = [(m, src.extractfile(m).read() if m.isfile() else None)
+                     for m in src.getmembers()]
+          by = dict((m.name, d) for m, d in members)
+          dylib = by["variants/darwin-arm64/agent_ui.dylib"]
+          out = tarfile.open("app/agent-ui.lgx", "w:gz", format=tarfile.GNU_FORMAT)
+          for m, data in members:
+              if m.name == "variants/linux-amd64/agent_ui.so":
+                  data, m.size = dylib, len(dylib)
+              out.addfile(m, io.BytesIO(data)) if data is not None else out.addfile(m)
+          out.close()
+          rec = json.load(open("app/agent-ui.lgx.sources"))
+          v = rec["variants"]["linux-amd64"]
+          v["sha256"], v["bytes"], v["format"] = \
+              hashlib.sha256(dylib).hexdigest(), len(dylib), "Mach-O arm64"
+          json.dump(rec, open("app/agent-ui.lgx.sources", "w"), indent=2, sort_keys=True)
+          print("variants/linux-amd64/agent_ui.so is now the darwin Mach-O, and the")
+          print("record agrees with it: same sha256, same length, format 'Mach-O arm64'")
+          PY
+          set +e
+          ./scripts/check-package-fresh.py > arch.out 2>&1; rc=$?
+          set -e
+          cat arch.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a variant holding another platform's binary passed"; exit 1; }
+          grep -q "is Mach-O arm64 and the variant name says ELF x86-64" arch.out \
+            || { echo "it went red for some other reason"; exit 1; }
+          # The control's own control: the checks it was arranged to keep quiet
+          # must actually have been quiet, or "only the architecture check fired"
+          # is a sentence about a run in which everything fired.
+          if grep -q "the package holds a different build from the one that was recorded" arch.out; then
+            echo "the sha256 check fired too, so this did not isolate the architecture check"; exit 1
+          fi
+          git checkout -- app/agent-ui.lgx app/agent-ui.lgx.sources
+          rm -f arch.out
+
+      # ---------------------------------------------------------------------
+      # Part 2: the shipped console loads the way Basecamp loads it.
+      #
+      # app/tests/ui_plugin_load_test.cpp drives what Basecamp's PluginLoader
+      # does, in order, and asserts on each step: the binary binds against
+      # liblogos_core and fails to bind without it, the IID is the one the host
+      # casts against, the embedded manifest says `type: ui` and declares the
+      # `agent` core module, qobject_cast succeeds across the plugin boundary, and
+      # createWidget(nullptr) returns this plugin's console and destroyWidget
+      # takes it back.
+      #
+      # Everything below is the same toolchain the `linux-headless` job uses, for
+      # the same reasons written out there: official Qt 6.9.2 from aqtinstall
+      # because Basecamp bundles 6.9.2 and Qt refuses a plugin whose minor exceeds
+      # the host's — ubuntu's own Qt 6.4 would refuse this plugin and the refusal
+      # would look like a defect in the plugin — and liblogos_core out of the
+      # published AppImage, which is where the symbols this plugin deliberately
+      # leaves undefined actually come from.
+      # ---------------------------------------------------------------------
+      - name: What a bare runner does not have
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # libgl1 and glib are not optional: official Qt's libQt6Gui and
+          # libQt6Core reference glX* and g_main_context_* by soname, and without
+          # them the link below fails inside Qt with "undefined reference to
+          # glXGetConfig", which reads as a problem with the harness and is not.
+          # Measured in a stock ubuntu:24.04 container, where exactly that
+          # happened. squashfs-tools is for the AppImage, which cannot run itself
+          # to unpack when the host architecture is emulated.
+          #
+          # libharfbuzz0b is here for a different reason and it is not obvious:
+          # the AppImage ships libharfbuzz-SUBSET and not libharfbuzz itself, so
+          # Basecamp's own libQt6Gui expects the system to have it. Without it the
+          # harness dies before main() with "libharfbuzz.so.0: cannot open shared
+          # object file" and exit 127 — which is not a failing assertion, it is no
+          # assertion at all. Measured in a stock ubuntu:24.04 container.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            --no-install-recommends squashfs-tools \
+            libgl1 libglx0 libopengl0 libegl1 libxkbcommon0 libfontconfig1 \
+            libfreetype6 libdbus-1-3 libharfbuzz0b
+          # glib carries the `t64` suffix since 24.04's time_t transition and did
+          # not before it. Named both ways so an image bump does not break a step
+          # that has nothing to do with it.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            --no-install-recommends libglib2.0-0t64 \
+            || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                 --no-install-recommends libglib2.0-0
+
+      - name: Qt 6.9.2, the version Basecamp bundles
+        run: |
+          set -euo pipefail
+          python3 -m venv /opt/aqt
+          /opt/aqt/bin/pip -q install aqtinstall
+          # qtbase carries QtWidgets, which is all this target needs;
+          # qtremoteobjects is the module half's prerequisite and not this one's.
+          # `icu` is not optional — official Qt for Linux links ICU by soname and
+          # no runner image ships it.
+          /opt/aqt/bin/python -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 \
+            --archives qtbase icu --outputdir /opt/Qt
+          # Bare `ls` lines fail with `No such file or directory` and nothing
+          # else, and the likeliest cause is not that this repository is wrong but
+          # that the Qt mirrors retired a point release. Say so, once, where it
+          # will be read.
+          for want in include/QtWidgets/QApplication lib/libQt6Widgets.so.6 \
+                      plugins/platforms/libqoffscreen.so; do
+            test -e "/opt/Qt/6.9.2/gcc_64/$want" || {
+              echo "aqtinstall did not deliver $want for Qt 6.9.2 linux_gcc_64."
+              echo "Nothing in this repository selects that: the Qt mirrors retire"
+              echo "point releases and aqtinstall is installed unpinned above. Check"
+              echo "that 6.9.2 is still published before looking for a defect here."
+              exit 1
+            }
+          done
+
+      - name: The Logos Core runtime, as upstream published it
+        run: ./scripts/fetch-logos-core.sh
+
+      - name: Build the load harness
+        run: |
+          set -euo pipefail
+          QT=/opt/Qt/6.9.2/gcc_64
+          # -Wall -Wextra and deliberately not -Werror, for the reason every other
+          # compile in this file gives: the compiler is whatever ubuntu-latest
+          # ships and -Werror turns a toolchain upgrade into a red build on a
+          # change that is not ours. The assertions are what gate the merge.
+          clang++ -std=c++17 -Wall -Wextra -fPIC \
+            -I$QT/include -I$QT/include/QtCore -I$QT/include/QtGui \
+            -I$QT/include/QtWidgets \
+            app/tests/ui_plugin_load_test.cpp \
+            -L$QT/lib -lQt6Widgets -lQt6Gui -lQt6Core -ldl \
+            -Wl,-rpath,$QT/lib \
+            -o ui_plugin_load_test
+          test -x ui_plugin_load_test
+
+      # THE SHIPPED CONSOLE, unpacked out of the committed package. Not a rebuild:
+      # a rebuild would test app/src, and what a reviewer installs is the .lgx.
+      - name: The shipped console loads the way Basecamp loads it
+        run: |
+          set -euo pipefail
+          # Listed to a file, not piped into `grep -q`. Under `set -o pipefail`
+          # grep exits at its first match, tar dies of SIGPIPE, the pipeline
+          # reports 141, and the check reads as "no linux-amd64 variant" on a
+          # package that has one. This repository has hit that three times.
+          tar tzf app/agent-ui.lgx > pkg.list
+          grep -qxF 'variants/linux-amd64/agent_ui.so' pkg.list \
+            || { echo "app/agent-ui.lgx has no linux-amd64 console"; cat pkg.list; exit 1; }
+          rm -f pkg.list
+          mkdir -p console && tar xzf app/agent-ui.lgx -C console variants/linux-amd64
+
+          CORE="$PWD/_external/logos-core/squashfs-root/usr/lib"
+          test -f "$CORE/liblogos_core.so"
+          # Basecamp's OWN Qt, out of the AppImage, ahead of the Qt this harness
+          # was linked against. `-Wl,-rpath` writes DT_RUNPATH, which is searched
+          # after LD_LIBRARY_PATH, so this decides which Qt the process ends up
+          # with — and the one that matters is the one the app itself ships,
+          # loaded by the same liblogos_core the plugin binds to. Both are 6.9.2;
+          # the point is that there is one of them.
+          set +e
+          QT_QPA_PLATFORM=offscreen \
+          LD_LIBRARY_PATH="$CORE" \
+          QT_PLUGIN_PATH="$CORE/qt/plugins" \
+            ./ui_plugin_load_test \
+              console/variants/linux-amd64/agent_ui.so \
+              "$CORE/liblogos_core.so" > ui.out 2>&1
+          rc=$?
+          set -e
+          cat ui.out
+          echo "exit=$rc"
+          [ "$rc" -eq 0 ] || { echo "the shipped console did not load"; exit 1; }
+          # The exit code is not the whole assertion. `failures` starts at 0, so a
+          # harness that ran NO steps prints the confirmation banner and returns
+          # 0 — the trap `cargo test` set in the `rust` job and `demo.sh` set in
+          # `binaries`, closed the same way, with a count. 16 steps today,
+          # counted on the committed linux-amd64 console; a floor well under it,
+          # because steps come and go with ordinary edits and only "essentially
+          # none" is a defect.
+          grep -q "all steps confirmed (0 failure(s))" ui.out \
+            || { echo "it exited 0 without reporting a full pass"; exit 1; }
+          passed=$(grep -c "^  ok  " ui.out || true)
+          echo "console load steps that ran and passed: ${passed:-0}"
+          [ "${passed:-0}" -ge 12 ] \
+            || { echo "only ${passed:-0} step(s) ran: a harness that is not there prints the pass banner too"; exit 1; }
+
+      # And the control the harness's own README records being run by hand: the
+      # same binary, against this repository's `core` module plugin. A core plugin
+      # loads perfectly, casts to its own interfaces perfectly, and is not a
+      # window — which is the state this repository was in before app/ existed.
+      # Without this step "the console loads" is a sentence about a harness nobody
+      # has watched refuse anything.
+      - name: Negative control — the same harness refuses the core module
+        run: |
+          set -euo pipefail
+          mkdir -p coremod && tar xzf module/agent.lgx -C coremod variants/linux-amd64
+          CORE="$PWD/_external/logos-core/squashfs-root/usr/lib"
+          set +e
+          QT_QPA_PLATFORM=offscreen \
+          LD_LIBRARY_PATH="$CORE" \
+          QT_PLUGIN_PATH="$CORE/qt/plugins" \
+            ./ui_plugin_load_test \
+              coremod/variants/linux-amd64/agent_plugin.so \
+              "$CORE/liblogos_core.so" > core.out 2>&1
+          rc=$?
+          set -e
+          cat core.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "the core module passed a harness that checks for a window"; exit 1; }
+          # Red for the right reason, and not because the harness fell over before
+          # it asserted anything: a binary that dies in a static initialiser also
+          # exits non-zero. It has to have reached the `ui` type check and said
+          # so.
+          # Single-quoted `grep -F`, because the sentence being looked for
+          # contains backticks and a double-quoted "type is `ui`" is a command
+          # substitution that runs `ui` and searches for its output — which is
+          # empty, so grep matches every line and the guard passes on anything.
+          # Measured on the committed core module: 5 failures, of which the type
+          # check and the null cast are the two that say it is not a window.
+          grep -q "^  FAIL" core.out \
+            || { echo "it exited $rc without failing a single step, so nothing was falsified here"; exit 1; }
+          grep -qF 'type is `ui`' core.out \
+            || { echo "it never reached the type check"; exit 1; }
+          grep -qF 'qobject_cast to IComponent returned null' core.out \
+            || { echo "it never reached the cast Basecamp reports on"; exit 1; }
+          rm -rf coremod core.out ui.out console
 
   # A real Storage node, on the runner, doing the thing the skill claims.
   #
@@ -2113,3 +2752,184 @@ jobs:
           grep -q "the chain says block" /tmp/wa.out \
             || { echo "05 went red without contradicting the recorded block:"; \
                  sed -e 's/\x1b\[[0-9;]*m//g' /tmp/wa.out | tail -20; exit 1; }
+
+  # Use case 3 verifies against the public testnet the way `use-cases` above
+  # does, and it is here for the same reason that job is: 02, 04 and 05 ran in
+  # CI and 01 and 03 ran in nothing, so two of the five illustrative use cases
+  # were claims about scripts nobody re-ran.
+  #
+  # 03 is the cheap half of that pair — `spel`, and reads of a chain that is
+  # already live. 01 is not: it needs `liblogosdelivery`, for which upstream
+  # publishes no release asset, so it has to be built from source at a pinned
+  # revision. That is a forty-minute Nim build, which is why 01 runs as the last
+  # step of the job that has already paid for one, in
+  # `.github/workflows/alongside-companion-modules.yml`. If
+  # `logos-messaging/logos-delivery` ever publishes a release asset the way
+  # `logos-storage-nim` does, 01 becomes a ten-minute job and belongs back here.
+  use-case-03:
+    name: The spending ceiling is account data, and the chain keeps it
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # WHY THIS IS A SEPARATE JOB AND NOT A STEP IN `use-cases`
+      #
+      # It could be a step there — it needs the same spel and the same chain,
+      # and it builds spel a second time to stand alone, which is the cost of
+      # this choice and is paid in parallel rather than in series. What it buys
+      # is that a red X names this use case instead of "the use-cases job",
+      # which is the same argument the `skills` job makes for one step per
+      # suite; and 03 is the one use case with a section it deliberately does
+      # not run, which is easier to state about a job than about a step
+      # somebody else is editing.
+      #
+      # WHAT THIS JOB DOES NOT COVER, SAID FIRST
+      #
+      # Section 6 of that script — the two refusals, 6005 and 6014 — needs the
+      # agent's own shielded key, which lives outside the repository and must
+      # never be on a shared runner. So this job runs with
+      # THRESHOLD_NO_AGENT_KEY=1 and section 6 does not run. That is not hidden:
+      # the script prints a marker, changes its closing banner, and the last
+      # step below is a control proving the flag is load-bearing rather than
+      # decorative. What IS covered is everything that reads the chain — the
+      # anchored envelope, the program that owns it, the single policy address
+      # per agent, the recorded attack that never landed, and every settlement
+      # charging its ledger by exactly its price.
+
+      - name: The system library spel's smartcard dependency links against
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkgconf libpcsclite-dev
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            vendor/spel/target
+            target
+          key: spel-uc03-${{ runner.os }}-${{ hashFiles('vendor/spel/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: spel-uc03-${{ runner.os }}-
+
+      - name: Build spel
+        run: |
+          set -euo pipefail
+          # -p spel, not the workspace: vendor/spel also contains
+          # spel-ffi-compile-test, whose build script generates bindings against
+          # a WalletCore API that has since moved.
+          cargo build --release --locked -p spel --manifest-path vendor/spel/Cargo.toml
+          echo "SPEL_BIN=$PWD/vendor/spel/target/release/spel" >> "$GITHUB_ENV"
+          # Not --help: spel exits 1 on it. Ask it to do the smallest real piece
+          # of work instead, which also proves this spel can parse the ELF the
+          # script below hands it.
+          "$PWD/vendor/spel/target/release/spel" program-id artifacts/programs/agent_verifier.bin > /dev/null
+
+      - name: Use case 3 — the envelope, the ledger and the refusal that never landed
+        run: |
+          set -euo pipefail
+          set +e
+          THRESHOLD_NO_AGENT_KEY=1 AGENT_HOMES=/nonexistent \
+            ./scripts/use-cases/03-spending-threshold.sh > uc03.out 2>&1; rc=$?
+          set -e
+          clean=$(sed -e 's/\x1b\[[0-9;]*m//g' uc03.out)
+          printf '%s\n' "$clean" | tail -60
+          [ "$rc" -eq 0 ] || { echo "use case 3 exited $rc"; exit 1; }
+          if grep -q SKIPPED uc03.out; then echo "03 reported SKIPPED"; exit 1; fi
+
+          # HOW MANY, not merely whether. The manifests grow, so the number is
+          # derived from them rather than written here, and the invariant is
+          # that none was silently passed over. Data rows counted the way
+          # scripts/use-cases/lib.sh counts them (`rows_of`): `wc -l` counts
+          # NEWLINES, and a manifest whose last row has no trailing newline is
+          # one short — these files are appended to by scripts, so that happens.
+          rows=$(awk -F'\t' 'NR>1 && NF>1 {n++} END {print n+0}' artifacts/a2a-task.tsv)
+          got=$(printf '%s\n' "$clean" | grep -c 'the chain holds it, in block' || true)
+          echo "manifest rows=$rows  settlements checked=${got:-0}"
+          [ "${got:-0}" -eq "$rows" ] && [ "${got:-0}" -ge 1 ] \
+            || { echo "03 checked ${got:-0} of $rows settlements — some were skipped"; exit 1; }
+
+          # The four claims this use case is actually about.
+          for want in \
+            "the anchored envelope is what this repository says it is" \
+            "the same account the manifest records — derived, not copied" \
+            "owned by exactly the program above — the owner anchored this envelope" \
+            "one agent, one policy account — no limit is a seed of the address"; do
+            printf '%s\n' "$clean" | grep -qF "$want" \
+              || { echo "03 did not report: $want"; exit 1; }
+          done
+
+          # Its own controls, each of which makes an assertion above mean
+          # something. Without the third in particular, "the attack is not on
+          # chain" is equally true of a chain that is answering nothing at all.
+          for want in \
+            "control: a hash that cannot exist returns null" \
+            "program_owner is all zeros: never initialised, so init would accept it" \
+            "control: the same getTransaction finds"; do
+            printf '%s\n' "$clean" | grep -qF "$want" \
+              || { echo "03's control did not run: $want"; exit 1; }
+          done
+          printf '%s\n' "$clean" \
+            | grep -qE 'recorded attack\(s\) on the live program, none of them on chain' \
+            || { echo "03 checked no recorded attack against the live program"; exit 1; }
+
+          # And it said, in as many words, what it did not do.
+          printf '%s\n' "$clean" | grep -qF "SECTION 6 NOT RUN: no agent key on this machine" \
+            || { echo "03 did not declare that section 6 was skipped, so this job"; \
+                 echo "cannot tell a skipped refusal from a demonstrated one"; exit 1; }
+          printf '%s\n' "$clean" | grep -qF "Use case 3, partially" \
+            || { echo "03 closed with the full banner on a partial run"; exit 1; }
+          rm -f uc03.out
+
+      # The control for the skip itself. A flag that turns a section off is
+      # worth nothing unless the section is shown to be ON without it — a
+      # THRESHOLD_NO_AGENT_KEY that had been misspelled, or a section 6 that had
+      # quietly stopped asserting anything, would produce the same green above.
+      - name: Negative control — without the flag, the missing agent key is a failure
+        run: |
+          set -euo pipefail
+          set +e
+          AGENT_HOMES=/nonexistent \
+            ./scripts/use-cases/03-spending-threshold.sh > nokey.out 2>&1; rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || {
+            echo "03 passed on a machine with no agent key and no flag set."
+            echo "Section 6 is then asserting nothing, and the run above is"
+            echo "skipping a section that was not running anyway."; exit 1; }
+          sed -e 's/\x1b\[[0-9;]*m//g' nokey.out \
+            | grep -qF "cannot attempt a refused spend" \
+            || { echo "it failed, but not on the agent key:"; tail -20 nokey.out; exit 1; }
+          rm -f nokey.out
+
+      # The other control: the assertions in the first step are claims that this
+      # script can tell a manifest the chain agrees with from one it does not.
+      # Alter one field and it must go red.
+      - name: Negative control — an envelope the chain contradicts
+        run: |
+          set -euo pipefail
+          # The column is NAMED, not numbered. artifacts/agents.tsv has gained
+          # three columns over its life, and a positional edit here would start
+          # rewriting a different field without anything saying so. A header
+          # this cannot find is an error, not a silent no-op: a control that
+          # edits nothing passes, and passing is what it must not do.
+          awk -F'\t' -v OFS='\t' '
+            NR==1 { for (i = 1; i <= NF; i++) h[$i] = i
+                    if (!h["per_tx"] || !h["category"]) {
+                      print "artifacts/agents.tsv has no per_tx/category column" > "/dev/stderr"
+                      exit 3 }
+                    print; next }
+            { if ($h["category"] == "blockchain") $h["per_tx"] = $h["per_tx"] + 1
+              print; n++ }
+            END { if (!n) { print "no data rows to alter" > "/dev/stderr"; exit 4 } }
+          ' artifacts/agents.tsv > /tmp/agents-bad.tsv
+          cmp -s artifacts/agents.tsv /tmp/agents-bad.tsv \
+            && { echo "the control altered nothing, so it controls nothing"; exit 1; }
+          set +e
+          A2A_AGENTS=/tmp/agents-bad.tsv THRESHOLD_NO_AGENT_KEY=1 AGENT_HOMES=/nonexistent \
+            ./scripts/use-cases/03-spending-threshold.sh > bad.out 2>&1; rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || {
+            echo "03 accepted a per-transaction ceiling the chain contradicts, so"
+            echo "its comparison against the policy account is not comparing"; exit 1; }
+          sed -e 's/\x1b\[[0-9;]*m//g' bad.out | grep -qE 'the chain says .*, the manifest says' \
+            || { echo "it failed, but not on the envelope:"; tail -20 bad.out; exit 1; }
+          rm -f bad.out /tmp/agents-bad.tsv

@@ -1,0 +1,432 @@
+name: alongside the companion modules
+
+# `./scripts/logos-core-headless.sh --alongside` — this repository's agent module
+# loaded and RUNNING in one Logos Core runtime beside the wallet, storage and
+# messaging modules, each of them built on the runner from its own published
+# revision, and each proved unedited.
+#
+# It ran in no job at all until this file. `docs/limitations.md` says of the
+# criterion: "It was run, it exits 0, and the transcript is in `basecamp.md`."
+# A transcript in a document is exactly the kind of evidence this repository
+# refuses everywhere else — it is a claim about a run nobody can repeat on
+# demand — and `build-companions/` is gitignored, so a reviewer cannot even
+# inspect what was built. This is that sentence turned into something that runs.
+#
+# SEPARATE FROM ci.yml, for the reason e2e-local-sequencer.yml is separate. That
+# file is minutes and gates every push; the one job here builds Nim, Go, four
+# CMake trees and a Qt of its own from cold, and is allowed 120 minutes. Putting
+# it on every push would make the fast gate slow, and a gate people learn to
+# ignore is worse than no gate. So it runs on a schedule and on demand. All
+# three of these are CI; only one of them can be fast.
+#
+# Not at e2e-local-sequencer.yml's 05:20, deliberately: two long workflows
+# started on the same minute compete for the same runner allowance, and the one
+# that loses is the one nobody is watching.
+#
+# Use case 01 runs here, as the last step, rather than in ci.yml beside 02 to
+# 05. The comment on that step says why at length: it needs `liblogosdelivery`,
+# which upstream publishes no release asset for, so it has to be built from
+# source — which is precisely the Nim build this job has already done. Running
+# it anywhere else costs that build a second time.
+#
+# It has no skip path, for the reason both other workflows give: a job that
+# completes through one reports green without having run, which is worse than
+# red because nobody looks again. If the companions cannot be built, this fails.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '40 2 * * *'
+
+concurrency:
+  group: alongside-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  alongside:
+    name: The agent loads and runs beside the wallet, storage and messaging modules
+    runs-on: ubuntu-latest
+    # Measured at about six minutes for `build-companion-modules.sh` alone on a
+    # warm darwin-arm64 tree. A CI runner is cold on every axis this touches:
+    # nimble's dependency tree, go-wallet-sdk's `make static-library`, the Qt
+    # download, four CMake builds and the cpp-generator's own sub-build. 120 is
+    # a ceiling that lets it fail rather than be cancelled, which matters: a
+    # cancelled job reports as red for a reason nobody can read.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # WHY THIS JOB EXISTS
+      #
+      # `docs/limitations.md` says of this criterion: "It was run, it exits 0,
+      # and the transcript is in basecamp.md." A transcript in a document is
+      # exactly the kind of evidence this repository refuses everywhere else —
+      # it is a claim about a run nobody can repeat on demand, and
+      # `build-companions/` is gitignored, so a reviewer cannot even inspect
+      # what was built. Either the criterion is checked by something that runs,
+      # or the sentence in that document is the only thing holding it up.
+      #
+      # The `--check` half of `logos-core-headless.sh` is not what is wanted
+      # here. `--alongside` is a claim about four modules in one runtime, and
+      # only running them says anything about it: a plugin built against a Qt
+      # whose minor version exceeds the host's LOADS SUCCESSFULLY and then has
+      # no process behind it, so every call times out and hands back an empty
+      # QVariant. docs/basecamp.md records that happening. "Loaded" is not the
+      # claim being made; "runs alongside" is.
+
+      - name: What a bare runner does not have
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            --no-install-recommends squashfs-tools nlohmann-json3-dev \
+            cmake ninja-build unzip xz-utils
+
+      # `logos-wallet-module` links `status-im/go-wallet-sdk` as a c-archive, so
+      # Go is a build dependency of a module this repository does not own.
+      # Pinned to the toolchain action rather than the image's default: the
+      # image's Go version moves without notice, and "the wallet module stopped
+      # building" is not a message anyone wants to receive about a Go bump.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      # Nim, for `liblogosdelivery`. `nimble` puts itself in ~/.nimble/bin and
+      # does NOT add it to PATH; `build-companion-modules.sh` prepends that
+      # directory itself and fails by name if nim is still not found, so this
+      # only has to install it.
+      - name: Nim and nimble, for the Logos Delivery library
+        run: |
+          set -euo pipefail
+          curl -fsSL https://nim-lang.org/choosenim/init.sh -o init.sh
+          sh init.sh -y
+          echo "$HOME/.nimble/bin" >> "$GITHUB_PATH"
+          rm -f init.sh
+      - name: Nim is on PATH and says which version
+        run: |
+          set -euo pipefail
+          # Not a decoration. choosenim exits 0 having installed nothing when
+          # its download is rate-limited, and the failure then surfaces forty
+          # minutes later inside a Nim compile with no mention of choosenim.
+          command -v nim nimble
+          nim --version | head -n1
+
+      # Same Qt as `linux-headless`, and for the same reason: 6.9.2 is what
+      # Basecamp bundles, and Qt refuses any plugin whose minor version exceeds
+      # the host's. `icu` is not optional — official Qt for Linux links ICU 73
+      # by soname and no runner image ships it, so without the archive every
+      # link ends in `undefined reference to ucnv_open_73`, inside the
+      # cpp-generator sub-build, which makes it look like a generator problem.
+      - name: Qt 6.9.2, the version Basecamp bundles
+        run: |
+          set -euo pipefail
+          python3 -m venv /opt/aqt
+          /opt/aqt/bin/pip -q install aqtinstall
+          /opt/aqt/bin/python -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 \
+            -m qtremoteobjects --archives qtbase icu --outputdir /opt/Qt
+          for want in lib/cmake/Qt6/Qt6Config.cmake libexec/moc; do
+            test -e "/opt/Qt/6.9.2/gcc_64/$want" || {
+              echo "aqtinstall did not deliver $want for Qt 6.9.2 linux_gcc_64."
+              echo "Nothing in this repository selects that: the Qt mirrors retire"
+              echo "point releases and aqtinstall is installed unpinned above."
+              exit 1
+            }
+          done
+
+      # THE PINS ARE READ OUT OF docs/basecamp.md's TABLE? No — they are written
+      # here, and that is a deliberate difference from the other pins in this
+      # workflow. These four are checkouts of the BUILD TOOLCHAIN, not of the
+      # modules under test; `build-companion-modules.sh` pins the modules
+      # themselves and `logos-core-headless.sh` re-reads those pins out of that
+      # script at run time (see the negative control below, which proves it).
+      # The toolchain revisions live in docs/basecamp.md §"The four checkouts,
+      # pinned" and are copied here; if that table moves, this moves.
+      - name: The four Logos checkouts, at the revisions docs/basecamp.md pins
+        run: |
+          set -euo pipefail
+          mkdir -p ~/logos/src && cd ~/logos/src
+          git clone -q https://github.com/logos-co/logos-module-builder
+          git -C logos-module-builder checkout -q 5396513
+          git clone -q https://github.com/logos-co/logos-cpp-sdk
+          git -C logos-cpp-sdk checkout -q c87f343
+          git clone -q https://github.com/logos-co/logos-module
+          git -C logos-module checkout -q 1947784
+          git clone -q https://github.com/logos-co/logos-package
+          git -C logos-package checkout -q 18b0075
+          {
+            echo "LOGOS_MODULE_BUILDER_ROOT=$HOME/logos/src/logos-module-builder"
+            echo "LOGOS_CPP_SDK_ROOT=$HOME/logos/src/logos-cpp-sdk"
+            echo "LOGOS_MODULE_ROOT=$HOME/logos/src/logos-module"
+            echo "QT_ROOT=/opt/Qt/6.9.2/gcc_64"
+          } >> "$GITHUB_ENV"
+
+      # `lgx` is the packager Basecamp's own packages are built with, and it
+      # stays in that checkout's `build/` — it is never on PATH afterwards,
+      # which docs/basecamp.md records because a reader following it got
+      # `command not found: lgx`. `build-companion-modules.sh` looks in exactly
+      # that place, so LGX_BIN is set explicitly rather than relied on.
+      - name: The lgx packager
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+        run: |
+          set -euo pipefail
+          cd ~/logos/src/logos-package
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_PREFIX_PATH="$QT_ROOT"
+          cmake --build build -j"$(nproc)"
+          # FOUND, not assumed. This is the one step in this job whose build
+          # recipe is not written down anywhere in the repository — every
+          # consumer of it (module/package-basecamp.sh,
+          # build-companion-modules.sh, docs/basecamp.md) only ever says the
+          # binary ends up at `build/lgx`. So the binary is located and the job
+          # fails HERE, naming that, rather than forty minutes later inside a
+          # packaging step reporting that lgx is missing.
+          LGX=$(find build -maxdepth 3 -type f -name lgx -perm -u+x | head -1)
+          [ -n "$LGX" ] || {
+            echo "logos-package built and produced no 'lgx' binary under build/."
+            echo "Every consumer in this repository expects it there. If upstream"
+            echo "changed its build layout, this step is what has to change with it."
+            find build -maxdepth 3 -type f -perm -u+x | head -20
+            exit 1
+          }
+          echo "LGX_BIN=$PWD/$LGX" >> "$GITHUB_ENV"
+
+      # The code generator that writes each module's `generated_code/`. Its own
+      # build script lives in the SDK checkout; where it puts the binary is the
+      # SDK's business, so it is located afterwards rather than spelled out.
+      - name: logos-cpp-generator
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+          CMAKE_PREFIX_PATH: /opt/Qt/6.9.2/gcc_64
+        run: |
+          set -euo pipefail
+          bash "$HOME/logos/src/logos-cpp-sdk/cpp-generator/compile.sh"
+          GEN=$(find "$HOME/logos/src" -type f -name logos-cpp-generator -perm -u+x \
+                2>/dev/null | head -1)
+          [ -n "$GEN" ] || {
+            echo "compile.sh exited 0 and produced no logos-cpp-generator."
+            echo "scripts/build-companion-modules.sh needs it and defaults to"
+            echo "~/logos/src/build/cpp-generator/bin/logos-cpp-generator."
+            exit 1
+          }
+          echo "LOGOS_CPP_GENERATOR=$GEN" >> "$GITHUB_ENV"
+
+      # The Logos Storage library, as upstream built and published it — the same
+      # pinned, checksummed release asset the `storage-node` job uses, unpacked
+      # into the layout `build-companion-modules.sh` and use case 01 both expect
+      # (`build/libstorage.so` beside `library/libstorage.h`). A release asset is
+      # mutable, so "we downloaded something" is not the claim being made.
+      - name: The Logos Storage library, as upstream built and published it
+        env:
+          STORAGE_VERSION: v0.4.4
+          STORAGE_SHA256: d2f8e0207e4688c58a89adfb2bbb9b2ae0688879815427372e467bdbc4f05102
+        run: |
+          set -euo pipefail
+          curl -fsSL -o libstorage.zip \
+            "https://github.com/logos-storage/logos-storage-nim/releases/download/${STORAGE_VERSION}/libstorage-linux-amd64-${STORAGE_VERSION}.zip"
+          echo "${STORAGE_SHA256}  libstorage.zip" | sha256sum -c -
+          mkdir -p _external/logos-storage-nim/build _external/logos-storage-nim/library
+          unzip -o -q libstorage.zip -d unpacked
+          mv unpacked/libstorage.so _external/logos-storage-nim/build/
+          mv unpacked/libstorage.h  _external/logos-storage-nim/library/
+          rm -rf unpacked libstorage.zip
+
+      - name: The Logos Core runtime, as upstream published it
+        run: ./scripts/fetch-logos-core.sh
+
+      # The heavy step. Keyed on the hash of the script that holds every pin, so
+      # a changed revision — of any of the five repositories it fetches, or of
+      # nim-taskpools — invalidates the cache automatically. That is why the key
+      # is the file rather than a version string somebody has to remember to
+      # bump: this repository has been bitten by a warm target/ hiding a build
+      # that no longer works, and a cache keyed on nothing in particular is the
+      # same trap.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build-companions/src
+            build-companions/logos-delivery
+            build-companions/build
+            ~/.nimble
+          key: companions-${{ runner.os }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
+          restore-keys: companions-${{ runner.os }}-
+
+      - name: Build the three companion modules from their published sources
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/build-companion-modules.sh > companions.out 2>&1; rc=$?
+          set -e
+          tail -60 companions.out
+          [ "$rc" -eq 0 ] || { echo "the companion build exited $rc"; exit 1; }
+          # The packages by name, not by glob. A package that failed to build
+          # would drop out of a glob silently, and the run below would then be
+          # proving that the agent loads beside whatever happened to be there.
+          for m in storage_module delivery_module wallet_module; do
+            [ -f "build-companions/pkg/$m.lgx" ] \
+              || { echo "no build-companions/pkg/$m.lgx"; exit 1; }
+          done
+          rm -f companions.out
+
+      # THE STEP THE JOB IS FOR. It passes by RUNNING: four modules in one
+      # runtime, with no display, no Logos app install and no GUI.
+      - name: All four modules in one Logos Core runtime, headless
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/logos-core-headless.sh storage --alongside > alongside.out 2>&1; rc=$?
+          set -e
+          tail -120 alongside.out
+          [ "$rc" -eq 0 ] || { echo "the --alongside run exited $rc"; exit 1; }
+          if grep -q SKIPPED alongside.out; then
+            echo "logos-core-headless.sh reported SKIPPED"; exit 1
+          fi
+          grep -q "all steps confirmed (0 failure(s))" alongside.out \
+            || { echo "no confirmation banner"; exit 1; }
+
+          # "Loaded" is not the claim. Each companion must ANSWER across the
+          # runtime's own transport with a non-empty method table — which only a
+          # live module process can do, and which is what distinguishes a module
+          # that is running from one whose host died on a Qt mismatch.
+          for m in storage_module delivery_module wallet_module; do
+            grep -q "'$m' answers across the runtime's transport" alongside.out \
+              || { echo "$m did not answer across the transport; it said:"; \
+                   grep -E "$m" alongside.out || true; exit 1; }
+            grep -q "and '$m' is still loaded beside it" alongside.out \
+              || { echo "$m was not still loaded after the agent was driven"; exit 1; }
+          done
+
+          # And the other half of the criterion, "without requiring
+          # modifications to those modules", which the run itself checks and
+          # which is therefore asserted here rather than described.
+          for m in storage_module delivery_module wallet_module; do
+            grep -q "unmodified $m @ .*the revision pinned for it" alongside.out \
+              || { echo "the unmodified check did not run for $m"; exit 1; }
+          done
+
+          # The agent is still the subject. Same assertions the linux-headless
+          # job makes, so that a run which loaded three companions and lost the
+          # agent cannot pass here.
+          grep -q "and to the policy account it was configured with" alongside.out \
+            || { echo "it never read the envelope back out of meta.status"; exit 1; }
+          grep -q "shipped, sha256" alongside.out \
+            || { echo "it did not use the committed harness"; exit 1; }
+
+      # ---- controls, because every assertion above is a claim that this run
+      # ---- can tell a good state from a bad one, and an assertion never
+      # ---- observed failing is not evidence.
+
+      - name: Negative control — a modified companion is refused
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+        run: |
+          set -euo pipefail
+          repo=build-companions/src/logos-storage-module
+          # A TRACKED file, and one the build does not write: the check is
+          # `git status --porcelain --untracked-files=no`, so touching an
+          # untracked path would prove nothing.
+          f=$(git -C "$repo" ls-files | grep -E '\.(cpp|h|json|txt)$' | head -1)
+          [ -n "$f" ] || { echo "no tracked file to modify in $repo"; exit 1; }
+          printf '\n// control\n' >> "$repo/$f"
+          set +e
+          ./scripts/logos-core-headless.sh storage --alongside > modified.out 2>&1; rc=$?
+          set -e
+          git -C "$repo" checkout -- "$f"
+          [ "$rc" -ne 0 ] || {
+            echo "a modified companion was accepted — the 'unmodified' half of the"
+            echo "criterion is not being checked by the run above"; exit 1; }
+          grep -q "tracked files differ from the published revision" modified.out \
+            || { echo "it refused, but not for the reason this control is about:"; \
+                 tail -20 modified.out; exit 1; }
+          rm -f modified.out
+
+      - name: Negative control — a clean checkout of the wrong revision is refused
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+        run: |
+          set -euo pipefail
+          repo=build-companions/src/logos-storage-module
+          head=$(git -C "$repo" rev-parse HEAD)
+          # A clean checkout of a DIFFERENT commit is the case the first control
+          # cannot reach: nothing is modified, `git status` is silent, and the
+          # only thing wrong is which commit it is. Until the pin was read out
+          # of build-companion-modules.sh this passed.
+          git -C "$repo" fetch -q --depth 2 origin "$head"
+          git -C "$repo" checkout -q "$head^" 2>/dev/null || {
+            echo "the pinned revision has no parent to check out; skip is not an"
+            echo "option here — fetch more depth instead"; exit 1; }
+          set +e
+          ./scripts/logos-core-headless.sh storage --alongside > wrongrev.out 2>&1; rc=$?
+          set -e
+          git -C "$repo" checkout -q "$head"
+          [ "$rc" -ne 0 ] || {
+            echo "a clean checkout of the wrong commit was accepted"; exit 1; }
+          grep -q "the pinned revision is" wrongrev.out \
+            || { echo "it refused, but not on the revision:"; tail -20 wrongrev.out; exit 1; }
+          rm -f wrongrev.out
+
+      # ---- use case 01, and why it is a step of this job ----------------------
+      #
+      # It lives in THIS job and the reason is `liblogosdelivery`. Use case 01
+      # drives a real Logos Storage node and a real Logos Messaging node, and
+      # the messaging half needs that library — for which upstream publishes no
+      # release asset, unlike `logos-storage-nim`. So it is built from source at
+      # `logos-delivery-module`'s own flake.lock pin, with the nim-taskpools
+      # correction, which is precisely what the companion build above already
+      # did. Running 01 here costs one `cc` and one round trip to each network;
+      # running it in a job of its own costs that Nim build a second time.
+      #
+      # If logos-messaging/logos-delivery ever publishes a release asset, move
+      # this into its own job and pin it by sha256 the way the storage library
+      # above is pinned.
+      - name: Use case 1 — a file encrypted, stored, addressed and sent back
+        env:
+          STORAGE_SRC: ${{ github.workspace }}/_external/logos-storage-nim
+          DELIVERY_SRC: ${{ github.workspace }}/build-companions/logos-delivery
+        run: |
+          set -euo pipefail
+          # The library this points at has to be there before the script says so
+          # in prose: the path is a default in build-companion-modules.sh and a
+          # default is a thing that moves.
+          [ -f "$DELIVERY_SRC/build/liblogosdelivery.so" ] \
+            || { echo "no liblogosdelivery under $DELIVERY_SRC — the companion"; \
+                 echo "build's layout moved and this step's DELIVERY_SRC has to move"; \
+                 echo "with it"; ls -R "$DELIVERY_SRC" 2>/dev/null | head -20; exit 1; }
+          set +e
+          ./scripts/use-cases/01-file-vault.sh > uc01.out 2>&1; rc=$?
+          set -e
+          sed -e 's/\x1b\[[0-9;]*m//g' uc01.out | tail -60
+          [ "$rc" -eq 0 ] || { echo "use case 1 exited $rc"; exit 1; }
+          if grep -q SKIPPED uc01.out; then echo "01 reported SKIPPED"; exit 1; fi
+          clean=$(sed -e 's/\x1b\[[0-9;]*m//g' uc01.out)
+          # The exit code is not the assertion. `FAILED` starts at 0, so a script
+          # that ran none of its checks exits 0 too — the same trap the
+          # storage-node job closes by counting `ok` lines. Twelve on a clean
+          # run; a floor of 10, because deleting a check on purpose is an
+          # ordinary edit and "essentially none" is the defect.
+          oks=$(printf '%s\n' "$clean" | grep -c '^  OK ' || true)
+          echo "checks that ran and passed: ${oks:-0}"
+          [ "${oks:-0}" -ge 10 ] \
+            || { echo "only ${oks:-0} of use case 1's checks ran"; exit 1; }
+          # And the four that carry the use case's actual claims, by name: the
+          # ciphertext is not the plaintext, a real node gave back an address,
+          # that address crossed a real messaging topic, and the bytes came back
+          # and decrypted to the original.
+          for want in \
+            "the marker does not appear in the bytes the node is about to be handed" \
+            "the node stored it, and gave the address back" \
+            "the address reached the Logos Messaging network" \
+            "the published payload decodes to exactly the content address" \
+            "byte-for-byte the ciphertext that was stored" \
+            "and it is the owner's original document"; do
+            printf '%s\n' "$clean" | grep -qF "$want" \
+              || { echo "use case 1 did not report: $want"; exit 1; }
+          done
+          # The control the script runs on itself: the marker must be findable
+          # in the plaintext, or "it is not in the ciphertext" is a claim about
+          # the search rather than about the encryption.
+          printf '%s\n' "$clean" | grep -qF "control: the marker is findable in the plaintext" \
+            || { echo "the encryption control did not run"; exit 1; }
+          rm -f uc01.out

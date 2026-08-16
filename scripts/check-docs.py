@@ -67,9 +67,16 @@ Five classes of rot, all of which this repository has shipped:
 
   9. A truncated hash citation whose tail is not that hash's tail.
 
- 10. A file under `module/tests/` that no workflow runs or names, against
-     README §10's claim that CI "accounts for every file under module/tests/".
-     Three of them — the transport harnesses — were in neither workflow at all.
+ 10. A test file that no workflow runs or names, under `module/tests/` or
+     `app/tests/`, against README §10's claim that CI "accounts for every file
+     under module/tests/". Three of the module's — the transport harnesses —
+     were in neither workflow at all. `app/tests/` was worse: the rule read one
+     directory, `.github/workflows/ci.yml` did not contain the string `app/`
+     even once, and so the only harness that drives the owner-facing package —
+     the evidence for the usability criterion — was run by nothing and reported
+     by nothing. A directory the rule does not look in is a directory where a
+     suite absent from CI cannot be mistaken for one that passed, because it is
+     not mistaken for anything at all.
 
 WHAT THIS CANNOT DO, stated so nobody reads a green run as more than it is:
 it cannot tell whether a line that exists is the line the sentence meant. Only
@@ -1086,7 +1093,7 @@ for doc in DOCS:
                     % (doc, lineno, head, tail, head,
                        "/".join(sorted(h[-8:] for h in cands))))
 
-# 10. A SUITE UNDER module/tests/ THAT CI NEITHER RUNS NOR NAMES.
+# 10. A SUITE THAT CI NEITHER RUNS NOR NAMES.
 #
 # README §10 says ci.yml "accounts for every file under module/tests/ so that a
 # suite absent from CI cannot be mistaken for one that passed". Three files —
@@ -1094,24 +1101,57 @@ for doc in DOCS:
 # — appeared in neither workflow at all, so that sentence was false about the
 # three harnesses that cost the most to run.
 #
-# Falsification: add a file to module/tests/ and this goes red until CI runs it
-# or the accounting block names it and says what it needs.
+# AND IT READ ONE DIRECTORY. `app/tests/ui_plugin_load_test.cpp` is the harness
+# that reproduces what Basecamp's PluginLoader does to the owner console — the
+# binding of the host's symbols, the IID the cast goes through, the `ui` type
+# that decides which directory the package is installed into, and the widget
+# coming back and being taken back again. It is the only executable evidence
+# that the owner-facing half of this submission loads at all, its own header
+# records it being watched failing against two other real Qt plugins, and
+# nothing ran it: `.github/workflows/ci.yml` does not contain the string `app/`
+# anywhere. The rule that exists so that "a suite absent from CI cannot be
+# mistaken for one that passed" said nothing about it, because it was looking
+# at one directory and the file is in the other.
+#
+# So the rule reads both. The directories are listed rather than globbed for
+# `*/tests`, so that a third one has to be added here deliberately — a rule
+# whose scope grows by accident is a rule nobody can state.
+#
+# Falsification: add a file to either directory and this goes red until CI runs
+# it or the accounting block names it and says what it needs. Watched red, in
+# exactly that state: with app/tests/ added to the tuple below and ci.yml
+# untouched, this reports ui_plugin_load_test.cpp and exits 1.
 WORKFLOWS = " ".join(
     open(os.path.join(ROOT, ".github/workflows", w), encoding="utf-8").read()
     for w in sorted(os.listdir(os.path.join(ROOT, ".github/workflows")))
     if w.endswith((".yml", ".yaml")))
 
-for _f in sorted(os.listdir(os.path.join(ROOT, "module/tests"))):
-    if not _f.endswith((".cpp", ".c")):
-        continue
-    if _f in WORKFLOWS:
-        extra["suite"] += 1
-    else:
+TEST_DIRS = ("module/tests", "app/tests")
+for _d in TEST_DIRS:
+    _full = os.path.join(ROOT, _d)
+    # A directory that is not there is not an empty one. `os.listdir` on a
+    # missing path raises, and the temptation on adding a second directory is to
+    # guard it with `if os.path.isdir(...)` — which turns "app/tests was renamed
+    # and this rule stopped covering anything" into a silent pass, which is the
+    # same defect one level up from the one this rule exists for.
+    if not os.path.isdir(_full):
         failures.append(
-            "module/tests/%s is neither run by nor named in any workflow. "
-            "README §10 claims every file here is accounted for, so either "
-            "run it or name it in ci.yml's accounting block with what it needs."
-            % _f)
+            "%s is in this rule's list of test directories and is not a "
+            "directory. Either it moved, in which case this list has to move "
+            "with it, or the rule is now covering nothing where it says it "
+            "covers something." % _d)
+        continue
+    for _f in sorted(os.listdir(_full)):
+        if not _f.endswith((".cpp", ".c")):
+            continue
+        if _f in WORKFLOWS:
+            extra["suite"] += 1
+        else:
+            failures.append(
+                "%s/%s is neither run by nor named in any workflow. "
+                "README §10 claims every file here is accounted for, so either "
+                "run it or name it in ci.yml's accounting block with what it "
+                "needs." % (_d, _f))
 
 # --- how many jobs ci.yml runs, against how many the prose claims -----------
 #
@@ -1135,7 +1175,14 @@ for _doc in DOCS:
     if not os.path.exists(_path):
         continue
     for _i, _line in enumerate(open(_path, encoding="utf-8"), 1):
-        if "ci.yml" not in _line:
+        # `ci.yml` OR the workflow's display name. The gate was keyed on the
+        # filename alone and two sentences in solutions/LP-0008.md say "The `CI`
+        # workflow runs eight jobs" without ever spelling the path -- so the
+        # check that exists to stop this number drifting watched the documents
+        # that happened to mention a file, not the documents that make the
+        # claim. A gate keyed on how a sentence is phrased is a gate with a
+        # phrasing it does not cover.
+        if "ci.yml" not in _line and "`CI` workflow" not in _line:
             continue
         for _m in re.finditer(r"\*{0,2}(\w+)\*{0,2}\s+jobs\b", _line):
             _raw = _m.group(1).lower()

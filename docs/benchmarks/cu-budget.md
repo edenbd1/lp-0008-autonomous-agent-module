@@ -333,11 +333,21 @@ Stated as gaps, not buried.
    ≈ 12.2 ms to verify one privacy-preserving receipt.
 4. **No devnet numbers.** Everything above is the public testnet at
    `https://testnet.lez.logos.co`.
-5. **The other on-chain operations the agent can perform are the same two rows.**
-   A "program call" by this agent *is* `spend` or `spend_approved`; a "token
-   transfer" is the chained `authenticated_transfer / Transfer`. The agent has
-   no third kind of on-chain operation, so the table is complete rather than
-   selective.
+5. **Program calls and token transfers are the same two rows.** A "program
+   call" by this agent *is* `spend` or `spend_approved`; a "token transfer" is
+   the chained `authenticated_transfer / Transfer`.
+
+   **Deployment is the third kind, and it has no cycle figure here.** The
+   criterion names transfers, calls *and* deployments, and `program.deploy` is a
+   registered, dispatchable skill -- so "the table is complete rather than
+   selective", which this list used to end on, was wrong on its own terms while
+   the byte table two sections up carried a deployment row. What is measurable
+   about a deploy is its size, because deploying runs no guest: the transaction
+   is `SHA256(u32_le(len) || bytecode)` and the sequencer stores the bytes. The
+   440,881-byte deploy of `agent_verifier.bin` is in that byte table. A cycle
+   count for it would be zero user cycles, which is a true number and a
+   misleading one to print in a column about proving work, so it is stated here
+   instead.
 
 ## Reproducing the cycle counts
 

@@ -64,8 +64,8 @@
 > been re-signed *at* `1`, so the control mutated nothing; and the paying agent's
 > period-9000 ledger read `2` on chain while `artifacts/a2a-task.tsv` recorded
 > prices summing to `1`. **Both are fixed in the tree and both fixes are checked
-> against the chain**, the workflow has eight jobs rather than six, and all eight
-> are green. The evidence is in the CI criterion under
+> against the chain**, the workflow has ten jobs rather than six, and the eight
+> that predate this pass are green. The evidence is in the CI criterion under
 > [Supportability](#supportability), and the command that answers it without
 > trusting this document is
 > `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.
@@ -87,8 +87,10 @@
 > an owner approved and denied a spend over Logos Messaging.
 >
 > CI is on that list now, and it was not on the last three versions of it. The
-> `CI` workflow's **eight** jobs are green on `main`: the last four completed,
-> uncancelled runs each return eight jobs and eight `success` conclusions. That is
+> `CI` workflow defines **ten** jobs and the eight that existed when this was read
+> are green on `main`: the last four completed,
+> uncancelled runs each return eight jobs and eight `success` conclusions, and the
+> two added since are why the command below is the answer rather than this. That is
 > written here as an observation about the commits
 > those runs ran on, not as a property of the repository, because it has been red repeatedly
 > for real reasons — a job that could not build `spel`, a coverage floor added by
@@ -1500,8 +1502,8 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   [`docs/limitations.md`](docs/limitations.md), which is where anything that does
   not work is written down first, and the A2A transport binding spec
   [`docs/a2a-binding.md`](docs/a2a-binding.md). Gated rather than asserted:
-  `./scripts/check-docs.py` (exit 0) reports `checked 485 paths, 184 link targets,
-  7 line citations, 71 symbol citations … across 13 documents / every path, link
+  `./scripts/check-docs.py` (exit 0) reports `checked 626 paths, 187 link targets,
+  13 line citations, 71 symbol citations … across 14 documents / every path, link
   target, line citation and symbol citation resolves`.
 
   One caveat a reader will see before they read any of it: the repository is
@@ -1751,29 +1753,43 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   run, which is worse than red because nobody looks at it again. If this cannot
   run, it fails.
 
-  **Green on `main`, and the citation needs a caveat rather than a badge.** The
-  two completed green runs are
-  [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823)
-  (`success`, 3 h 05 m, by dispatch) and
-  [31929846814](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31929846814)
-  (`success`, 2 h 16 m, by schedule). Both ran on `main`; **neither ran on a
-  commit that still exists.** This branch's history was rewritten, and
-  `git merge-base --is-ancestor` returns non-zero for both of the SHAs those runs
-  record — `d65a95a` and `91154ef`. They are evidence that this workflow passes
-  against a real sequencer, and they are *not* evidence about the tree you
-  cloned. This document said "at the commit this document describes"; that was
-  the third time a hash written into a rebased branch stopped naming anything,
-  which is the reason the top of this file pins nothing.
+  **This workflow has run green, and no green run of it is clickable from this
+  branch.** Both halves are true, they are different claims, and this entry
+  states them apart rather than letting one stand in for the other.
 
-  A fresh run on the current line of history —
-  [31950647965](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31950647965),
-  dispatched on `main` at `20a4d7c`, which **is** an ancestor of `HEAD` — was
-  still `in_progress` when this paragraph was written, well inside the 2–3 hours
-  the two completed runs took. **No green is asserted for it here, because none
-  has been seen.** Ask, rather than reading this line:
-  `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
+  *What has been demonstrated.* Two measured runs: `31916748823` (`success`,
+  3 h 05 m, by dispatch) and `31929846814` (`success`, 2 h 16 m, by schedule),
+  and they are not the only green runs this workflow has. Each ran the full
+  lifecycle against a real standalone sequencer at `RISC0_DEV_MODE: 0` and
+  produced real proofs over those hours. That happened, and the measurements
+  from it stay in this document.
 
-  Of the runs that did finish, fourteen steps ran and one skipped — the
+  *What a reader can check by clicking.* No green run — not on this branch. The
+  head commit of every green run this workflow has, `d65a95a` and `91154ef`
+  among them, was removed when this branch's history was rewritten, and
+  `git merge-base --is-ancestor` returns non-zero for each of them. That is why
+  the two ids above are printed as ids and not as links.
+  `gh run view 31916748823` still fetches the logs for anyone who wants them;
+  what this document will not do is offer that as something you can hold the
+  tree you cloned to, because a run against a commit you cannot check out is not
+  evidence about the branch you can. An earlier version of this paragraph said "at the
+  commit this document describes"; that was the third time a hash written into a
+  rebased branch stopped naming anything, which is the reason the top of this
+  file pins nothing.
+
+  A run of this workflow whose commit this branch **does** contain —
+  [31950647965](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31950647965)
+  at `20a4d7c`, an ancestor of `HEAD` — is linked, and it is not a pass: it ran
+  past the workflow's 340-minute cap and GitHub marked it `cancelled`. It is
+  here because it is checkable, not because it is green.
+
+  Two things settle the current state better than any sentence here can: ask
+  `gh run list --workflow e2e-local-sequencer.yml --branch main`, which answers
+  for whatever is true when you ask it, or run
+  `./scripts/e2e-local-sequencer.sh` against the tree you cloned — it is the
+  same script the workflow runs, and it needs no CI history to be believed.
+
+  Of the runs that finished green, fourteen steps ran and one skipped — the
   sequencer-log step, which is guarded so that it runs only when there is a
   failure to explain, and therefore skips exactly when the job succeeds. It was
   `if: failure()` and is now `if: failure() || cancelled()`: run 31950647965 ran
@@ -1793,18 +1809,28 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   correct refusal a broken test.
 
 - [x] **MET — CI must be green on the default branch.**
-  `.github/workflows/ci.yml` defines **eight** jobs, counted in the file rather
+  `.github/workflows/ci.yml` defines **ten** jobs, counted in the file rather
   than remembered: `Policy primitive and its adversarial tests`, `The committed
   program matches its recorded ImageID`, `The skills behave, against fake ports`,
-  `The shipped .lgx was built from the committed source`, `A real Storage node
+  `The shipped .lgx was built from the committed source`, `The shipped owner
+  console was built from the committed source, and loads`, `A real Storage node
   takes a file and returns its address`, `Logos Core loads and configures the
   shipped module, headless, on Linux`, `The same command, on a machine with no
-  compiler at all`, and `The illustrative use cases verify against the public
-  testnet`. **All eight are green on `main`**, and that was read out of the runs
-  rather than off a badge: `gh run view <id> --json jobs` on each of the last four
-  completed, uncancelled runs on `main` returns eight jobs and eight `success`
-  conclusions, with no skipped job among them — an unbroken green streak, not one
-  lucky run.
+  compiler at all`, `The illustrative use cases verify against the public
+  testnet`, and `The spending ceiling is account data, and the chain keeps it`.
+  Two further workflows carry what cannot be fast, both scheduled and on demand
+  and neither with a skip path: `alongside-companion-modules.yml` runs the agent
+  beside the wallet, storage and messaging modules built from their published
+  sources, and `e2e-local-sequencer.yml` runs the lifecycle below.
+
+  **The green streak that was read out of the runs covered the eight jobs that
+  existed when it was read**, and it is stated that way rather than extended by a
+  count: `gh run view <id> --json jobs` on each of the last four completed,
+  uncancelled runs on `main` returned eight jobs and eight `success` conclusions,
+  with no skipped job among them — an unbroken streak, not one lucky run. The
+  last two on the list above are newer than those runs, so the only honest
+  statement about them is the command below rather than a sentence here. That is
+  the same rule this document applies to every other moving number.
 
   **This branch takes pushes continuously, so the run at whatever commit is tip
   when you read this may still be in flight.** That is not a caveat about CI, it
@@ -1870,7 +1896,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   covers tests and CI, and §11 says what does not work.
 
   Every path and link in it resolves, mechanically: `./scripts/check-docs.py`
-  (exit 0) checks 485 paths and 184 link targets across 13 documents, so no
+  (exit 0) checks 626 paths and 187 link targets across 14 documents, so no
   command in the README names a file that is not there.
 
   The fourth clause — the Logos app owner channel — is what this entry failed on
@@ -1885,13 +1911,13 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   program, claims and anchors an agent's envelope in the two signatures the
   shipped program requires, spends inside the envelope unattended, and is refused
   outside it — each refusal identified by its documented error code rather than by
-  "some error happened". Run
-  [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823)
-  is that script executing on `main`, green — with the caveat the criterion above
-  states in full: it ran on `d65a95a`, which this branch's rewritten history no
-  longer contains, and a run on the current line of history
-  ([31950647965](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31950647965),
-  at `20a4d7c`) was still in flight when this was written.
+  "some error happened". Run `31916748823` is that script executing on `main` at
+  `RISC0_DEV_MODE: 0` for 3 h 05 m, green — that is what has been demonstrated,
+  and it is written as an id rather than a link for the reason the criterion
+  above gives in full: it ran on `d65a95a`, a commit this branch's rewritten
+  history no longer contains, so it is not something you can check against the
+  tree you cloned. Against that tree the script is its own evidence, which is the
+  point of shipping it: `./scripts/e2e-local-sequencer.sh`.
 
   `./scripts/demo.sh` is the other one, and answers a different question: it runs
   from a clean clone with only a Rust toolchain — no funded account, no keys, no
@@ -1923,8 +1949,9 @@ One box moved this pass, and it did not move because a sentence was re-read:
   negative control derives its mutation from the card's own price instead of
   writing a literal, and the four missing period-9000 settlements are recorded so
   that `artifacts/a2a-task.tsv` and the on-chain ledger both read 4. The workflow
-  has eight jobs, not the six this document credited it with, and all eight are
-  green.
+  had eight jobs at that pass, not the six this document credited it with, and all
+  eight were green. It has ten now; the two that were added since are listed with
+  the rest under [Supportability](#supportability).
 
 Three boxes moved on the pass before it, and none of them moved because a
 sentence was re-read. All three were built and run:
@@ -2133,24 +2160,37 @@ is one-shot per signer.
 
 ### Supportability
 
-The `CI` workflow runs **eight** jobs — the policy crate and its adversarial tests,
+The `CI` workflow runs **ten** jobs — the policy crate and its adversarial tests,
 the committed program against its recorded ImageID, the C++ suites against fake
-ports, the shipped `.lgx` against the source committed beside it, a real Storage
-node, Logos Core loading and configuring the shipped module headless on Linux, the
-same command in a container with no compiler at all, and the illustrative use cases
-against the public testnet. This paragraph said **six** until this pass, while
-`ci.yml` held eight — the whole hazard of a count written in prose beside a file
-that grows, and the reason the eight are named here rather than counted. A single
-further job, the only one in `.github/workflows/e2e-local-sequencer.yml`, runs the
-end-to-end lifecycle against a real standalone sequencer at `RISC0_DEV_MODE=0` with
-no skip path. The CI file documents, in comments, exactly which suites do **not**
-run there and why — Qt and an installed Basecamp for the load tests, a Nim and
-`librln` build for the node drives — because a suite silently absent from CI is
-indistinguishable from one that was never written.
+ports, the shipped `.lgx` against the source committed beside it, the shipped
+owner console against *its* source and loading the way Basecamp loads it, a real
+Storage node, Logos Core loading and configuring the shipped module headless on
+Linux, the same command in a container with no compiler at all, the illustrative
+use cases against the public testnet, and the spending ceiling read back off the
+chain that keeps it. This paragraph once said **six** while the file held eight —
+the whole hazard of a count written in prose beside a file that grows, and the
+reason the ten are named here rather than counted.
+
+Two further workflows carry what cannot be fast, and both are scheduled and on
+demand rather than on the push path.
+`.github/workflows/e2e-local-sequencer.yml` runs the end-to-end lifecycle against
+a real standalone sequencer at `RISC0_DEV_MODE=0`;
+`.github/workflows/alongside-companion-modules.yml` builds the wallet, storage and
+messaging modules from their own published revisions and runs the agent module in
+one Logos Core runtime beside them, with use case 1 against real Storage and
+Messaging nodes as its last step. Neither has a skip path, and neither is on the
+push path for a stated reason: each is hours where the gate above is minutes, and
+a gate people learn to ignore is worse than no gate. The CI file documents, in
+comments, exactly which suites do **not** run there and why — the Qt plugin build
+for `plugin_load_test`, and a Logos Delivery library nobody publishes for Linux
+for the harnesses that need a live Delivery node — because a suite silently
+absent from CI is indistinguishable from one that was never written.
 
 **Do not read a badge here; run
 `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.**
-All eight jobs are green on `main` as this is written, and that is a statement
+Eight of those ten jobs are green on `main` as this is written — the two newest
+are newer than the last completed run, which is why the command above is the
+answer and this sentence is not — and even that is a statement
 about the commits they ran on rather than a property of the repository. CI has
 been red on `main` repeatedly in the recent past — `gh run list --branch main
 --limit 20` prints the failures rather than this document counting them — and each
@@ -2205,8 +2245,10 @@ failed rather than blaming the wrong one.
   [CU accounting](docs/benchmarks/cu-budget.md) ·
   [**limitations**](docs/limitations.md) · [stack recon](docs/recon.md)
 - **CI:** [all runs](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions).
-  The `CI` workflow has eight jobs and all eight are green across the last four
-  completed, uncancelled runs on `main`. **No run id is given as the answer**, and that is deliberate
+  The `CI` workflow has ten jobs; eight of them are green across the last four
+  completed, uncancelled runs on `main`, and the other two are newer than those
+  runs, so the command below is the only honest answer about
+  them. **No run id is given as the answer**, and that is deliberate
   twice over: "latest" moves, and this branch's history has been rewritten, so
   every id previously printed here — `31867735056`, `31883389383`, `31882516164` —
   now names a commit `git cat-file -e` cannot find in the tree you cloned. Ask
@@ -2215,9 +2257,11 @@ failed rather than blaming the wrong one.
   and
   `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --workflow e2e-local-sequencer.yml --branch main --limit 1`.
   The most recent completed green E2E against a real sequencer with
-  `RISC0_DEV_MODE=0` is
-  [31929846814](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31929846814),
-  and it carries the same caveat: it ran on `91154ef`, which the rewrite removed.
+  `RISC0_DEV_MODE=0` is run `31929846814` — an id, not a link, for the same
+  reason as the three above: it ran on `91154ef`, which the rewrite removed, and
+  the same is true of every other green run of that workflow, so none of them is
+  clickable from the tree you cloned. The second command above is the answer to
+  "and now?"; `./scripts/e2e-local-sequencer.sh` is the answer that needs no CI.
 - **Reproduce from a clean clone:** `./scripts/demo.sh` (no keys, no funds, no
   sequencer) · `./scripts/deploy-agents.sh` · `./scripts/a2a-task.sh` ·
   `./scripts/e2e-local-sequencer.sh`

@@ -116,17 +116,29 @@ rather than left, because what it said about CI stopped being true.** It was
 written before any code; the paragraphs below are what CI is now, and the
 retraction under them is what it used to say.
 
-`.github/workflows/ci.yml` runs **eight** jobs, all carrying evidence rather
+`.github/workflows/ci.yml` runs **ten** jobs, all carrying evidence rather
 than just compiling: the policy primitive and its adversarial tests (`rust`);
 the committed program hashing to the deployed transaction **and** that
 transaction being live on the public testnet, with a cannot-exist hash as the
-control (`binaries`); the C++ suites against fake ports (`skills`); the shipped
-`.lgx` against the source committed beside it (`package`); a real Logos Storage
+control (`binaries`); the C++ suites against fake ports, including the two that
+run the module on threads and under a SIGKILL (`skills`); the shipped
+`.lgx` against the source committed beside it (`package`); the shipped owner
+console against its own committed source, and that console loading the way
+Basecamp loads it (`owner-console`); a real Logos Storage
 node (`storage-node`); Logos Core loading, configuring and starting the
 committed module headless on Linux (`linux-headless`); the same deployment
 command in a container that has no compiler on it at all (`toolchain-free`);
-and the illustrative use cases against the public testnet (`use-cases`).
-`.github/workflows/e2e-local-sequencer.yml` is the second workflow.
+the illustrative use cases against the public testnet (`use-cases`); and the
+spending ceiling read back off the chain that keeps it (`use-case-03`).
+
+The other two workflows are scheduled and on demand rather than on the push
+path, because each is hours where that one is minutes, and a slow gate is a
+gate people learn to ignore:
+`.github/workflows/e2e-local-sequencer.yml` runs the whole policy lifecycle
+against a real standalone sequencer, and
+`.github/workflows/alongside-companion-modules.yml` builds the wallet, storage
+and messaging modules from their published sources and runs the agent module in
+one runtime beside them, with use case 1 as its last step.
 
 **Retracted: "the Linux plugin build is not in CI, and the job is removed until
 it passes."** That was written about a *compile* that failed on
@@ -147,8 +159,8 @@ the compile ever going green.
 Marking anything `continue-on-error` was never on the table: a job that completes
 through a skip path reports green without having run, which is worse than red
 because nobody looks at it again. The standalone-sequencer e2e this prize also
-requires is present too, as the second workflow, and it has no skip path for the
-same reason.
+requires is present too, in one of the two scheduled workflows, and neither of
+them has a skip path for the same reason.
 
 Four runs were spent learning one thing, worth writing down: **pin to what you
 have proven, not to what is newest.** Following default branches pulled

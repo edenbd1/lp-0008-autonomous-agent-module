@@ -78,6 +78,21 @@ WHAT THIS DOES NOT ASSERT, stated plainly because the gap is real.
   - It says nothing about whether the module works. That is what
     module/tests/ and the rest of the workflow are for.
 
+AND THE THIRD COMMITTED BINARY, WHICH HAD NONE OF THIS.
+
+`app/agent-ui.lgx` is the owner-facing package — the window the usability
+criterion is evidenced by — and it was committed as ~182 kB of binary with no
+record beside it at all. Nothing recomputed a hash of it, nothing read a string
+out of it, and `.github/workflows/ci.yml` did not contain the substring `app/`
+even once. Every sentence in the two paragraphs at the top of this file is
+therefore true of the owner console today, with nothing at all standing between
+it and the next rebase: source moves, the package does not, and the artefact a
+reviewer installs is the one that was correct some commits ago.
+
+So the same two layers are run over it, from the same helpers rather than from a
+second implementation, plus one property the module package never asserted and
+this one has to. See check_app_package() for what is and is not claimed.
+
 --rebuild BUILDDIR additionally rebuilds the module from the committed source
 and compares. It is not run in CI and the reason is in ci.yml. It fails loudly
 when the toolchain is absent rather than degrading to a pass: a step that went
@@ -173,6 +188,76 @@ LITERAL_EXCLUSIONS = {
 # stale exclusion is a hole in exactly the check that closed the last two
 # stale-package defects.
 
+# --------------------------------------------------------------------------
+# THE OWNER CONSOLE'S PACKAGE, which is the one that had no record.
+#
+# Same names, same shapes, same helpers — a second set of constants and not a
+# second machinery, because the only thing that differs between the two packages
+# is which files go in and which .lgx comes out.
+#
+# `.json` and `.txt` are deliberately NOT in APP_SOURCE_SUFFIXES, and this is the
+# one place the two packages' definitions could not be identical. app/
+# CMakeLists.txt line 49 does
+#
+#     configure_file(app/metadata.json app/src/metadata.json COPYONLY)
+#
+# because moc resolves Q_PLUGIN_METADATA(FILE "metadata.json") relative to the
+# header that declares the plugin. That copy is a build product: it is in
+# .gitignore, it exists on a machine that has built and on no other, and walking
+# app/src for `.json` would put it in the record written by the packaging machine
+# (where it is present) and out of the inventory computed on a CI checkout (where
+# it is not). The two would then disagree by exactly one file and this checker
+# would report "app/src/metadata.json was a build input and is gone" on a tree
+# where nothing is wrong — a gate that cries wolf, which is the one failure mode
+# the scanner at the top of this file was written out longhand to avoid.
+#
+# Nothing goes unhashed by leaving it out: app/metadata.json, the file those
+# bytes are copied FROM, is in APP_SOURCE_FILES, and the copy is asserted to be a
+# copy in check_app_package() whenever the machine running this has one.
+APP_PACKAGE = "app/agent-ui.lgx"
+APP_RECORD = "app/agent-ui.lgx.sources"
+APP_SOURCE_DIRS = ("app/src",)
+APP_SOURCE_FILES = ("app/CMakeLists.txt", "app/metadata.json")
+APP_SOURCE_SUFFIXES = (".h", ".cpp", ".hpp", ".cc")
+APP_METADATA = "app/metadata.json"
+APP_GENERATED_METADATA = "app/src/metadata.json"
+
+# Measured on the committed package: app/src + app/CMakeLists.txt +
+# app/metadata.json yield 111 literals of >= MIN_LITERAL bytes (109 from
+# agent_console.cpp, 2 from plugin.h), and all 111 are present in all three
+# shipped binaries. The floor is the same shape as HARNESS_LITERAL_FLOOR and set
+# well under the measurement, because literals come and go with ordinary edits
+# and only "essentially none" is a defect.
+APP_LITERAL_FLOOR = 60
+
+# The record must not be truncated to nothing. Six build inputs today; the
+# comparison that actually catches a truncated record is the file-set difference
+# below, and this is the floor under the case where the *inventory definition*
+# stops matching the tree — in which case both sides go empty together, agree
+# perfectly, and mean nothing.
+APP_MIN_INPUTS = 5
+
+# Empty, and that is a measurement rather than an omission. The module needs one
+# exclusion because moc inlines metadata.json's contents and never emits the path
+# as data; the owner console declares Q_PLUGIN_METADATA the same way in
+# app/src/plugin.h and the 13 bytes `metadata.json` ARE in all three shipped
+# binaries — checked, not assumed. An empty allow-list is the strongest state
+# this can be in, so it is written down as one and the hygiene rule below still
+# applies to it: an entry that is not needed is an error.
+APP_LITERAL_EXCLUSIONS = {}
+
+# Qt is a CEILING, not a floor: Basecamp 0.2.2 bundles 6.9.2 and Qt refuses any
+# plugin whose minor exceeds the host's — and docs/basecamp.md measures what that
+# then looks like, which is a load that reports success and then times out on
+# every call. app/package-ui.sh asserts this at packaging time, on the platform
+# doing the packaging, out of otool or readelf. Neither of those exists on the
+# other platform, and two of the three shipped variants were built somewhere
+# else, so on the machine that ships the package two of the three claims were
+# nobody's. Read here out of the binaries' own bytes instead, with no toolchain:
+# a Mach-O carries the Qt it linked in LC_LOAD_DYLIB's current_version, an ELF
+# carries it as the `Qt_6.9` symbol version it needs from libQt6Core.
+APP_QT_CEILING = (6, 9)
+
 
 def sha256_bytes(b):
     return hashlib.sha256(b).hexdigest()
@@ -183,19 +268,28 @@ def sha256_file(path):
         return sha256_bytes(fh.read())
 
 
-def source_inventory(repo):
-    """Every build input, as {repo-relative path: sha256}."""
+def source_inventory(repo, dirs=SOURCE_DIRS, files=SOURCE_FILES,
+                     suffixes=SOURCE_SUFFIXES):
+    """Every build input, as {repo-relative path: sha256}.
+
+    The arguments default to the module's inventory so that every existing
+    caller — scripts/write-package-record.py, and the block in ci.yml's `package`
+    job that execs this file's constants to count them — keeps meaning exactly
+    what it meant. The owner console passes its own three, for the reason written
+    beside APP_SOURCE_SUFFIXES: one directory of the two packages holds a
+    generated file and the other does not, and that is the whole difference.
+    """
     found = {}
-    for rel in SOURCE_FILES:
+    for rel in files:
         p = os.path.join(repo, rel)
         if os.path.isfile(p):
             found[rel] = sha256_file(p)
-    for d in SOURCE_DIRS:
+    for d in dirs:
         base = os.path.join(repo, d)
         for dirpath, dirnames, filenames in os.walk(base):
             dirnames.sort()
             for fn in sorted(filenames):
-                if not fn.endswith(SOURCE_SUFFIXES):
+                if not fn.endswith(suffixes):
                     continue
                 p = os.path.join(dirpath, fn)
                 found[os.path.relpath(p, repo)] = sha256_file(p)
@@ -377,7 +471,12 @@ def _elf_shape(blob):
         raise ValueError("address 0x%x is in no PT_LOAD segment" % vaddr)
 
     shape = {"format": "ELF", "arch": _ELF_MACHINE.get(machine, hex(machine)),
-             "rpaths": [], "needed": [], "version_needs": {}}
+             "rpaths": [], "needed": [], "version_needs": {},
+             # ELF has no per-library version field; the analogue is the symbol
+             # version an object needs from its dependency, which is
+             # `version_needs` above. Present and empty so both readers answer
+             # the same questions with the same keys.
+             "dylib_versions": {}}
     if dyn is None:
         return shape
     entries, strtab, verneed, verneednum = [], None, None, 0
@@ -435,7 +534,8 @@ def _macho_shape(blob):
     cputype, = struct.unpack_from("<I", blob, 4)
     ncmds, = struct.unpack_from("<I", blob, 16)
     shape = {"format": "Mach-O", "arch": _MACHO_CPU.get(cputype, hex(cputype)),
-             "rpaths": [], "needed": [], "version_needs": {}}
+             "rpaths": [], "needed": [], "version_needs": {},
+             "dylib_versions": {}}
     off = 32
     for _ in range(ncmds):
         cmd, cmdsize = struct.unpack_from("<II", blob, off)
@@ -446,7 +546,17 @@ def _macho_shape(blob):
         elif cmd in (0x0C, 0x8000001F):      # LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB
             p, = struct.unpack_from("<I", blob, off + 8)
             raw = blob[off + p:off + cmdsize]
-            shape["needed"].append(raw.split(b"\0")[0].decode("utf-8", "replace"))
+            name = raw.split(b"\0")[0].decode("utf-8", "replace")
+            shape["needed"].append(name)
+            # struct dylib is (name offset, timestamp, current_version,
+            # compatibility_version), each a u32, and current_version is the
+            # library's own version packed X.Y.Z as xxxx.yy.zz. It is the only
+            # place a Mach-O records WHICH Qt it linked against: the install name
+            # is `@rpath/QtCore.framework/Versions/A/QtCore` on 6.9 and on 6.11
+            # alike. Read for the ceiling check in check_app_package().
+            cur, = struct.unpack_from("<I", blob, off + 16)
+            shape["dylib_versions"][name] = (cur >> 16, (cur >> 8) & 0xFF,
+                                             cur & 0xFF)
         off += cmdsize
     return shape
 
@@ -737,6 +847,16 @@ def check(repo, rebuild_dir=None):
     check_harness(repo, r, shipped_variants | set(binaries))
     harness_failures = len(r.failures) - package_failures
 
+    # ---- and the package the owner installs --------------------------------
+    #
+    # Third, and last to arrive: `app/agent-ui.lgx` is the package a reviewer
+    # installs to get a window, and it had no record at all. Its own banner, for
+    # the same reason the harness has one — a single "OK" covering all three
+    # would go green on the first two the first time this section was skipped.
+    print()
+    app_counts = check_app_package(repo, r)
+    app_failures = len(r.failures) - package_failures - harness_failures
+
     print()
     if r.blocked and len(r.blocked) == len(r.failures):
         print("%d failure(s): the check could not be completed, which is not a "
@@ -755,6 +875,16 @@ def check(repo, rebuild_dir=None):
               "%d variant(s), each for the architecture it names, each carrying "
               "no rpath, and every literal of %s in each"
               % (len(record_variant_count(repo)), HARNESS_SOURCE))
+    if app_failures or app_counts is None:
+        print("%d failure(s): the committed owner console does not agree with "
+              "the committed source" % app_failures)
+    else:
+        print("OK the shipped owner console was built from the source in this "
+              "commit: %d build input(s) recorded and unchanged, %d variant(s), "
+              "each for the architecture it names, and %d literal(s) found in "
+              "each of them"
+              % (app_counts["inputs"], app_counts["variants"],
+                 app_counts["literals"]))
     return 1 if r.failures else 0
 
 
@@ -1049,6 +1179,341 @@ def check_harness(repo, r, package_variants):
                 print("          %-46r  %s" % (lit[:44], ", ".join(sites)))
             if len(missing) > 12:
                 print("          ... and %d more" % (len(missing) - 12))
+
+
+def qt_built_against(shape):
+    """(major, minor), and where it was read from — or (None, why not).
+
+    Two formats, one question. A Mach-O records the version of each library it
+    linked in that library's LC_LOAD_DYLIB command; an ELF records the symbol
+    version it needs from it, and Qt tags its symbols `Qt_6.9`. Neither is a
+    string anybody typed into this repository, which is the point: the packaging
+    script asks the platform's own tool at packaging time and cannot ask it about
+    a variant built on another machine, and this reads all three out of the bytes
+    that shipped.
+    """
+    best, where = None, None
+    for name, ver in sorted(shape.get("dylib_versions", {}).items()):
+        if "Qt" not in name:
+            continue
+        if best is None or ver[:2] > best:
+            best, where = ver[:2], "%s current_version %s" % (
+                name.rsplit("/", 1)[-1], ".".join(str(n) for n in ver))
+    for lib, versions in sorted(shape.get("version_needs", {}).items()):
+        if "Qt" not in lib:
+            continue
+        for v in versions:
+            if not v.startswith("Qt_"):
+                continue
+            got = _version_tuple(v, "Qt_")
+            if got is None or len(got) < 2:
+                # `Qt_6` on its own is the major-only tag every Qt 6 object
+                # needs; it says nothing about the minor and is not an answer.
+                continue
+            if best is None or got[:2] > best:
+                best, where = got[:2], "%s needs %s" % (lib, v)
+    if best is None:
+        return None, ("no Qt version could be read out of it — a Mach-O should "
+                      "carry one in LC_LOAD_DYLIB and an ELF as the Qt_x.y "
+                      "symbol version it needs from libQt6Core")
+    return best, where
+
+
+def check_app_package(repo, r):
+    """The committed owner console was built from the committed source.
+
+    THE SAME TWO LAYERS AS module/agent.lgx, over the package that had neither.
+
+      (1) `app/agent-ui.lgx.sources` is written by app/package-ui.sh at the
+          moment the package is made and recomputed here: every build input's
+          sha256, every shipped binary's sha256 and length, the manifest's
+          content-derived root hash, and — this record has one the module's does
+          not — the format and architecture of each variant's binary.
+
+      (2) Every string literal of >= MIN_LITERAL bytes in app/src must be inside
+          each of the three binaries the package ships. Same scanner, same
+          8-byte floor, same reason: the record is a record, and a determined
+          hand could rewrite it without rebuilding anything.
+
+    AND ONE THING THE MODULE PACKAGE NEVER ASSERTED, which this one has to.
+    `check_harness` reads a variant directory's binary and asks whether the file
+    is the architecture the directory name claims, because the install path had
+    already made exactly that mistake once. The package side never asked it of a
+    plugin — and app/agent-ui.lgx ships three, two of them built on machines this
+    one cannot reproduce, in a package whose install instructions (app/README.md)
+    say in as many words that the variants "are not interchangeable" and that a
+    directory holding the other platform's binary "looks complete and can never
+    load". So it is asserted, from the binary's own header.
+
+    WHAT IS NOT ASSERTED HERE, and why, because a check quietly not made is worse
+    than one that is absent loudly:
+
+      - No rebuild. Same as the module: see --rebuild and the note in ci.yml.
+        Two of the three variants cannot be rebuilt on any one machine at all.
+
+      - No rpath rule. `check_harness` refuses any rpath because the harness is
+        an executable this repository asks a stranger to RUN, and every rpath it
+        could carry names a directory on the machine that compiled it. A package
+        plugin is not run, it is dlopen'd by Basecamp, and Qt is resolved through
+        the loading process's own rpath — Basecamp's. The committed darwin-arm64
+        console does carry `/Users/eden/logos/Qt/6.9.2/macos/lib`, left in by
+        CMake's build-tree rpath, and it loads inside Basecamp on a machine with
+        no such directory because the host had already loaded Qt. It is printed
+        as a note below rather than passed over in silence, and it is not made a
+        failure, because a failure here would be a claim about loading that this
+        repository has measured to be false.
+
+      - No document-citation check. docs/basecamp.md quotes module/agent.lgx's
+        root hash and is held to it above; no document quotes this package's, so
+        there is no stale citation to catch. scripts/check-docs.py already holds
+        the prose to this package in the two ways it can be held — every variant
+        it ships must be named by some document, and no document may claim a
+        different number of them.
+    """
+    pkg_path = os.path.join(repo, APP_PACKAGE)
+    rec_path = os.path.join(repo, APP_RECORD)
+    if not os.path.isfile(pkg_path):
+        r.fail("%s is missing; it is the package a reviewer installs to get a "
+               "window at all" % APP_PACKAGE)
+        return None
+    if not os.path.isfile(rec_path):
+        r.fail("%s is missing, so the committed owner console cannot be tied to "
+               "any source. It is written by app/package-ui.sh at the moment the "
+               "package is made: rebuild and repackage (app/README.md), or run "
+               "scripts/write-package-record.py --package app --all-variants "
+               "against the committed package." % APP_RECORD)
+        return None
+
+    manifest, members = read_package(pkg_path)
+    with open(rec_path, encoding="utf-8") as fh:
+        record = json.load(fh)
+
+    # ---- layer 1: the record describes THIS package -----------------------
+    want_root = record.get("package_root_hash")
+    got_root = manifest.get("hashes", {}).get("root")
+    if want_root and want_root == got_root:
+        r.ok("the record describes this package: root hash %s" % got_root[:16])
+    else:
+        r.fail("the record's package_root_hash (%s) is not this package's (%s): "
+               "the record and the .lgx came from different builds"
+               % (want_root, got_root))
+
+    recorded_variants = record.get("variants") or {}
+    if not recorded_variants:
+        r.fail("the record names no variants")
+
+    # Read out of the PACKAGE, not out of the record, for the reason written at
+    # the same point on the module side: a variant the record has never heard of
+    # is one every check below skips by not iterating it, and it is exactly the
+    # variant somebody is about to install.
+    shipped_variants = {n.split("/")[1] for n in members
+                        if n.startswith("variants/") and len(n.split("/")) > 2}
+    shipped_variants |= set(manifest.get("main") or {})
+    for variant in sorted(shipped_variants - set(recorded_variants)):
+        r.fail("the package ships a %s console that %s says nothing about, so "
+               "none of the checks below ever read it: not its sha256, not its "
+               "architecture, and not its source literals. Repackage that "
+               "variant, or delete it from the .lgx." % (variant, APP_RECORD))
+
+    binaries = {}
+    for variant, info in sorted(recorded_variants.items()):
+        main = info.get("main")
+        member = "variants/%s/%s" % (variant, main)
+        if member not in members:
+            r.fail("the record names %s, which is not in the package" % member)
+            continue
+        blob = members[member]
+        binaries[variant] = blob
+        got = sha256_bytes(blob)
+        if got == info.get("sha256") and len(blob) == info.get("bytes"):
+            r.ok("%s is the binary the record was written for (sha256 %s, %d "
+                 "bytes)" % (member, got[:16], len(blob)))
+        else:
+            r.fail("%s hashes to %s (%d bytes), the record says %s (%s bytes): "
+                   "the package holds a different build from the one that was "
+                   "recorded" % (member, got[:16], len(blob),
+                                 str(info.get("sha256"))[:16], info.get("bytes")))
+        declared = manifest.get("main", {}).get(variant)
+        if declared != main:
+            r.fail("the manifest's main[%s] is %r, the record's is %r"
+                   % (variant, declared, main))
+
+        # The host reads the PACKAGED metadata.json — Basecamp learns the name,
+        # the `ui` type that decides which directory it is installed into, and
+        # the `agent` dependency that makes it load the core module, all from
+        # that copy. An absence is a worse fault than a mismatch: a variant with
+        # no metadata is one the app cannot describe or install at all.
+        meta_member = "variants/%s/metadata.json" % variant
+        if meta_member not in members:
+            r.fail("%s is not in the package. Every variant carries its own copy "
+                   "of app/metadata.json and the host reads the packaged one, so "
+                   "a variant without it ships no name, no `ui` type and no "
+                   "`agent` dependency." % meta_member)
+        elif members[meta_member] == open(
+                os.path.join(repo, APP_METADATA), "rb").read():
+            r.ok("the metadata.json inside %s is %s" % (variant, APP_METADATA))
+        else:
+            r.fail("the metadata.json inside %s differs from %s — the host reads "
+                   "the packaged copy" % (variant, APP_METADATA))
+
+        # ---- the architecture the variant name claims ---------------------
+        try:
+            shape = binary_shape(blob)
+        except Exception as exc:              # noqa: BLE001 - reported, not raised
+            r.fail("%s could not be read as a shared object: %s" % (member, exc))
+            continue
+
+        want = VARIANT_ARCH.get(variant)
+        seen = "%s %s" % (shape["format"], shape["arch"])
+        if want is None:
+            r.fail("%s is a variant this check does not know the architecture "
+                   "of; add it to VARIANT_ARCH deliberately rather than letting "
+                   "it through" % variant)
+        elif (shape["format"], shape["arch"]) == want:
+            r.ok("%s really is %s, which is what the variant name claims"
+                 % (member, seen))
+        else:
+            r.fail("%s is %s and the variant name says %s — app/README.md tells "
+                   "an installer to flatten one variant into the plugins "
+                   "directory, and a directory holding another platform's binary "
+                   "looks complete and can never load"
+                   % (member, seen, " ".join(want)))
+
+        # The record has to say the same thing the bytes do. Without this the
+        # architecture above is checked against a constant in this file and the
+        # record could claim anything at all about a binary it names.
+        if info.get("format") != seen:
+            r.fail("the record says %s is %r and its own header says %r"
+                   % (member, info.get("format"), seen))
+
+        # ---- the Qt it was built against, as a ceiling --------------------
+        qt, where = qt_built_against(shape)
+        if qt is None:
+            r.fail("%s: %s. app/package-ui.sh refuses a plugin whose Qt cannot "
+                   "be read, because a plugin built against a newer Qt than the "
+                   "host's reports a successful load and then times out on every "
+                   "call; a version nobody could read is not a version below the "
+                   "ceiling." % (member, where))
+        elif qt > APP_QT_CEILING:
+            r.fail("%s was built against Qt %s (%s) and Basecamp 0.2.2 bundles "
+                   "%s. Qt refuses any plugin whose minor exceeds the host's — "
+                   "see docs/basecamp.md, which measures what that then looks "
+                   "like." % (member, ".".join(str(n) for n in qt), where,
+                              ".".join(str(n) for n in APP_QT_CEILING)))
+        else:
+            r.ok("%s was built against Qt %s, at or under the %s Basecamp "
+                 "bundles (%s)" % (member, ".".join(str(n) for n in qt),
+                                   ".".join(str(n) for n in APP_QT_CEILING),
+                                   where))
+
+        if shape["rpaths"]:
+            r.note("%s carries rpath(s) %s. Not a failure here and it is one for "
+                   "the harness: a package plugin is dlopen'd by Basecamp and "
+                   "resolves Qt through the host's own rpath, which is why this "
+                   "one loads on machines that have no such directory."
+                   % (member, ", ".join(shape["rpaths"])))
+
+    # ---- layer 1: the record describes THIS source ------------------------
+    on_disk = source_inventory(repo, APP_SOURCE_DIRS, APP_SOURCE_FILES,
+                               APP_SOURCE_SUFFIXES)
+    if len(on_disk) < APP_MIN_INPUTS:
+        r.fail("the inventory definition matched %d file(s) under %s; it is not "
+               "seeing this tree, and a record compared against nothing agrees "
+               "with everything"
+               % (len(on_disk), ", ".join(APP_SOURCE_DIRS + APP_SOURCE_FILES)))
+    recorded = record.get("built_from") or {}
+    if len(recorded) < APP_MIN_INPUTS:
+        r.fail("the record lists only %d build input(s); this tree has %d, so "
+               "the record is truncated and would agree with almost anything"
+               % (len(recorded), len(on_disk)))
+
+    added = sorted(set(on_disk) - set(recorded))
+    removed = sorted(set(recorded) - set(on_disk))
+    changed = sorted(p for p in set(on_disk) & set(recorded)
+                     if on_disk[p] != recorded[p])
+    if not (added or removed or changed):
+        r.ok("all %d build inputs hash exactly as they did when the console was "
+             "packaged" % len(on_disk))
+    else:
+        for p in changed:
+            r.fail("%s has changed since the console was packaged (%s -> %s)"
+                   % (p, recorded[p][:12], on_disk[p][:12]))
+        for p in added:
+            r.fail("%s is a build input the console was never packaged from" % p)
+        for p in removed:
+            r.fail("%s was a build input and is gone; the package still "
+                   "contains it" % p)
+        print()
+        print("        app/agent-ui.lgx is stale. Rebuild and repackage:")
+        print("          cmake --build build-ui -j8 && app/package-ui.sh build-ui")
+        print("        app/README.md carries the full build environment.")
+        print()
+
+    # The one build input that is generated, checked as one. app/CMakeLists.txt
+    # copies app/metadata.json to app/src/metadata.json so moc can inline it, and
+    # only the source of that copy is in the inventory above. On a machine that
+    # has built, the copy is here and it has to still be a copy — a hand-edited
+    # app/src/metadata.json is a plugin whose embedded manifest disagrees with
+    # the one the package ships, which is a `ui` type in one place and something
+    # else in the other.
+    gen = os.path.join(repo, APP_GENERATED_METADATA)
+    if not os.path.isfile(gen):
+        r.note("%s is a build product (.gitignore) and this tree has none, so "
+               "the copy moc inlines is only checkable where a build happened; "
+               "the file it is copied from is build input %s above"
+               % (APP_GENERATED_METADATA, APP_METADATA))
+    elif sha256_file(gen) == sha256_file(os.path.join(repo, APP_METADATA)):
+        r.ok("%s is still a byte-for-byte copy of %s, which is what moc inlines "
+             "into the plugin" % (APP_GENERATED_METADATA, APP_METADATA))
+    else:
+        r.fail("%s is not a copy of %s. moc inlines the copy, `lgx` packages the "
+               "original, and a plugin whose embedded manifest disagrees with "
+               "its packaged one is one Basecamp reads twice and gets two "
+               "answers from." % (APP_GENERATED_METADATA, APP_METADATA))
+
+    # ---- layer 2: the shipped binaries carry this source's own strings ----
+    lits = literals(repo, sorted(on_disk))
+    if len(lits) < APP_LITERAL_FLOOR:
+        r.fail("only %d literals of >= %d bytes were extracted from %s; the "
+               "scanner found essentially nothing and would agree with any "
+               "binary" % (len(lits), MIN_LITERAL, ", ".join(APP_SOURCE_DIRS)))
+
+    for variant, blob in sorted(binaries.items()):
+        missing = []
+        for lit, sites in sorted(lits.items()):
+            if lit in APP_LITERAL_EXCLUSIONS:
+                continue
+            if not in_binary(lit, blob):
+                missing.append((lit, sites))
+        checked = len(lits) - len(APP_LITERAL_EXCLUSIONS)
+        if not missing:
+            r.ok("every one of the %d source literals of >= %d bytes is in the "
+                 "%s console" % (checked, MIN_LITERAL, variant))
+        else:
+            r.fail("%d of %d source literals are absent from the %s console, so "
+                   "that binary was not built from this source:"
+                   % (len(missing), checked, variant))
+            for lit, sites in missing[:12]:
+                print("          %-46r  %s" % (lit[:44], ", ".join(sites)))
+            if len(missing) > 12:
+                print("          ... and %d more" % (len(missing) - 12))
+
+        # The allow-list must stay exactly as large as its reasons — and it is
+        # empty, so this loop runs zero times and says nothing. That is the
+        # correct amount for it to say: the assertion that the console's literal
+        # check examined anything at all is the floor above, not this.
+        for lit, why in sorted(APP_LITERAL_EXCLUSIONS.items()):
+            if lit not in lits:
+                r.fail("%r is excluded from the literal check but is no longer "
+                       "in the source; delete the exclusion (%s)" % (lit, why))
+            elif in_binary(lit, blob):
+                r.fail("%r is excluded from the literal check but IS in the %s "
+                       "console; the exclusion is stale and is now hiding that "
+                       "literal from the check" % (lit, variant))
+
+    return {"inputs": len(on_disk),
+            "literals": len(lits) - len(APP_LITERAL_EXCLUSIONS),
+            "variants": len(binaries)}
 
 
 def rebuild_and_compare(repo, build_dir, binaries, r):

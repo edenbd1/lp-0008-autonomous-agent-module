@@ -75,14 +75,24 @@ say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 # line is the one that would have said "this run cannot finish" at minute forty,
 # instead of leaving it to be discovered at hour five.
 T_START=$(date +%s)
-PROOFS_DONE=0; PROOFS_SECS=0
-# How many proofs a full run makes: COUNTED from this file's own `beat` call
-# sites, not written down. It was written down, as 6, while only three calls
-# were wrapped -- so the projection would have multiplied the remaining work by
-# twice its real size and cried "this run cannot finish" at a run that could.
-# A constant describing the file it lives in is a constant that drifts from it.
-PROOFS_EXPECTED=$(grep -cE '^[[:space:]]*beat(_cap)? "' "$0")
-[ "${PROOFS_EXPECTED:-0}" -gt 0 ] 2>/dev/null || die \
+STEPS_DONE=0; STEPS_SECS=0
+# How many NARRATED STEPS a full run makes: COUNTED from this file's own `beat`
+# call sites, not written down. It was written down, as 6, while only three
+# calls were wrapped -- so the projection would have multiplied the remaining
+# work by twice its real size and cried "this run cannot finish" at a run that
+# could. A constant describing the file it lives in is a constant that drifts
+# from it.
+#
+# STEPS, not proofs, and the distinction is not pedantry: exactly THREE of the
+# six carry a Risc0 receipt. `claim_agent`, the funding transfer and the spend
+# are agent-signed against a shielded account, take the privacy path and weigh
+# ~270 kB each; `create_policy` and `approve_spend` are public and weigh 429 and
+# 677 bytes. Calling all six "proofs" is the mistake the commit that added this
+# heartbeat made in its own message, and the submission's "three real proofs,
+# not dev-mode receipts" is the correct count -- so the pace line below says
+# "a step" and the arithmetic averages over steps.
+STEPS_EXPECTED=$(grep -cE '^[[:space:]]*beat(_cap)? "' "$0")
+[ "${STEPS_EXPECTED:-0}" -gt 0 ] 2>/dev/null || die \
   "no beat call sites found in $0, so the pace projection has nothing to count"
 CAP_SECS=$(( ${E2E_CAP_MINUTES:-340} * 60 ))
 # A minute between heartbeats in a run that lasts hours. Overridable so the
@@ -146,7 +156,7 @@ beat() {   # beat <label> <command...>  -- run it quietly, narrate the wait
     sleep "$BEAT_SECS"
     kill -0 "$pid" 2>/dev/null || break
     now=$(date +%s)
-    printf '    %s: still proving, %s in (run %s) | block %s | %s\n' \
+    printf '    %s: still working, %s in (run %s) | block %s | %s\n' \
       "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))" \
       "$(tip_block)" "$(procstat "$pid")"
     [ -f "${WORK:-}/sequencer.log" ] && \
@@ -154,21 +164,21 @@ beat() {   # beat <label> <command...>  -- run it quietly, narrate the wait
   done
   wait "$pid"; rc=$?
   now=$(date +%s)
-  PROOFS_DONE=$((PROOFS_DONE + 1))
-  PROOFS_SECS=$((PROOFS_SECS + now - t0))
+  STEPS_DONE=$((STEPS_DONE + 1))
+  STEPS_SECS=$((STEPS_SECS + now - t0))
   printf '    %s: %s (block %s)\n' "$label" "$(hms $((now - t0)))" "$(tip_block)"
   # The prediction, from measured rate rather than from the comment at the top.
-  if [ "$PROOFS_DONE" -ge 1 ] && [ "$PROOFS_DONE" -lt "$PROOFS_EXPECTED" ]; then
-    local rate=$((PROOFS_SECS / PROOFS_DONE))
-    local left=$(( (PROOFS_EXPECTED - PROOFS_DONE) * rate ))
+  if [ "$STEPS_DONE" -ge 1 ] && [ "$STEPS_DONE" -lt "$STEPS_EXPECTED" ]; then
+    local rate=$((STEPS_SECS / STEPS_DONE))
+    local left=$(( (STEPS_EXPECTED - STEPS_DONE) * rate ))
     local projected=$(( now - T_START + left ))
     if [ "$projected" -gt "$CAP_SECS" ]; then
-      printf '    PACE: %s a proof, %d left -> about %s in total, past the %s cap.\n' \
-        "$(hms "$rate")" "$((PROOFS_EXPECTED - PROOFS_DONE))" "$(hms "$projected")" "$(hms "$CAP_SECS")"
+      printf '    PACE: %s a step, %d left -> about %s in total, past the %s cap.\n' \
+        "$(hms "$rate")" "$((STEPS_EXPECTED - STEPS_DONE))" "$(hms "$projected")" "$(hms "$CAP_SECS")"
       printf '    This run is on a slow machine and will not finish. Re-dispatch it.\n'
     else
-      printf '    pace: %s a proof, %d left, about %s in total against a %s cap\n' \
-        "$(hms "$rate")" "$((PROOFS_EXPECTED - PROOFS_DONE))" "$(hms "$projected")" "$(hms "$CAP_SECS")"
+      printf '    pace: %s a step, %d left, about %s in total against a %s cap\n' \
+        "$(hms "$rate")" "$((STEPS_EXPECTED - STEPS_DONE))" "$(hms "$projected")" "$(hms "$CAP_SECS")"
     fi
   fi
   return $rc
@@ -187,7 +197,7 @@ beat_cap() {   # beat_cap <label> <outfile> <command...>
     sleep "$BEAT_SECS"
     kill -0 "$pid" 2>/dev/null || break
     now=$(date +%s)
-    printf '    %s: still proving, %s in (run %s) | block %s | %s\n' \
+    printf '    %s: still working, %s in (run %s) | block %s | %s\n' \
       "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))" \
       "$(tip_block)" "$(procstat "$pid")"
     [ -f "${WORK:-}/sequencer.log" ] && \
@@ -195,8 +205,8 @@ beat_cap() {   # beat_cap <label> <outfile> <command...>
   done
   wait "$pid"; rc=$?
   now=$(date +%s)
-  PROOFS_DONE=$((PROOFS_DONE + 1))
-  PROOFS_SECS=$((PROOFS_SECS + now - t0))
+  STEPS_DONE=$((STEPS_DONE + 1))
+  STEPS_SECS=$((STEPS_SECS + now - t0))
   printf '    %s: %s (block %s)\n' "$label" "$(hms $((now - t0)))" "$(tip_block)"
   return $rc
 }

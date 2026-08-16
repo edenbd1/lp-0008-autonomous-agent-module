@@ -478,23 +478,37 @@ instruction ABI the CLI drives comes from `idl/agent_verifier.idl.json`, which
 the `#[lez_program]` macro generates from the same source the guest is built
 from.
 
-Two CI workflows, split by what they can honestly assert:
+Three CI workflows, split by what they can honestly assert — and, just as
+deliberately, by what they cost. Only the first is on the push path:
 
-- `.github/workflows/ci.yml` — minutes, gates every push, in eight jobs: the
+- `.github/workflows/ci.yml` — minutes, gates every push, in ten jobs: the
   policy crate and its adversarial tests (`rust`); the committed binary still
   hashing to the deployed transaction *and* that transaction being live on the
   public testnet with a cannot-exist hash as the control, plus `demo.sh` from a
   clean clone (`binaries`); each C++ suite against fake ports as its own step so
-  a red X names the suite (`skills`); the shipped `.lgx` against the source
-  committed beside it (`package`); a real Logos Storage node (`storage-node`);
-  Logos Core loading, configuring and starting the committed module headless on
-  Linux, out of the published AppImage (`linux-headless`); the same deployment
-  command in a container with no compiler on it at all (`toolchain-free`); and
-  the illustrative use cases against the public testnet (`use-cases`).
+  a red X names the suite, the concurrency and SIGKILL suites among them
+  (`skills`); the shipped `.lgx` against the source committed beside it
+  (`package`); the shipped owner console against *its* committed source, and that
+  console loading the way Basecamp's PluginLoader loads it (`owner-console`); a
+  real Logos Storage node (`storage-node`); Logos Core loading, configuring and
+  starting the committed module headless on Linux, out of the published AppImage
+  (`linux-headless`); the same deployment command in a container with no compiler
+  on it at all (`toolchain-free`); the illustrative use cases against the public
+  testnet (`use-cases`); and the spending ceiling read back off the chain that
+  keeps it, with the section that needs a key this repository does not hold
+  declared rather than skipped quietly (`use-case-03`).
+- `.github/workflows/alongside-companion-modules.yml` — up to two hours,
+  scheduled and on demand: the agent module *running* in one Logos Core runtime
+  beside the wallet, storage and messaging modules, each of those built on the
+  runner from its own published revision and each proved unedited, with use case
+  1 against real Storage and Messaging nodes as the last step. It is not on the
+  push path because it builds Nim, Go, four CMake trees and a Qt of its own, and
+  a gate that slow on every push is a gate people learn to ignore.
 - `.github/workflows/e2e-local-sequencer.yml` — hours, scheduled: the
   whole policy lifecycle against a real standalone LEZ sequencer with
   `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a job that completes
-  through one reports green without having run, which is worse than red.
+  through one reports green without having run, which is worse than red. Neither
+  scheduled workflow has one, for that reason.
 
 ## Reading order
 
