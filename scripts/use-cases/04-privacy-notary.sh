@@ -347,7 +347,17 @@ if [ -s "$MANIFEST" ]; then
     if [ -n "$TRANSFER_ID" ] && [ "$(kv "$F" program_id)" = "$TRANSFER_HEX" ]; then
       ok "  under the chain's own $TRANSFER_PROGRAM program"
     else
-      bad "  the transaction ran $(kv "$F" program_id), not the chain's $TRANSFER_PROGRAM"; ROW_OK=0
+      # A historical transaction's embedded program id, against what
+      # getProgramIds answers TODAY. Those are the same number for as long as
+      # LEZ does not redeploy its own builtin -- and if it ever does, every row
+      # in this manifest goes red at once, on a repository nothing has touched.
+      # The message has to make that readable, because a reviewer meeting a wall
+      # of red here would otherwise go looking for a defect in the notary.
+      bad "  the transaction ran $(kv "$F" program_id), not the chain's $TRANSFER_PROGRAM ($TRANSFER_HEX)"
+      note "  if EVERY row above says this, the chain redeployed its builtin"
+      note "  $TRANSFER_PROGRAM: these notarisations are unchanged and still in their"
+      note "  blocks, and it is this comparison that has gone out of date."
+      ROW_OK=0
     fi
     if [ "$NOW_OWNER" != "0,0,0,0,0,0,0,0" ]; then
       ok "  getAccount still reports it as a real account today"

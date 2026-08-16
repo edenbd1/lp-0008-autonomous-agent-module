@@ -485,14 +485,36 @@ if [ -n "$PREV_LEDGER" ]; then
     # Plus anything charged to this same ledger and recorded in another manifest.
     # The ledger counts spends, not rows of this file.
     SB_TOTAL=$(shielded_before "$PROGRAM_HASH" "$((LIVE_WINDOW + PREV_PB))" "$PREV_LEDGER" "$SH_LEDGER" "$PREV_PB")
-    if [ "$LIVE_SPENT" -eq "$((SUM + SB_TOTAL))" ]; then
+    RECORDED=$((SUM + SB_TOTAL))
+    # The comparison is bounded in the two directions separately, because they
+    # are not the same claim and only one of them is about this repository.
+    #
+    # The ledger's total is monotonic within a period, so it can never hold LESS
+    # than the settlements recorded above charged it: that direction is a
+    # contradiction between the chain and the manifest, and it is a failure.
+    #
+    # MORE is not. This is a live account on a public testnet and anything that
+    # charges it moves this number — a SETTLE=1 run, a demo, a second instance of
+    # this agent, a settlement made after this checkout was taken. An equality
+    # here made a correct manifest red for a spend that had simply happened
+    # since, which is the same shape of defect as summing across a period
+    # boundary and one this file has already been red for twice. It is reported
+    # rather than asserted, and it says which side moved.
+    if [ "$LIVE_SPENT" -eq "$RECORDED" ]; then
       if [ "${SB_TOTAL:-0}" -gt 0 ]; then
         ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: $SUM from this manifest, $SB_TOTAL from artifacts/shielded-settlement.tsv"
       else
         ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: the sum of every price charged to it"
       fi
+    elif [ "$LIVE_SPENT" -gt "$RECORDED" ]; then
+      ok "it reads $LIVE_SPENT for period $LIVE_WINDOW, which accounts for every one of the $RECORDED LEZ charged above"
+      note "the extra $((LIVE_SPENT - RECORDED)) LEZ is a spend charged to this same"
+      note "ledger in this same period that neither manifest here records. The chain"
+      note "moved, this repository did not — a settle run, a demo, or another"
+      note "instance of this agent. The ledger only goes up within a period, so this"
+      note "cannot hide a settlement that failed to charge it: that would read LOW."
     else
-      bad "it reads $LIVE_SPENT for period $LIVE_WINDOW; the prices charged to it sum to $((SUM + SB_TOTAL))"
+      bad "it reads $LIVE_SPENT for period $LIVE_WINDOW, LESS than the $RECORDED the settlements above charged it — the ledger cannot lose a spend within a period, so the manifest and the chain contradict each other"
     fi
   fi
 fi

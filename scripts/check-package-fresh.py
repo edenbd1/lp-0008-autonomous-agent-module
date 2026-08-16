@@ -574,9 +574,14 @@ def check(repo, rebuild_dir=None):
     on_disk = source_inventory(repo)
     recorded = record.get("built_from") or {}
     if len(recorded) < 15:
-        r.fail("the record lists only %d build inputs; module/src alone has 20, "
+        # The comparison figure is COUNTED, not remembered. This message used to
+        # say "module/src alone has 20"; module/src holds 25 today and the whole
+        # inventory holds 31, so the one number a reader would have anchored on
+        # was the stale one — in the text of a failure, where it is least likely
+        # to be re-checked and most likely to send somebody to the wrong file.
+        r.fail("the record lists only %d build inputs; this tree has %d, "
                "so the record is truncated and would agree with almost anything"
-               % len(recorded))
+               % (len(recorded), len(on_disk)))
 
     added = sorted(set(on_disk) - set(recorded))
     removed = sorted(set(recorded) - set(on_disk))

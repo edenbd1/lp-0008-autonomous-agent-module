@@ -34,6 +34,9 @@ SHIELDED=artifacts/shielded-settlement.tsv
 fail=0
 ok()   { printf '  ok    %s\n' "$*"; }
 bad()  { printf '  FAIL  %s\n' "$*" >&2; fail=$((fail + 1)); }
+# For the sentence a FAIL needs after it when the likeliest cause is that the
+# chain moved rather than that this repository is wrong.
+note() { printf '        %s\n' "$*"; }
 
 rpc() { # method params-json
   curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
@@ -198,16 +201,38 @@ if [ -f "$TASKS" ]; then
     bad "$TASKS has no program column: a settlement that names no program cannot be told from an orphan"
   else
     # The shipped ImageID, from the chain. Any anchor of the shipped program
-    # carries it; the first one that resolves is enough.
-    SHIPPED_IMG=""
+    # carries it, and the comment here said "the first one that resolves is
+    # enough" while the code read row one and stopped. Those are different
+    # claims: a first row that names an anchor under a SUPERSEDED program hands
+    # this the old ImageID, and then every settlement below is attributed
+    # backwards — each one labelled with confidence, none of them right, and the
+    # failure text blaming the manifest. The comment is now what the loop does.
+    SHIPPED_IMG=""; _IMGS=""
     if [ -n "$(col "$AGENTS" create_tx)" ]; then
-      _ctx=$(rows "$AGENTS" | awk -F'\t' -v c="$(col "$AGENTS" create_tx)" 'NR==1 {print $c}')
-      SHIPPED_IMG=$(rpc getTransaction "[\"$_ctx\"]" | python3 -c "
+      for _ctx in $(rows "$AGENTS" | awk -F'\t' -v c="$(col "$AGENTS" create_tx)" '{print $c}'); do
+        [ -n "$_ctx" ] || continue
+        SHIPPED_IMG=$(rpc getTransaction "[\"$_ctx\"]" | python3 -c "
 import json,sys,base64
 r=json.load(sys.stdin).get('result')
 if not isinstance(r,list): raise SystemExit
 d=base64.b64decode(r[0])
 print(d[1:33].hex() if len(d)>33 and d[0]==0 else '')")
+        [ -n "$SHIPPED_IMG" ] || continue
+        case " $_IMGS " in *" $SHIPPED_IMG "*) ;; *) _IMGS="$_IMGS $SHIPPED_IMG" ;; esac
+      done
+      # And if the anchors do not agree with each other, say so instead of
+      # picking one. Every settlement below is labelled SHIPPED or OTHER by
+      # whether it embeds THIS value; silently taking row one's meant a manifest
+      # spanning two deployments could be attributed wholesale to whichever
+      # program happened to be anchored first, with every label confident and
+      # every one of them possibly wrong.
+      set -- $_IMGS
+      if [ "$#" -gt 1 ]; then
+        bad "the anchors in $AGENTS carry $# different ImageIDs ($_IMGS): this manifest spans deployments, so no single one of them can attribute the settlements below"
+        SHIPPED_IMG=""
+      else
+        SHIPPED_IMG="${1:-}"
+      fi
     fi
     if [ -z "$SHIPPED_IMG" ]; then
       bad "could not read the shipped ImageID off an anchor: settlements cannot be attributed from the chain"
@@ -255,6 +280,15 @@ print('%s %s' % (r[1], 'SHIPPED' if bytes.fromhex('$SHIPPED_IMG') in base64.b64d
       ok "$shipped settlement(s) under the shipped program (need $want)"
     else
       bad "only $shipped settlement(s) under the shipped program, need $want — the rest are under superseded programs and are not evidence that what this repository ships settles anything"
+      # Said plainly, because the likeliest way to arrive here is a REDEPLOY and
+      # not a defect: a new deployment moves the ImageID, every existing row in
+      # $TASKS becomes SUPERSEDED at once, and `shipped` drops to zero on a
+      # repository whose manifest is entirely correct and whose settlements are
+      # all still in their blocks.
+      note "if EVERY row above is SUPERSEDED, this program was redeployed. Those"
+      note "settlements are unchanged and still on chain; they were made under the"
+      note "previous ImageID. Make settlements under the one that ships now, or set"
+      note "MIN_SHIPPED_SETTLEMENTS while that is outstanding."
     fi
   fi
 else
@@ -320,6 +354,16 @@ print('%s %s' % (r[1], 'SHIPPED' if carries else 'OTHER'))")
         "$DEPLOY_TX")
           if [ "$chain" = SHIPPED ]; then
             ok "$stx  block $b  under the shipped program, paying Private/$note"
+          elif [ -z "${SHIPPED_IMG:-}" ]; then
+            # There is no ImageID to attribute against, so this row cannot be
+            # judged either way. `SHIPPED_IMG` is derived in the settlements
+            # section above, and is empty when artifacts/a2a-task.tsv is missing
+            # or when its anchors disagree — both of which are already reported
+            # there. Without this branch every shielded row was labelled "the
+            # payload does not carry that ImageID", which is a verdict about the
+            # transaction and blames the wrong file for a reading that was never
+            # taken.
+            bad "$stx  block $b  cannot be attributed: no shipped ImageID was derived (see above); this is a reading that could not be taken, not a disagreement"
           else
             bad "$stx  block $b  the manifest files it under the shipped program but the payload does not carry that ImageID"
           fi ;;

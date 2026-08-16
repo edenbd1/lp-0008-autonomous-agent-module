@@ -606,7 +606,7 @@ int main(int argc, char **argv)
         // count. `agent is not started` is the one that mattered: it comes
         // from before the registry lookup, so it never contains
         // kUnregistered, and a module that failed to start passed this check
-        // for all 22 names.
+        // for all 22 names (count-as-it-was).
         if (answer.contains(QString::fromUtf8(kNotStarted))) unstarted << name;
         else if (answer.isEmpty() || answer.contains(QString::fromUtf8(kUnregistered)))
             undispatched << name;

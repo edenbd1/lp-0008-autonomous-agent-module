@@ -645,7 +645,7 @@ capability needing a backend the core module has never heard of, registered
 through `ISkill` without a line changing in `agent_module_plugin.cpp`". The last
 clause was false. `installBuiltinSkills` constructs it —
 `std::make_shared<EvaluateTaskSkill>(ports.inference, limits)` — in the same
-vector as the other twenty, in `agent_module_plugin.cpp`. It is a built-in that
+vector as the other twenty-seven, in `agent_module_plugin.cpp`. It is a built-in that
 happens not to be on the prize's list, and it demonstrated nothing about
 third-party extensibility. §4 of this document is that demonstration instead: a
 skill outside `module/src`, separately compiled against one header, `dlopen`ed,

@@ -351,7 +351,16 @@ verify_recorded() {
     if [ -n "$PID" ] && [ "$own_words" = "$PID" ]; then
       ok "  and the account is owned by this repository's policy program"
     else
-      bad "  the claim account is owned by $own_words, not $PID"; row_ok=0
+      # A claim account is written once and its owner can never change (LEZ
+      # rule 4), so this compares a HISTORICAL account against the ProgramId the
+      # binary committed here derives TODAY. A redeploy moves the second and not
+      # the first, and then every recorded alert fails together -- which reads
+      # as a broken manifest and is not one.
+      bad "  the claim account is owned by $own_words, not $PID"
+      note "  if EVERY alert above says this, this repository redeployed its policy"
+      note "  program: the claims were written by the previous one and cannot change"
+      note "  owner. Re-run 05 to raise an alert under the program that ships now."
+      row_ok=0
     fi
     [ "$row_ok" -eq 1 ] && n=$((n + 1))
   done
@@ -574,13 +583,41 @@ control_a_no_record "$GHOST_PDA" "${PDA:-}"
 # that passed in section 5 is run against an alert with one field changed, and
 # is required to fail. Otherwise "the payload decodes to the alert" is satisfied
 # by a grep that matches anything.
+#
+# THE MUTATION IS DERIVED FROM WHAT IT MUTATES, and that is not decoration. This
+# line read `sed 's/"agent":"./"agent":"X/'`, replacing the agent id's first
+# character with a literal `X`. An agent id is base58 and base58 contains `X`,
+# and `prepare` mints a fresh random agent every run — so about one run in
+# fifty-eight the "mutant" was byte-identical to the original, the grep matched
+# because the alert really was on the wire, and this control failed a correct
+# run. It fails closed rather than open, but a control that reds at random is a
+# control people learn to re-run rather than read.
+#
+# This repository has already had that exact defect once, in 02's Agent Card
+# control: the price was rewritten to the literal 1, and the day the card was
+# re-signed AT price 1 the mutation became a no-op that verified. The fix there
+# was to derive the new value from the old one, and it is the fix here. `q` and
+# `Q` are both in the base58 alphabet and cannot be each other, so mapping one
+# to the other changes the id whatever it starts with — and the substitution is
+# then checked for having changed anything at all, because a mutation that is a
+# no-op is not a mutation.
 if [ -n "$ALERT" ] && [ -f "$WORK/messaging.log" ]; then
-  MUTANT=$(printf '%s' "$ALERT" | sed 's/"agent":"./"agent":"X/')
-  MUT_B64=$(printf '%s' "$MUTANT" | base64 | tr -d '\n')
-  if grep -q "$MUT_B64" "$WORK/messaging.log"; then
-    bad "control B: an alert naming a different agent also matched the wire"
+  # The character the agent id starts with, and a base58 character that is not
+  # it. Both `q` and `Q` are in the alphabet and neither is the other, so one of
+  # the two is always a real change.
+  FIRST=${ALERT#*\"agent\":\"}
+  FIRST=$(printf '%.1s' "$FIRST")
+  if [ "$FIRST" = "q" ]; then REPL=Q; else REPL=q; fi
+  MUTANT=$(printf '%s' "$ALERT" | sed "s/\"agent\":\"./\"agent\":\"$REPL/")
+  if [ "$MUTANT" = "$ALERT" ]; then
+    bad "control B: the mutation changed nothing, so it tests nothing"
   else
-    ok "control B: changing one field of the alert stops it matching the wire"
+    MUT_B64=$(printf '%s' "$MUTANT" | base64 | tr -d '\n')
+    if grep -q "$MUT_B64" "$WORK/messaging.log"; then
+      bad "control B: an alert naming a different agent also matched the wire"
+    else
+      ok "control B: changing one field of the alert stops it matching the wire"
+    fi
   fi
 else
   bad "control B: no alert was published, so the payload check proves nothing"

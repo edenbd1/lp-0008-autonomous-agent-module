@@ -345,8 +345,22 @@ else
     bad "that policy ledger could not be read off the chain"
   elif [ "$LIVE_WINDOW" != "$prev_window" ]; then
     note "period has rolled to $LIVE_WINDOW, so the live total has reset"
-  elif [ "$LIVE_SPENT" -ne "$total" ]; then
-    bad "the live ledger reads $LIVE_SPENT for period $LIVE_WINDOW; the prices charged to it sum to $total"
+  elif [ "$LIVE_SPENT" -lt "$total" ]; then
+    # LOW is the contradiction: the running total is monotonic within a period,
+    # so it cannot hold less than the settlements recorded above charged it.
+    bad "the live ledger reads $LIVE_SPENT for period $LIVE_WINDOW, LESS than the $total the settlements above charged it — the ledger cannot lose a spend within a period, so the manifest and the chain contradict each other"
+  elif [ "$LIVE_SPENT" -gt "$total" ]; then
+    # HIGH is not, and the asymmetry is the point. This is a live account on a
+    # public testnet: anything that charges it moves this number, including a
+    # settlement made after this checkout was taken. An equality here would make
+    # a correct manifest red for a spend that had simply happened since — the
+    # same shape as summing across a period boundary, which this file has
+    # already been red for. Reported, and it says which side moved.
+    ok "the live ledger reads $LIVE_SPENT of $PER_PERIOD for period $LIVE_WINDOW, which accounts for every one of the $total LEZ charged above"
+    note "the extra $((LIVE_SPENT - total)) LEZ is a spend charged to this same ledger"
+    note "in this same period that no manifest here records. The chain moved, this"
+    note "repository did not. The ledger only goes up within a period, so this cannot"
+    note "hide a settlement that failed to charge it: that would read LOW."
   else
     ok "the live ledger reads $LIVE_SPENT of $PER_PERIOD for period $LIVE_WINDOW — the sum of the prices charged to it"
   fi

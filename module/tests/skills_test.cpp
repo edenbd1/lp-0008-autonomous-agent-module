@@ -124,6 +124,27 @@ bool completes(std::function<void()> f, int seconds = 5)
     return ok;
 }
 
+/// The count half of an assertion, with the two numbers printed when they differ.
+///
+/// `check` prints the property and nothing else, and for a count the
+/// disagreement IS the diagnosis. When the owner skills joined the registry
+/// without joining this file's table, eight lines printed `FAIL <property>` and
+/// not one of them printed the two numbers or said which side had moved — so
+/// the log read as "the module is broken" when the module was right and the
+/// table was stale. This prints both, and names the one edit that reconciles
+/// them.
+bool sameCount(std::size_t got, std::size_t want)
+{
+    if (got != want) {
+        std::printf("       counted %zu where this file expects %zu. If a skill "
+                    "joined installBuiltinSkills, kBuiltinSkills below has not "
+                    "followed it: run ./scripts/check-docs.py, which reads the "
+                    "registry and names the difference.\n",
+                    got, want);
+    }
+    return got == want;
+}
+
 /// The card entry for a skill, by the name it was registered under.
 json entryFor(const json &card, const std::string &name)
 {
@@ -152,7 +173,19 @@ std::size_t entriesNamed(const json &card, const std::string &name)
 /// Named so that removing one from registration turns this suite red *with the
 /// name*, which is the mutation this file exists to catch: a count alone goes
 /// red without saying what went missing, and no assertion at all is how thirteen
-/// implemented skills came to be unreachable.
+/// implemented skills came to be unreachable. A derived list would not do: an
+/// expectation read out of the thing it checks agrees with it by construction.
+///
+/// Which is why the list is not self-checking, and this table went stale the day
+/// `owner.watch`, `owner.pending` and `owner.answer` joined the registry — the
+/// two Qt harnesses got the three names, this one did not, and eight assertions
+/// here went red against a module that was correct. So the list is written by
+/// hand and its AGREEMENT with the registry is derived: `scripts/check-docs.py`
+/// reads the names `installBuiltinSkills` actually registers, out of the skill
+/// classes it constructs, and fails any harness table that differs — by name,
+/// in seconds, before a compiler is fetched. Same table as
+/// `plugin_load_test.cpp` and `logos_core_load_test.cpp`, and that is now a
+/// checked claim rather than a comment.
 const char *kBuiltinSkills[] = {
     "messaging.send",      "messaging.receive", "messaging.join",
     "messaging.create_group",
@@ -164,10 +197,16 @@ const char *kBuiltinSkills[] = {
     "agent.poll",          "agent.cancel",
     "meta.status",         "meta.configure",   "meta.skills",
     "agent.evaluate_task",
-    // The owner's side of the channel, added for the second-Basecamp path and
-    // missing from this list until CI went red on it: the list is spelled out
-    // on purpose, so a skill that is registered and not named here fails the
-    // suite by name -- which is what happened, and is the list doing its job.
+    // The owner's end of the approval channel, which a SECOND Logos app calls
+    // to hear a spend request and answer it over Logos Messaging. Registered in
+    // every build, node or no node, so that the registry is not a fact about
+    // how the binary was compiled.
+    //
+    // They were missing from this list until CI went red on them. The list is
+    // spelled out on purpose so a registered skill that is not named here fails
+    // by name -- and that is what happened. What it could not do was fail
+    // cheaply: the step runs under `set -euo pipefail`, so the ten steps after
+    // it never ran. check-docs.py compares the two sides now, in seconds.
     "owner.watch",         "owner.pending",    "owner.answer",
 };
 constexpr std::size_t kBuiltinCount = sizeof(kBuiltinSkills) / sizeof(kBuiltinSkills[0]);
@@ -418,7 +457,8 @@ int main()
         const auto card = json::parse(doc, nullptr, false);
         // Six fakes, on top of the skills the module registers for itself when
         // nobody wired them.
-        check(!card.is_discarded() && card.is_array() && card.size() == kBuiltinCount + 6,
+        check(!card.is_discarded() && card.is_array()
+                  && sameCount(card.size(), kBuiltinCount + 6),
               "the card parses, with one entry per registered skill");
 
         const auto hostile = entryFor(card, evil);
@@ -588,7 +628,8 @@ int main()
               "the card is not empty, so the schema loop above checked something");
         check(schemaless.empty(),
               "each with a parameter schema another agent can call it from");
-        check(card.size() == kBuiltinCount, "and the card lists nothing it cannot dispatch");
+        check(sameCount(card.size(), kBuiltinCount),
+              "and the card lists nothing it cannot dispatch");
 
         // The module's own status port is the one it can answer honestly without
         // anybody wiring anything, so it is the one skill that works out of the
@@ -612,7 +653,8 @@ int main()
         const auto lj = json::parse(listed, nullptr, false);
         check(okOf(listed) && lj.contains("skills") && lj["skills"].is_array(),
               "meta.skills answers: the module wired itself into its own registry port");
-        check(lj["skills"] == card && lj.value("count", std::size_t{0}) == kBuiltinCount,
+        check(lj["skills"] == card
+                  && sameCount(lj.value("count", std::size_t{0}), kBuiltinCount),
               "and lists exactly the registry, count included");
         check(!entryFor(lj["skills"], "meta.skills").empty(),
               "including itself, because it is registered rather than special-cased");
@@ -653,8 +695,8 @@ int main()
             // Two refusals have to be counted, not one. `agent is not started`
             // does not contain `no skill named`, so a module that never started
             // — or a started one whose registry is empty and whose registry
-            // error was reworded — answered all 22 with something this counted
-            // as a successful dispatch. Both suites stayed green under exactly
+            // error was reworded — answered all 22 (count-as-it-was) with something
+            // this counted as a successful dispatch. Both suites stayed green under
             // that mutation. The second string is now its own tally.
             if (errOf(answer).find("agent is not started") != std::string::npos) ++notStarted;
             if (errOf(answer).find("no skill named") == std::string::npos) ++dispatched;
@@ -666,9 +708,9 @@ int main()
         check(wrong.empty(), "invoking every one of them yields a JSON answer, not an exception");
         check(notStarted == 0,
               "the module answered as a running agent, not 'agent is not started'");
-        check(dispatched == static_cast<int>(kBuiltinCount) && kBuiltinCount > 0,
+        check(sameCount(std::size_t(dispatched), kBuiltinCount) && kBuiltinCount > 0,
               "each dispatches to a skill rather than answering 'no skill named'");
-        check(refusedCleanly == static_cast<int>(kBuiltinCount) - 2,
+        check(sameCount(std::size_t(refusedCleanly), kBuiltinCount - 2),
               "and each unwired one refuses, naming what it is missing");
 
         // The refusal that matters most: an unwired module must not be able to
@@ -716,12 +758,12 @@ int main()
             StubLocalBackend::Rules{{"storage.upload"}, 100});
 
         const auto wired = m.registerBuiltinSkills(ports);
-        check(wired.success && wired.value == static_cast<int>(kBuiltinCount),
+        check(wired.success && sameCount(std::size_t(wired.value), kBuiltinCount),
               "a host that has ports wires every skill through them");
         check(!m.registerBuiltinSkills(ports).success,
               "and may not wire a second copy over the first");
         check(m.start().success, "the wired module starts");
-        check(json::parse(m.skills(), nullptr, false).size() == kBuiltinCount,
+        check(sameCount(json::parse(m.skills(), nullptr, false).size(), kBuiltinCount),
               "with the same card as the unwired one: wiring changes answers, not the offer");
 
         check(okOf(m.invoke("messaging.send", R"({"recipient":"abc","message":"hi"})"))
@@ -779,11 +821,12 @@ int main()
         const auto wired = m.registerBuiltinSkills(SkillPorts{});
         check(!wired.success && wired.error.find("wallet.send") != std::string::npos,
               "the built-in of that name is reported as not registered, not dropped quietly");
-        check(wired.value == static_cast<int>(kBuiltinCount) - 1, "and the rest are registered");
+        check(sameCount(std::size_t(wired.value), kBuiltinCount - 1),
+              "and the rest are registered");
 
         m.start();
         const auto card = json::parse(m.skills(), nullptr, false);
-        check(card.size() == kBuiltinCount && entriesNamed(card, "wallet.send") == 1,
+        check(sameCount(card.size(), kBuiltinCount) && entriesNamed(card, "wallet.send") == 1,
               "the card carries exactly one wallet.send");
         check(okOf(m.invoke("wallet.send", "{}")) && mine,
               "and it is the one invoke() dispatches to");
@@ -796,7 +839,7 @@ int main()
         m->configure("owner-1", anchored);
         check(completes([m] { m->start(); }),
               "start registers the built-ins without holding the module's lock");
-        check(json::parse(m->skills(), nullptr, false).size() == kBuiltinCount,
+        check(sameCount(json::parse(m->skills(), nullptr, false).size(), kBuiltinCount),
               "and the module it started offers them");
     }
 #else

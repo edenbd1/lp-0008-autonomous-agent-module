@@ -31,7 +31,7 @@
     "and that every string literal of the source is inside it."
   ],
   "built_from": {
-    "module/tests/logos_core_load_test.cpp": "662dd8d622a22971621b3ff76a66a0b703668e9b734802b0eb88b29cce4186a2"
+    "module/tests/logos_core_load_test.cpp": "204524a321dd3002090b38746a1f1a9e6353ba48a2d8f2f3cb3ca3ca71d98da7"
   },
   "harness": "module/harness/<variant>/logos_core_load_test",
   "variants": {

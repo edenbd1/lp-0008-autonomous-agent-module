@@ -290,17 +290,43 @@ shielded_payer_ledger() {  # <idl> <program-bin> -> the ledger those spends char
 }
 
 shielded_before() {  # <deploy-tx> <block> <ledger> <shielded-ledger> [<period-blocks>] -> amount
-  local f=artifacts/shielded-settlement.tsv pb="${5:-0}"
-  [ -f "$f" ] && [ -n "$4" ] && [ "$3" = "$4" ] || { echo 0; return; }
+  local f=artifacts/shielded-settlement.tsv pb="${5:-}"
+  [ -f "$f" ] && [ -n "$4" ] && [ "$3" = "$4" ] || { echo 0; return 0; }
+  # THE PERIOD IS NOT OPTIONAL, and it used to be. This function took
+  # `pb="${5:-0}"` and its awk read `pb == 0 ||` as "no period bound wanted", so
+  # a caller that could not supply the number got the UNBOUNDED sum -- the exact
+  # behaviour the period bound was added to remove, reachable by passing an
+  # empty string. `02-services-marketplace.sh` passes
+  # `kv "$F" ledger_period_blocks`, which is empty whenever a settlement's
+  # post-state carries no ledger record, so the hole was reachable from a
+  # supported path. A default that silently restores the defect is worse than no
+  # default.
+  #
+  # So an absent or unusable period is resolved from the ledger account itself,
+  # which is where the number lives, and if THAT cannot be read the function
+  # refuses rather than widening. Callers chain it with `&&`, so a refusal shows
+  # up as their own failure message with this one printed above it, naming the
+  # chain rather than the repository.
+  case "$pb" in
+    ''|*[!0-9]*|0) pb=$(policy_record "$3" period_blocks 2>/dev/null) ;;
+  esac
+  case "$pb" in
+    ''|*[!0-9]*|0)
+      echo "       shielded_before: no period length for ledger $3, so the sum of" >&2
+      echo "       shielded spends cannot be bounded to one window. This is a" >&2
+      echo "       reading that could not be taken, not a disagreement." >&2
+      echo 0
+      return 1 ;;
+  esac
   # Same PERIOD as well as same ledger and earlier block. The ledger's running
   # total is per period and resets when the window rolls, so a spend from an
   # earlier window is not in the reading a later settlement sees -- counting it
   # made a correct run red the moment the chain crossed a period boundary.
   awk -F'\t' -v prog="$1" -v before="$2" -v pb="$pb" '
-    function win(b) { return pb > 0 ? int(b / pb) * pb : 0 }
+    function win(b) { return int(b / pb) * pb }
     NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
     $h["role"]=="settlement" && $h["program"]==prog \
       && ($h["block"]+0) < (before+0) \
-      && (pb == 0 || win($h["block"]+0) == win(before+0)) { s += $h["amount"] }
+      && win($h["block"]+0) == win(before+0) { s += $h["amount"] }
     END { print s+0 }' "$f" 2>/dev/null
 }

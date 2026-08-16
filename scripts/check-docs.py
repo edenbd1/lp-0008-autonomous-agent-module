@@ -422,53 +422,167 @@ ABOUT_SKILLS = re.compile(r"skill|card|registry|registered|dispatch", re.I)
 HISTORICAL = "(count-as-it-was)"
 
 
-def skills_test_names():
-    """The names `module/tests/skills_test.cpp` spells out in kBuiltinSkills[].
-
-    That list is deliberately spelled out rather than counted, so a skill that
-    is registered and not named there fails the suite BY NAME. The cost of it
-    drifting is not cosmetic: the step runs under `set -euo pipefail`, so when
-    it failed, the ten steps after it in the same job never ran -- module
-    recovery, wallet, program, agent-coordination, the A2A driver, the owner
-    channel and task persistence all stopped being verified on the public
-    branch, and a real regression in any of them would have been
-    indistinguishable from a miscount. This compares the two lists so the drift
-    is caught here, in seconds, instead of there.
-    """
-    src = open(os.path.join(ROOT, "module/tests/skills_test.cpp"),
-               encoding="utf-8").read()
-    start = src.index("const char *kBuiltinSkills[] = {")
-    end = src.index("};", start)
-    return set(re.findall(r'"([a-z_]+\.[a-z_]+)"', src[start:end]))
-
-
-def registered_skill_names():
-    """The names `installBuiltinSkills` registers, read off the registrations."""
-    src = open(os.path.join(ROOT, "module/src/agent_module_plugin.cpp"),
-               encoding="utf-8").read()
-    names = set()
-    for base in os.listdir(os.path.join(ROOT, "module/src")):
-        if not base.endswith((".h", ".cpp")):
-            continue
-        text = open(os.path.join(ROOT, "module/src", base), encoding="utf-8").read()
-        # `std::string name() const override { return "owner.watch"; }` -- the
-        # one place a skill states its own identifier.
-        names |= set(re.findall(
-            r'name\(\)\s*const\s*override\s*\{\s*return\s+"([a-z_]+\.[a-z_]+)"',
-            text))
-    return names
-
-
-def registered_skill_count():
-    """How many built-ins `installBuiltinSkills` actually registers."""
+def registry_source():
+    """The body of the `builtins{...}` initialiser in `installBuiltinSkills`."""
     src = open(os.path.join(ROOT, "module/src/agent_module_plugin.cpp"),
                encoding="utf-8").read()
     start = src.index("const std::vector<std::shared_ptr<logos::agent::ISkill>> builtins{")
     end = src.index("};", start)
-    return src.count("std::make_shared<", start, end)
+    return src[start:end]
+
+
+def registered_skill_count():
+    """How many built-ins `installBuiltinSkills` actually registers."""
+    return registry_source().count("std::make_shared<")
+
+
+# ---------------------------------------------------------------------------
+# The skill NAMES, and the three harness tables that spell them out
+# ---------------------------------------------------------------------------
+#
+# The count above is not the whole drift, and the half it misses is the half
+# that cost a red main. `skills_test.cpp`, `plugin_load_test.cpp` and
+# `logos_core_load_test.cpp` each carry the registry written out by name —
+# deliberately, and the comment above each says why: a count that goes red does
+# not say WHAT went missing, and thirteen implemented skills were once
+# unreachable with nothing to name them. A derived table would not do; an
+# expectation read out of the thing it checks agrees with it by construction.
+#
+# But a hand-written table is a table that can go stale, and one did. When
+# `owner.watch`, `owner.pending` and `owner.answer` joined the registry the two
+# Qt harnesses got the three names and `skills_test.cpp` did not — it is the one
+# harness CI can build, so eight of its assertions went red against a module
+# that was entirely correct, and the log said only "the card parses, with one
+# entry per registered skill". The count gate could not see it: nothing in that
+# file states a number, `kBuiltinCount` is `sizeof` over the table itself, and a
+# stale table is internally consistent.
+#
+# So the tables stay hand-written and their AGREEMENT is derived. The names come
+# out of the registry the same way the count does — the classes it constructs,
+# then each class's own `name()` — and every table has to be that set exactly.
+# Adding a skill is then the registry edit plus whatever this reports, in
+# seconds, at the first step of CI, instead of a compile-and-run four jobs later
+# that names one assertion and no skill.
+HARNESS_TABLES = [
+    ("module/tests/skills_test.cpp", "kBuiltinSkills"),
+    ("module/tests/plugin_load_test.cpp", "kSkills"),
+    ("module/tests/logos_core_load_test.cpp", "kSkills"),
+]
+
+
+def registered_skill_names():
+    """The name every built-in `installBuiltinSkills` registers answers to.
+
+    Derived twice over: the classes the registry constructs, and the string each
+    of those classes returns from `name()`. Anything that does not resolve is
+    reported rather than dropped — a name-derivation that quietly resolved
+    nothing would make every table below pass, which is the shape of gate this
+    file exists to refuse.
+    """
+    classes = re.findall(r"std::make_shared<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>",
+                         registry_source())
+    headers = ""
+    for hdr in sorted(os.listdir(os.path.join(ROOT, "module/src"))):
+        if hdr.endswith(".h"):
+            headers += open(os.path.join(ROOT, "module/src", hdr),
+                            encoding="utf-8").read()
+    names, unresolved = [], []
+    for cls in classes:
+        decl = re.search(r"\bclass\s+%s\b" % re.escape(cls), headers)
+        got = None
+        if decl:
+            # Bounded to THIS class's body, at its closing `};` in column one.
+            # Unbounded, the search ran on into the next class and returned its
+            # name — which is not a miss, it is a wrong answer, and it was
+            # measured: rewriting `OwnerWatchSkill::name()` to return a constant
+            # made this script report `owner.pending` twice and blame the
+            # registry for a duplicate registration it does not have. A
+            # derivation that cannot read a class has to say so.
+            close = headers.find("\n};", decl.start())
+            body = headers[decl.start():close if close != -1 else len(headers)]
+            got = re.search(r'std::string\s+name\(\)\s*const\s+override\s*'
+                            r'\{\s*return\s+"([^"]+)"\s*;\s*\}', body)
+        if got is None:
+            unresolved.append(cls)
+        else:
+            names.append(got.group(1))
+    return names, unresolved
+
+
+def skill_table(rel, symbol):
+    """The names a harness spells out, or None if the file is not here.
+
+    Comments inside the table are stripped first: every one of these tables
+    carries a `//` paragraph explaining a group of skills, and a name quoted
+    inside one is prose, not an entry.
+    """
+    path = os.path.join(ROOT, rel)
+    if not os.path.isfile(path):
+        return None
+    src = open(path, encoding="utf-8").read()
+    m = re.search(r"\b%s\s*\[\s*\]\s*=\s*\{" % re.escape(symbol), src)
+    if not m:
+        return None
+    body = src[m.end():src.index("};", m.end())]
+    body = re.sub(r"//[^\n]*", "", body)
+    return re.findall(r'"([^"]*)"', body)
 
 
 expected_count = registered_skill_count()
+expected_names, unresolved_classes = registered_skill_names()
+
+# The derivation has to have worked before anything is compared against it.
+if unresolved_classes:
+    failures.append(
+        "module/src/agent_module_plugin.cpp  the registry constructs %s, whose "
+        "name() this script could not read out of module/src/*.h. Until it can, "
+        "the harness tables below are compared against an incomplete registry."
+        % ", ".join(unresolved_classes))
+elif len(expected_names) != expected_count:
+    failures.append(
+        "module/src/agent_module_plugin.cpp  the registry constructs %d skills "
+        "but %d names were derived from it: the two readings of installBuiltinSkills "
+        "disagree, so neither can be trusted." % (expected_count, len(expected_names)))
+
+tables_checked = 0
+if expected_names and not unresolved_classes:
+    want = set(expected_names)
+    if len(want) != len(expected_names):
+        dupes = sorted({n for n in expected_names if expected_names.count(n) > 1})
+        failures.append(
+            "module/src/agent_module_plugin.cpp  registers %s more than once: "
+            "`registerSkill` refuses the second, so the card would be short one "
+            "entry with nothing named." % ", ".join(dupes))
+    for rel, symbol in HARNESS_TABLES:
+        table = skill_table(rel, symbol)
+        if table is None:
+            failures.append(
+                "%s  has no `%s[] = {...}` table for this check to read. Either "
+                "it was renamed, or the harness stopped spelling the registry "
+                "out — and a check that reads nothing passes everything."
+                % (rel, symbol))
+            continue
+        tables_checked += 1
+        got = set(table)
+        missing = sorted(want - got)
+        extra = sorted(got - want)
+        if missing or extra:
+            failures.append(
+                "%s  `%s` disagrees with the registry in installBuiltinSkills: "
+                "%s%s%s. The registry is the source; add or remove the name here."
+                % (rel, symbol,
+                   "missing " + ", ".join(missing) if missing else "",
+                   " and " if missing and extra else "",
+                   "names no built-in of that name: " + ", ".join(extra) if extra else ""))
+        elif len(table) != len(got):
+            dupes = sorted({n for n in table if table.count(n) > 1})
+            failures.append(
+                "%s  `%s` lists %s twice, so its `sizeof` count is one more than "
+                "the registry has." % (rel, symbol, ", ".join(dupes)))
+
+print("checked %d harness skill table(s) against the %d name(s) the registry "
+      "derives" % (tables_checked, len(expected_names)))
+
 counted = 0
 for rel in sorted(set(SKILL_FILES)):
     path = os.path.join(ROOT, rel)
@@ -492,12 +606,30 @@ for rel in sorted(set(SKILL_FILES)):
             if HISTORICAL in raw or (spans_break and HISTORICAL in nxt):
                 continue
             for m, token, offset in count_mentions(text):
-                # In the window pass, only a claim that really crossed the line
-                # break is new; anything wholly inside this line was counted by
-                # the pass above, and anything wholly inside the next line will
-                # be counted when that line is `here`.
-                if spans_break and not (m.start() < boundary <= m.end()):
+                # THE FIFTH SHAPE, and it was hiding a stale count in this
+                # repository's own workflow. `.github/workflows/ci.yml` said
+                #
+                #     ... and both answer skills() with
+                #     all 22 entries. Size, load and the whole ...
+                #
+                # against a registry of 28. The `here` pass never looked at the
+                # second line because that line alone says nothing about skills;
+                # the window pass looked, but discarded the match for lying
+                # wholly inside the continuation — on the reasoning below, that
+                # anything wholly inside the next line "will be counted when
+                # that line is `here`". It never was, because it never could be.
+                # So the discard is now conditional on that promise being true:
+                # if the continuation on its own would not be scanned, the window
+                # pass is the only pass that will ever see the claim, and it
+                # keeps it.
+                if spans_break and not (m.start() < boundary <= m.end()) \
+                        and (m.end() <= boundary or ABOUT_SKILLS.search(cont)):
                     continue
+                # (In the window pass, a claim wholly inside THIS line was
+                # already counted by the pass above; a claim wholly inside the
+                # next line is left to that line's own `here` pass, but only
+                # when that pass will actually run — which is the condition
+                # above.)
                 value = stated_value(token)
                 if value is None:
                     continue
@@ -526,20 +658,5 @@ if failures:
         print("  " + f)
     sys.exit(1)
 
-# --- the test's spelled-out list against the module's own name() overrides ---
-_test_names = skills_test_names()
-_code_names = registered_skill_names()
-_missing = sorted(_code_names - _test_names)
-_extra = sorted(_test_names - _code_names)
-if _missing or _extra:
-    for n in _missing:
-        problem("module/tests/skills_test.cpp", 0,
-                "kBuiltinSkills does not name %s, which the module registers" % n)
-    for n in _extra:
-        problem("module/tests/skills_test.cpp", 0,
-                "kBuiltinSkills names %s, which the module does not register" % n)
-else:
-    print("checked %d skill name(s): the suite's list and the module agree"
-          % len(_code_names))
 
 print("every path, link target, line citation and symbol citation resolves")

@@ -25,13 +25,19 @@ jobs:
       # rather than after the risc0 build in the next job.
       - name: Documentation points at things that exist
         run: |
-          set -e
+          # `pipefail`, because `cmd | tee` reports TEE's exit status: without it
+          # a check-docs.py that exited 1 was masked, and the only thing standing
+          # between that and a green step was the banner grep below — whose
+          # message then said the script "exited 0", about a script that had just
+          # exited 1. A gate that misreports why it fired is the thing this file
+          # spends its length guarding against.
+          set -e -o pipefail
           ./scripts/check-docs.py | tee check-docs.out
           # The summary line is the assertion that it walked the tree at all: a
           # checker that found nothing to check exits 0 too. No step may go
           # green by skipping.
           grep -qE "^every .*resolves$" check-docs.out \
-            || { echo "check-docs.py exited 0 without reporting a full pass"; exit 1; }
+            || { echo "check-docs.py did not report a full pass — see its failures above"; exit 1; }
           if grep -q SKIPPED check-docs.out; then
             echo "check-docs.py reported SKIPPED"; exit 1
           fi
@@ -80,7 +86,26 @@ jobs:
           if mentions < 20:
               sys.exit("check-docs.py matched %d skill-count mention(s) (floor "
                        "20): the count matcher is not seeing this tree" % mentions)
-          print("counts above their floors:", got, "| skill-count mentions:", mentions)
+          # And the same floor for the harness tables, for the same reason one
+          # line up. The count gate above cannot see a stale table — nothing in
+          # skills_test.cpp states a number, its count is `sizeof` over the table
+          # itself, and a stale table is internally consistent — which is how the
+          # three owner skills reached the registry, missed that one harness, and
+          # took eight assertions red against a module that was correct. Three
+          # harnesses spell the registry out; all three have to be read, and a
+          # registry that derives no names would compare every table against the
+          # empty set and pass.
+          tables = [l for l in open("check-docs.out", encoding="utf-8")
+                    if "harness skill table" in l]
+          if not tables:
+              sys.exit("check-docs.py printed no harness-table line at all")
+          seen, derived = (int(n) for n in re.findall(r"\d+", tables[0])[:2])
+          if seen < 3 or derived < 20:
+              sys.exit("check-docs.py read %d harness table(s) against %d derived "
+                       "name(s) (floors 3 and 20): it is not seeing the registry "
+                       "or the harnesses that spell it out" % (seen, derived))
+          print("counts above their floors:", got, "| skill-count mentions:", mentions,
+                "| harness tables:", seen, "against", derived, "derived names")
           PY_COUNTS
           rm -f check-docs.out
 
@@ -179,12 +204,17 @@ jobs:
       # rather than counted.
       - name: The committed program is the program on chain
         run: |
-          set -e
+          # `pipefail`: see the check-docs step. This is the step most likely to
+          # go red because the CHAIN moved, so it is the step that can least
+          # afford a message asserting the script "exited 0".
+          set -e -o pipefail
           ./scripts/verify-deployment.sh 2>&1 | tee verify.out
           # The exit code is the assertion; the banner proves it got that far.
           # No step may go green by skipping.
           grep -q "agrees with artifacts/ and with the chain" verify.out \
-            || { echo "verify-deployment.sh exited 0 without reporting a full pass"; exit 1; }
+            || { echo "verify-deployment.sh did not report a full pass. Its failures are above;"; \
+                 echo "a redeploy or an unreachable sequencer produces them without anything"; \
+                 echo "in this repository having changed."; exit 1; }
           if grep -q SKIPPED verify.out; then
             echo "verify-deployment.sh reported SKIPPED"; exit 1
           fi
@@ -345,21 +375,62 @@ jobs:
       # Rendering twice under different environments and requiring the bytes to
       # match catches the whole family, not just that one tool: a new PATH
       # lookup, a clock read, a locale-dependent format, an unsorted set.
+      #
+      # AND THE THING THAT IS NOT A MACHINE DEPENDENCE. Both renderings read the
+      # live chain, so a settlement landing between them produces a diff too —
+      # and this step would have blamed it on the machine, in those words, for a
+      # difference the machine had no part in. That is the third failure this
+      # repository has had from a check that was right about a disagreement and
+      # wrong about whose it was; the previous two were a period boundary and a
+      # concurrent settlement, and both were red on main.
+      #
+      # The two are told apart by rendering a THIRD time in the first
+      # environment. If A and A' differ, the chain moved during the step and the
+      # A-versus-B comparison never had anything to say about this machine; that
+      # is retried rather than reported, because a chain that moved once will
+      # usually not move again in the next few seconds. If A and A' agree and B
+      # still differs, the environment is the only thing left, and that is the
+      # failure this step exists for.
       - name: The generated evidence does not depend on this machine
         run: |
-          set -e
-          ./scripts/submission-evidence.py > env-a.md
-          # A deliberately hostile environment: no inherited variables, a PATH
-          # holding only the interpreter, a different locale, a different
-          # timezone and a different working directory.
+          set -euo pipefail
           mkdir -p /tmp/minpath
           ln -sf "$(command -v python3)" /tmp/minpath/python3
-          ( cd /tmp && env -i PATH=/tmp/minpath LC_ALL=de_DE.UTF-8 TZ=Asia/Tokyo \
-              python3 "$GITHUB_WORKSPACE/scripts/submission-evidence.py" ) > env-b.md
-          if ! cmp -s env-a.md env-b.md; then
-            echo "the generated evidence differs between environments:"
-            diff env-a.md env-b.md | head -40
-            echo "a document that depends on the machine cannot be checked on another one"
+          render_b() {  # a deliberately hostile environment: no inherited
+                        # variables, a PATH holding only the interpreter, a
+                        # different locale, timezone and working directory.
+            ( cd /tmp && env -i PATH=/tmp/minpath LC_ALL=de_DE.UTF-8 TZ=Asia/Tokyo \
+                python3 "$GITHUB_WORKSPACE/scripts/submission-evidence.py" )
+          }
+          moved=0
+          for attempt in 1 2 3; do
+            ./scripts/submission-evidence.py > env-a.md
+            render_b > env-b.md
+            if cmp -s env-a.md env-b.md; then
+              moved=0
+              break
+            fi
+            # A third rendering, in the SAME environment as the first. This is
+            # the discriminator and it is the whole point of the retry.
+            ./scripts/submission-evidence.py > env-a2.md
+            if cmp -s env-a.md env-a2.md; then
+              echo "the generated evidence differs between environments:"
+              diff env-a.md env-b.md | head -40
+              echo "two renderings in the SAME environment agree, so the chain did not"
+              echo "move: the difference is this machine, and a document that depends"
+              echo "on the machine cannot be checked on another one"
+              exit 1
+            fi
+            echo "attempt $attempt: two renderings in the same environment already differ —"
+            echo "the chain moved while this step was running, so nothing has yet been"
+            echo "said about this machine. Retrying."
+            diff env-a.md env-a2.md | head -10
+            moved=1
+          done
+          if [ "$moved" -ne 0 ]; then
+            echo "the chain moved during every attempt, so this step could not"
+            echo "separate a machine dependence from a settlement landing mid-run."
+            echo "NOTHING IS WRONG WITH THIS REPOSITORY — re-run the job."
             exit 1
           fi
           # Both runs must have produced real content, or this compares two
@@ -368,11 +439,37 @@ jobs:
             || { echo "the generator produced no settlements section"; exit 1; }
           test "$(wc -c < env-a.md)" -gt 4000 \
             || { echo "the generated output is implausibly short"; exit 1; }
-          rm -f env-a.md env-b.md
+          rm -f env-a.md env-b.md env-a2.md
           echo "OK identical under a stripped PATH, a different locale, timezone and cwd"
 
+      # Eleven steps in this file assert a banner and refuse the skip pattern,
+      # and this one was `run: ./scripts/demo.sh` — the single least-guarded step
+      # in the workflow, and the one that reaches furthest outside the
+      # repository: it reads the chain's builtin ProgramId, three account
+      # addresses and three transaction hashes, and it prints its own failures
+      # to stdout with `FAILED=1` rather than stopping. Its exit code IS
+      # meaningful, so the guards below are the other half rather than a
+      # replacement for it.
       - name: demo.sh runs from a clean clone
-        run: ./scripts/demo.sh
+        run: |
+          set -e -o pipefail
+          ./scripts/demo.sh 2>&1 | tee demo.out
+          grep -q "every claim above was computed or fetched here" demo.out \
+            || { echo "demo.sh did not report a full pass"; exit 1; }
+          if grep -q SKIPPED demo.out; then echo "demo.sh reported SKIPPED"; exit 1; fi
+          # The count, because demo.sh prints its checks and reports failures
+          # with FAILED=1 rather than stopping — so a script that stopped
+          # RUNNING them exits 0 with a shorter transcript and nothing else to
+          # show for it. The colour codes are stripped first: `ok()` writes
+          # ESC[32m between the "OK" and the spaces after it, so a grep for the
+          # plain string matches nothing and this floor would have been a floor
+          # of zero dressed up as a check. A floor and not an equality — there
+          # are thirteen `ok` call sites today and sections come and go.
+          passed=$(sed -e 's/\x1b\[[0-9;]*m//g' demo.out | grep -c "^  OK " || true)
+          echo "demo.sh checks that ran and passed: $passed"
+          [ "${passed:-0}" -ge 10 ] \
+            || { echo "only ${passed:-0} of demo.sh's checks ran: it printed a pass banner having done almost nothing"; exit 1; }
+          rm -f demo.out
 
   skills:
     name: The skills behave, against fake ports
@@ -785,8 +882,8 @@ jobs:
   # two binaries, and that is worth dwelling on, because it says what could not
   # have caught it: the stale binary and the fresh one are both 3699040 bytes,
   # both load, both cast across the plugin boundary and both answer skills() with
-  # all 22 entries. Size, load and the whole plugin-contract harness pass on the
-  # wrong one.
+  # all 22 entries (count-as-it-was). Size, load and the whole plugin-contract
+  # harness pass on the wrong one.
   #
   # WHY THERE IS NO REBUILD HERE, named rather than implied, because "prefer
   # failing loudly to guessing" applies to the workflow as much as to the script:
@@ -846,15 +943,40 @@ jobs:
           # How many build inputs there are, and how many it says it checked.
           # Not a hardcoded number — module/src has grown twice this month, and
           # the invariant that matters is that NONE were silently passed over.
-          on_disk=$(( $(find module/src module/generated_code -type f \
-                          \( -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \
-                             -o -name '*.cc' -o -name '*.json' -o -name '*.txt' \) \
-                        | wc -l) + 3 ))
+          #
+          # And not a hand-copied one either, which is what it was. This block
+          # spelled out the two directories, the six suffixes and a bare `+ 3`
+          # for the files outside those directories — three separate mirrors of
+          # `scripts/check-package-fresh.py`'s own SOURCE_DIRS, SOURCE_SUFFIXES
+          # and SOURCE_FILES, kept in agreement by nobody. Add a build input
+          # with an unlisted extension, or a fourth file outside module/src, and
+          # the two sides disagree by one with nothing skipped — and the message
+          # below then says "some were skipped", which is false, and points an
+          # operator at the package instead of at this arithmetic. The script is
+          # asked for its own definition instead.
+          on_disk=$(python3 -c "
+          import importlib.util, sys
+          spec = importlib.util.spec_from_loader('cpf', loader=None)
+          m = importlib.util.module_from_spec(spec)
+          src = open('scripts/check-package-fresh.py', encoding='utf-8').read()
+          # Constants only: exec up to the first def/class, so importing cannot
+          # run the checker.
+          head = src.split('\ndef ', 1)[0].split('\nclass ', 1)[0]
+          exec(compile(head, 'check-package-fresh.py', 'exec'), m.__dict__)
+          import os
+          n = 0
+          for d in m.SOURCE_DIRS:
+              for root, _, files in os.walk(d):
+                  n += sum(1 for f in files if f.endswith(tuple(m.SOURCE_SUFFIXES)))
+          n += sum(1 for f in m.SOURCE_FILES if os.path.isfile(f))
+          if n < 15:
+              sys.exit('the inventory definition matched %d files: it is not seeing this tree' % n)
+          print(n)")
           got=$(sed -n 's/.*commit: \([0-9][0-9]*\) build input(s) recorded.*/\1/p' package.out)
           echo "build inputs on disk=$on_disk  checked=${got:-none}"
           [ -n "$got" ] || { echo "it exited 0 without saying how many it checked"; exit 1; }
           [ "$got" -eq "$on_disk" ] \
-            || { echo "it checked $got of $on_disk build inputs — some were skipped"; exit 1; }
+            || { echo "it checked $got of the $on_disk build inputs its own SOURCE_DIRS/SOURCE_FILES/SOURCE_SUFFIXES select — some were skipped"; exit 1; }
 
           # And the second layer really read the binary. 654 literals today; a
           # floor rather than an equality, because literals come and go with
@@ -1226,8 +1348,20 @@ jobs:
           /opt/aqt/bin/pip -q install aqtinstall
           /opt/aqt/bin/python -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 \
             -m qtremoteobjects --archives qtbase icu --outputdir /opt/Qt
-          ls /opt/Qt/6.9.2/gcc_64/lib/cmake/Qt6/Qt6Config.cmake
-          ls /opt/Qt/6.9.2/gcc_64/libexec/moc
+          # Bare `ls` lines, which is what these were, fail with `No such file or
+          # directory` and nothing else — and the likeliest cause is not that
+          # this repository is wrong but that the Qt mirrors retired a point
+          # release or aqtinstall's metadata parsing moved under an unpinned
+          # `pip install`. Say so, once, where it will be read.
+          for want in lib/cmake/Qt6/Qt6Config.cmake libexec/moc; do
+            test -e "/opt/Qt/6.9.2/gcc_64/$want" || {
+              echo "aqtinstall did not deliver $want for Qt 6.9.2 linux_gcc_64."
+              echo "Nothing in this repository selects that: the Qt mirrors retire"
+              echo "point releases and aqtinstall is installed unpinned above. Check"
+              echo "that 6.9.2 is still published before looking for a defect here."
+              exit 1
+            }
+          done
 
       - name: The logos-cpp-sdk checkout, pinned at the revision docs/basecamp.md names
         run: |
@@ -1246,9 +1380,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/badcore
-          head -c 2000000 \
-            _external/logos-core/LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage \
-            > /tmp/badcore/LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage
+          # The filename is FOUND, not spelled out. It was written here twice as
+          # `LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage`, a copy of the
+          # pin in scripts/fetch-logos-core.sh that nothing kept in agreement.
+          # Bumping that pin — an ordinary maintenance commit — would leave
+          # `head` reading a path that no longer exists, and under `set -e` the
+          # step dies HERE, before its own assertions run: the control silently
+          # stops being a control while the job stays green on everything else.
+          # That is the exact shape this negative control exists to refuse.
+          IMG=$(ls _external/logos-core/*.AppImage 2>/dev/null | head -1)
+          [ -n "$IMG" ] && [ -f "$IMG" ] || {
+            echo "fetch-logos-core.sh left no AppImage in _external/logos-core:"
+            ls -la _external/logos-core 2>&1 || true
+            echo "the pinned-checksum control cannot run, so it must not pass"
+            exit 1
+          }
+          echo "corrupting a copy of $(basename "$IMG")"
+          head -c 2000000 "$IMG" > "/tmp/badcore/$(basename "$IMG")"
           set +e
           ./scripts/fetch-logos-core.sh /tmp/badcore > bad.out 2>&1; rc=$?
           set -e
@@ -1296,8 +1444,24 @@ jobs:
             || { echo "it did not install the linux-amd64 variant"; exit 1; }
           grep -q "all steps confirmed (0 failure(s))" headless.out \
             || { echo "no confirmation banner"; exit 1; }
-          grep -q "the loaded module lists all 28 documented skills" headless.out \
-            || { echo "the module loaded and never listed its skills"; exit 1; }
+          # The number is DERIVED, not written down. It was `all 28 documented
+          # skills` here, which is a copy of the registry in a file the registry
+          # does not know about: registering a twenty-ninth skill would leave
+          # this grep matching nothing and print "the module loaded and never
+          # listed its skills" about a module that had just listed twenty-nine
+          # of them. `scripts/check-docs.py` catches the literal in an earlier
+          # job — that is what it is for — but a gate should not need a second
+          # gate to stay true, and the message this one would print is false.
+          want=$(python3 -c "
+          import re
+          src = open('module/src/agent_module_plugin.cpp', encoding='utf-8').read()
+          i = src.index('const std::vector<std::shared_ptr<logos::agent::ISkill>> builtins{')
+          print(src.count('std::make_shared<', i, src.index('};', i)))")
+          [ "${want:-0}" -ge 20 ] \
+            || { echo "could not derive the built-in skill count from the registry"; exit 1; }
+          grep -q "the loaded module lists all $want documented skills" headless.out \
+            || { echo "the module did not list the $want skills installBuiltinSkills registers; it said:"; \
+                 grep -E "documented skills|missing .* skill" headless.out || true; exit 1; }
           grep -q "and to the policy account it was configured with" headless.out \
             || { echo "it never read the envelope back out of meta.status"; exit 1; }
           # This runner HAS a toolchain, so the default path could quietly go
@@ -1581,7 +1745,13 @@ jobs:
           # How many rows the manifest holds, and how many the script says it
           # decoded. Not a hardcoded number: it was 4 last week and 6 today, and
           # the invariant that matters is that NONE were silently passed over.
-          rows=$(( $(wc -l < artifacts/a2a-task.tsv) - 1 ))
+          # Data rows, counted the way scripts/use-cases/lib.sh counts them
+          # (`rows_of`). `wc -l` counts NEWLINES: a manifest whose last row has no
+          # trailing newline is one short, and this comparison then reports a
+          # skipped settlement that was in fact decoded. The manifests are
+          # appended to by scripts, so a missing final newline is a thing that
+          # happens rather than a thing to assume away.
+          rows=$(awk -F'\t' 'NR>1 && NF>1 {n++} END {print n+0}' artifacts/a2a-task.tsv)
           got=$(sed -e 's/\x1b\[[0-9;]*m//g' uc02.out \
                 | sed -n 's/.*OK *\([0-9][0-9]*\) settlement(s), each one decoded.*/\1/p' | tail -1)
           echo "manifest rows=$rows  decoded=${got:-none}"
@@ -1601,7 +1771,13 @@ jobs:
           set -euo pipefail
           NOTARY_VERIFY_ONLY=1 ./scripts/use-cases/04-privacy-notary.sh 2>&1 | tee uc04.out
           if grep -q SKIPPED uc04.out; then echo "04 reported SKIPPED"; exit 1; fi
-          rows=$(( $(wc -l < artifacts/notary.tsv) - 1 ))
+          # Data rows, counted the way scripts/use-cases/lib.sh counts them
+          # (`rows_of`). `wc -l` counts NEWLINES: a manifest whose last row has no
+          # trailing newline is one short, and this comparison then reports a
+          # skipped settlement that was in fact decoded. The manifests are
+          # appended to by scripts, so a missing final newline is a thing that
+          # happens rather than a thing to assume away.
+          rows=$(awk -F'\t' 'NR>1 && NF>1 {n++} END {print n+0}' artifacts/notary.tsv)
           got=$(sed -e 's/\x1b\[[0-9;]*m//g' uc04.out \
                 | sed -n 's/.*OK *\([0-9][0-9]*\) notarisation(s), each verified.*/\1/p' | tail -1)
           echo "manifest rows=$rows  verified=${got:-none}"
@@ -1617,7 +1793,13 @@ jobs:
           set -euo pipefail
           ALERTER_VERIFY_ONLY=1 ./scripts/use-cases/05-event-alerter.sh 2>&1 | tee uc05.out
           if grep -q SKIPPED uc05.out; then echo "05 reported SKIPPED"; exit 1; fi
-          rows=$(( $(wc -l < artifacts/alerts.tsv) - 1 ))
+          # Data rows, counted the way scripts/use-cases/lib.sh counts them
+          # (`rows_of`). `wc -l` counts NEWLINES: a manifest whose last row has no
+          # trailing newline is one short, and this comparison then reports a
+          # skipped settlement that was in fact decoded. The manifests are
+          # appended to by scripts, so a missing final newline is a thing that
+          # happens rather than a thing to assume away.
+          rows=$(awk -F'\t' 'NR>1 && NF>1 {n++} END {print n+0}' artifacts/alerts.tsv)
           got=$(sed -e 's/\x1b\[[0-9;]*m//g' uc05.out \
                 | sed -n 's/.*OK *\([0-9][0-9]*\) alert(s), each re-verified.*/\1/p' | tail -1)
           echo "manifest rows=$rows  verified=${got:-none}"
@@ -1636,9 +1818,20 @@ jobs:
       - name: Negative control — a settlement whose price the chain contradicts
         run: |
           set -euo pipefail
-          awk -F'\t' 'BEGIN{OFS="\t"} NR==1{print;next} {$7=$7+1; print}' \
+          # The column is named, not numbered. This read `$7`, and the job's own
+          # header (above) exists because a positional read of this same file
+          # broke when it gained a leading `program` column: every field shifted
+          # by one and a script went on running while meaning something else. A
+          # control that mutates the wrong column can still go red, for the wrong
+          # reason, which is indistinguishable from working.
+          awk -F'\t' 'BEGIN{OFS="\t"}
+            NR==1 { for (i=1;i<=NF;i++) if ($i=="price") c=i
+                    if (!c) { print "no price column in " FILENAME > "/dev/stderr"; exit 3 }
+                    print; next }
+            { $c = $c + 1; print }' \
             artifacts/a2a-task.tsv > /tmp/wrong-price.tsv
-          ! diff -q artifacts/a2a-task.tsv /tmp/wrong-price.tsv > /dev/null
+          ! diff -q artifacts/a2a-task.tsv /tmp/wrong-price.tsv > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
           set +e
           AGENT_HOMES=/nonexistent A2A_MANIFEST=/tmp/wrong-price.tsv \
             ./scripts/use-cases/02-services-marketplace.sh > /tmp/wp.out 2>&1
@@ -1652,8 +1845,23 @@ jobs:
       - name: Negative control — a notarisation whose key the chain contradicts
         run: |
           set -euo pipefail
-          awk -F'\t' 'BEGIN{OFS="\t"} NR==1{print;next} {$1=$1 "x"; print}' \
+          # The column is named, not numbered. This read `$7`, and the job's own
+          # header (above) exists because a positional read of this same file
+          # broke when it gained a leading `program` column: every field shifted
+          # by one and a script went on running while meaning something else. A
+          # control that mutates the wrong column can still go red, for the wrong
+          # reason, which is indistinguishable from working.
+          awk -F'\t' 'BEGIN{OFS="\t"}
+            NR==1 { for (i=1;i<=NF;i++) if ($i=="content_address") c=i
+                    if (!c) { print "no content_address column in " FILENAME > "/dev/stderr"; exit 3 }
+                    print; next }
+            { $c = $c "x"; print }' \
             artifacts/notary.tsv > /tmp/wrong-notary.tsv
+          # The `! diff` guard the 02 control has and these two did not: a sed or
+          # awk whose pattern stopped matching produces an identical file, and an
+          # identical file is not a mutation.
+          ! diff -q artifacts/notary.tsv /tmp/wrong-notary.tsv > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
           set +e
           NOTARY_VERIFY_ONLY=1 NOTARY_MANIFEST=/tmp/wrong-notary.tsv \
             ./scripts/use-cases/04-privacy-notary.sh > /tmp/wn.out 2>&1
@@ -1672,8 +1880,20 @@ jobs:
       - name: Negative control — an alert whose block the chain contradicts
         run: |
           set -euo pipefail
-          awk -F'\t' 'BEGIN{OFS="\t"} NR==1{print;next} {$5=$5+1; print}' \
+          # The column is named, not numbered. This read `$7`, and the job's own
+          # header (above) exists because a positional read of this same file
+          # broke when it gained a leading `program` column: every field shifted
+          # by one and a script went on running while meaning something else. A
+          # control that mutates the wrong column can still go red, for the wrong
+          # reason, which is indistinguishable from working.
+          awk -F'\t' 'BEGIN{OFS="\t"}
+            NR==1 { for (i=1;i<=NF;i++) if ($i=="block") c=i
+                    if (!c) { print "no block column in " FILENAME > "/dev/stderr"; exit 3 }
+                    print; next }
+            { $c = $c + 1; print }' \
             artifacts/alerts.tsv > /tmp/wrong-alert.tsv
+          ! diff -q artifacts/alerts.tsv /tmp/wrong-alert.tsv > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
           set +e
           ALERTER_VERIFY_ONLY=1 ALERTER_MANIFEST=/tmp/wrong-alert.tsv \
             ./scripts/use-cases/05-event-alerter.sh > /tmp/wa.out 2>&1

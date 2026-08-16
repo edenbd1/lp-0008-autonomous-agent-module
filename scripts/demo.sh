@@ -10,7 +10,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 export RISC0_DEV_MODE=0
 
 RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
-DEPLOY_TX=697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf
+# DERIVED, not written down. This was the literal
+# `697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf`, and it was
+# the last copy of it in the repository: verify-deployment.sh,
+# submission-evidence.py, 02-services-marketplace.sh and 03-spending-threshold.sh
+# all compute it. `.github/workflows/ci.yml` records removing exactly this
+# pattern from itself -- "a content-addressed chain moves that hash on every
+# deploy, so a copy of it in a workflow is a copy that has to be remembered" --
+# and this copy outlived that edit. A rebuilt guest would have made this script
+# say "computed X, expected Y", which reads as the binary being wrong when the
+# stale thing was the literal.
+#
+# What the recorded value was FOR is checked below, against docs/DEPLOYMENT.md,
+# which is where a deployment is recorded and which is already re-checked by
+# scripts/verify-deployment.sh.
+DEPLOY_TX=$(python3 -c "
+import hashlib, struct
+b = open('artifacts/programs/agent_verifier.bin', 'rb').read()
+print(hashlib.sha256(struct.pack('<I', len(b)) + b).hexdigest())")
 IMPOSSIBLE=dededededededededededededededededededededededededededededededede
 # The previous deployment, kept here because the attack it accepted is the
 # evidence that the defect was real. See section 5.
@@ -34,6 +51,10 @@ HONEST_OWNER_HEX=181eee76d02339bbe8ce7abee778942d80b2546a8f204e19940311ff5bd4621
 rule() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32mOK\033[0m   %s\n' "$1"; }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
+# For the sentence a FAIL needs after it when the likeliest cause is that the
+# world moved rather than that this repository is wrong. Same shape as the one
+# in scripts/use-cases/lib.sh, so the two read alike.
+note() { printf '       %s\n' "$1"; }
 FAILED=0
 
 rule "0. environment"
@@ -75,14 +96,19 @@ rm -f "$TESTLOG"
 rule "2. the deployed program is the program in this repository"
 echo "A LEZ deploy tx hash is SHA256(borsh(bytecode)) — content addressed — so"
 echo "the committed binary hashes to exactly its deploy transaction."
-CALC=$(python3 -c "
-import hashlib,struct
-b=open('artifacts/programs/agent_verifier.bin','rb').read()
-print(hashlib.sha256(struct.pack('<I',len(b))+b).hexdigest())")
 echo "   computed from artifacts/programs/agent_verifier.bin:"
-echo "     $CALC"
-if [ "$CALC" = "$DEPLOY_TX" ]; then ok "matches the recorded deploy transaction"
-else bad "computed $CALC, expected $DEPLOY_TX"; fi
+echo "     $DEPLOY_TX"
+# The derivation is the hash; what is checked is that the DEPLOYMENT this
+# repository documents is that binary. A rebuild without a redeploy shows up
+# here as a document naming a different program, which is what it is.
+if [ -n "$DEPLOY_TX" ] && grep -q "$DEPLOY_TX" docs/DEPLOYMENT.md; then
+  ok "docs/DEPLOYMENT.md records this binary as the deployed program"
+else
+  bad "docs/DEPLOYMENT.md does not mention $DEPLOY_TX"
+  note "the binary in artifacts/programs/ was rebuilt or replaced and not redeployed,"
+  note "or it was redeployed and the document was not updated. Neither is a defect"
+  note "in the program: run ./scripts/verify-deployment.sh, which asks the chain."
+fi
 
 rule "3. that transaction is live on the public testnet"
 q() {
