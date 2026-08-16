@@ -26,8 +26,7 @@ class AgentConsole;
 // createWidget and destroyWidget. An extra virtual here — a `name()` accessor,
 // say — shifts every later slot, so the host would call the wrong function
 // through a pointer that cast successfully. Confirmed against
-// LogosBasecamp 0.2.2 and reused unchanged from LP-0002, whose plugin loads in
-// that host.
+// LogosBasecamp 0.2.2, whose own plugins declare exactly this shape.
 class IComponent {
 public:
     virtual ~IComponent() = default;

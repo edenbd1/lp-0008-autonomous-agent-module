@@ -2,9 +2,9 @@
 # LP-0008 from a clean clone. No funded account, no local sequencer, no keys.
 #
 # Everything here either runs locally or reads the public chain. Nothing is
-# asserted that the script does not compute or fetch in front of you — the one
-# named reason a previous LP-0008 submission was closed was "no evidence in the
-# repo and demo.sh doesn't run".
+# asserted that the script does not compute or fetch in front of you: a claim a
+# reader cannot re-derive from the output in front of them is not evidence, it
+# is a sentence.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 export RISC0_DEV_MODE=0

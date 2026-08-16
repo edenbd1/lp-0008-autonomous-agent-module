@@ -15,7 +15,7 @@ integration, not on agent logic.
 
 All four are alive — every one updated within a week of 2026-08-14. That matters:
 the API can move under us, so anything we pin needs a recorded revision, the way
-`vendor/spel` is pinned in LP-0002 and LP-0003.
+`vendor/spel` is pinned here.
 
 ## The module contract
 
@@ -124,10 +124,9 @@ why the module builds fine on the dev machine under Apple Clang. Switching CI to
 Clang did not clear it either.
 
 Marking it `continue-on-error` was never on the table: a job that completes
-through a skip path is exactly what closed a competing LP-0003 submission
-("the standalone-sequencer E2E did not run in CI; the job completed through its
-explicit skip path"). Leaving it red on every commit is the other bad option,
-and the prize asks for a green default branch.
+through a skip path reports green without having run, which is worse than red
+because nobody looks at it again. Leaving it red on every commit is the other
+bad option, and the prize asks for a green default branch.
 
 So the job is removed until it passes, rather than present and lying. The module
 still builds locally, and the command is in `module/CMakeLists.txt`. It comes

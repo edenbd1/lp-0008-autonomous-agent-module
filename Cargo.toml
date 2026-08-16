@@ -4,7 +4,7 @@ members = [
     "crates/agent-policy-core",
 ]
 # Guest crates target riscv32im-risc0-zkvm-elf and are excluded from the host
-# workspace, the same split that LP-0002 and LP-0003 use.
+# workspace; see docs/architecture.md for why the split is necessary.
 exclude = [
     "_external",
 ]

@@ -150,9 +150,9 @@ int main(int argc, char **argv)
     check(embedded.value("type").toString() == QStringLiteral("core"),
           "it declares itself a core module");
 
-    // The host resolves `main` to a filename inside the module directory. This
-    // is the check LP-0005's package failed: its manifest named something the
-    // package did not contain, so loading failed before Qt was reached.
+    // The host resolves `main` to a filename inside the module directory, so a
+    // manifest naming something the package does not contain fails to load
+    // before Qt is ever reached — with no error that points at the manifest.
     const QString main = embedded.value("main").toString();
     const QString built = QString::fromUtf8(argv[1]).section('/', -1).section('.', 0, 0);
     check(main == built,

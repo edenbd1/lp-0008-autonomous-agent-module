@@ -193,7 +193,7 @@ then runs the committed ELF, so if the constants ever drift, every case in that
 suite fails on the macro's own PDA check rather than passing against an address
 nothing reads.
 
-The workspace split exists for the same reason it does in LP-0002 and LP-0003:
+The workspace split exists because the host and the guest do not share a target:
 the guest targets `riscv32im-risc0-zkvm-elf` and carries its own `[workspace]`,
 so `cargo build --workspace` on the host never tries to build it. The policy
 crate reaches both sides by path: a workspace member on the host, a path
@@ -460,8 +460,8 @@ Two CI workflows, split by what they can honestly assert:
   suite against fake ports as its own step so a red X names the suite.
 - `.github/workflows/e2e-local-sequencer.yml` — an hour or more, scheduled: the
   whole policy lifecycle against a real standalone LEZ sequencer with
-  `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a competing submission
-  was closed because its e2e job "completed through its explicit skip path".
+  `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a job that completes
+  through one reports green without having run, which is worse than red.
 
 ## Reading order
 

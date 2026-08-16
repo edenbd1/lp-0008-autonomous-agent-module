@@ -1172,8 +1172,9 @@ on both Linux architectures and watched fail in each of those three ways.
 
 [`.github/workflows/e2e-local-sequencer.yml`](.github/workflows/e2e-local-sequencer.yml)
 runs the whole policy lifecycle against a real standalone LEZ sequencer with
-`RISC0_DEV_MODE=0`. It has no skip path, deliberately: a competing submission
-was closed because its e2e job "completed through its explicit skip path". Run
+`RISC0_DEV_MODE=0`. It has no skip path, deliberately: a job that completes
+through one reports green without having run, which is worse than red because
+nobody looks again. Run
 it locally with `./scripts/e2e-local-sequencer.sh` against a
 `logos-execution-zone` checkout.
 
