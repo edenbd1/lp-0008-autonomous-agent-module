@@ -235,6 +235,55 @@ refuses one it did not create, with `missing field 'accounts'` or
 `missing field 'sequencer_addr'`. That reads like a corrupted home and is a
 version mismatch.
 
+### Deploy *and* configure, in one command
+
+The criterion this repository is answering asks for both halves at once — "the
+owner can deploy the agent **and** configure it with a single CLI command on any
+machine using Logos Core headless". The command above is the chain half; §4's is
+the Logos Core half. This is the one command that is both:
+
+```sh
+SIGNER=<a funded public account id> ./scripts/deploy-and-configure.sh storage
+```
+
+It runs the two in order and owns the seam between them:
+
+1. it checks every prerequisite of **both** halves first, and names each missing
+   one. The Logos Core half is asked whether it can run — by running its own
+   gate, `logos-core-headless.sh --check`, rather than by keeping a second copy
+   of its platform table — **before** anything is submitted. Anchoring is not
+   idempotent: `claim_agent` and `create_policy` are both `#[account(init)]` and
+   a landed claim cannot be rewritten, so a machine that discovers it has no
+   `liblogos_core` after three agents are anchored has paid real transactions to
+   find that out;
+2. it runs `deploy-agents.sh`;
+3. it reads the seam. The agent id, the owner and the policy account are read
+   **by header name out of the manifest the chain half just wrote** — never
+   passed on a command line — and the row is checked against the chain before
+   anything is configured: the first 73 bytes of the policy account must be the
+   record the row claims. `artifacts/agents.tsv` is committed in this
+   repository, so a chain half that failed would otherwise leave a perfectly
+   valid manifest naming *somebody else's* agents;
+4. it runs `logos-core-headless.sh`, which installs, loads, configures and
+   starts the module against that row.
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | check both halves and stop. Nothing is submitted, installed or started |
+| `--configure-only` | skip the chain half — the agents in the manifest are already anchored. The row is still checked against the chain. This is the mode for the agents **this repository publishes**, whose manifest is committed, and it costs no transaction |
+| `--alongside` | load the agent beside the wallet, storage and messaging modules |
+
+Exit `0` means both halves ran; `1` means a prerequisite was missing or the
+chain half failed, and nothing was configured; `2` is reserved for the one state
+that costs money — the chain half succeeded and the Logos Core half did not, so
+agents are anchored and the configuration is unfinished. `--configure-only`
+finishes it for free, and the message says so.
+
+**It is one command given three inputs it cannot produce**: a funded `SIGNER`
+(the faucet — see the list above), a wallet home holding that key, and a Logos
+Core runtime (§4). Each is checked by name before anything is spent, and
+[`docs/limitations.md`](docs/limitations.md) lists all three as prose.
+
 You do **not** need to edit this script. It used to require that — three
 hardcoded account ids at the bottom of it made the `SIGNER` fallback beside them
 unreachable — and the failure that caused was expensive rather than merely
@@ -386,6 +435,11 @@ closes it:
 ```sh
 ./scripts/logos-core-headless.sh storage       # or messaging, or blockchain
 ```
+
+This is the second of the two halves. `./scripts/deploy-and-configure.sh storage`
+(§3) runs it after the chain half, hands it the manifest that half wrote, and
+checks that row against the chain in between; `--check` is its prerequisite gate
+on its own, which is what makes that ordering possible.
 
 It installs `module/agent.lgx` into the user modules directory Logos Core reads
 (flattening the platform variant, which is what an installed module is — Basecamp
@@ -1266,6 +1320,11 @@ scripts/logos-core-headless.sh    §4 — installs the module and runs Logos Cor
                                   headless: load, configure, start. With
                                   --alongside, the same run with the wallet,
                                   storage and messaging modules loaded too
+scripts/deploy-and-configure.sh   §3 — both of the two above, in one command:
+                                  both halves' prerequisites checked before
+                                  either runs, and the manifest the first wrote
+                                  checked against the chain before the second
+                                  reads it
 scripts/build-companion-modules.sh
                                   §8 — builds those three from their published
                                   sources, unmodified, and packages each as

@@ -96,16 +96,35 @@
 # file in those three checkouts differs from the published revision. That is the
 # second half of the criterion and it is checked mechanically, the way
 # `examples/agent-console/run.sh` checks `git status --porcelain module/`.
+#
+# --check
+#
+# Every prerequisite above, named the same way, and then nothing: no install, no
+# compile, no runtime started. It exists because this half is the SECOND half of
+# `scripts/deploy-and-configure.sh`, and a machine that discovers it has no
+# `liblogos_core` only after the first half has anchored three agents has paid
+# real transactions for the discovery. So the wrapper asks this question before
+# the chain half runs, and it asks it by running this script rather than by
+# keeping a second copy of the platform table above — which would drift.
+#
+# The one prerequisite `--check` treats as soft is `artifacts/agents.tsv`: it is
+# an INPUT PRODUCED BY THE OTHER HALF, so on a machine that has not run the
+# chain half yet its absence is not a defect of this machine. It is reported and
+# not counted. Everything the wrapper needs to be strict about — the row exists,
+# and the envelope in it is the one on chain — the wrapper checks itself, after
+# the half that writes it has exited 0.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 ALONGSIDE=0
 BUILD_HARNESS=0
+CHECK_ONLY=0
 args=()
 for a in "$@"; do
   case "$a" in
     --alongside) ALONGSIDE=1 ;;
     --build-harness) BUILD_HARNESS=1 ;;
+    --check) CHECK_ONLY=1 ;;
     *) args+=("$a") ;;
   esac
 done
@@ -462,6 +481,25 @@ col() { # file header row-key -> value on stdout; exit 3 if there is no such hea
             next }
     $1==k { print $c; exit }' "$1"
 }
+
+# A manifest that is not there yet is not a fault of THIS machine when the
+# command that writes it is about to run. `--check` is asked by
+# `scripts/deploy-and-configure.sh` BEFORE the chain half, precisely so that a
+# missing runtime is found while it still costs nothing — and at that moment a
+# fresh operator has no manifest, because the chain half has not written one.
+# So this is reported and not counted, and the wrapper is the thing that
+# afterwards insists on a row, on the row being for this category, and on the
+# envelope in it being the one the chain holds. Every other reading below is
+# unchanged: with a manifest present, `--check` reads it exactly as a real run
+# does, including the no_such_column control.
+if [ "$CHECK_ONLY" -eq 1 ] && [ ! -f "$MANIFEST" ]; then
+  OWNER=""; POLICY=""; AGENT_ID=""; POLICY_HEX=""
+  echo "manifest  $MANIFEST is not here yet"
+  echo "          it is the on-chain half's output, not this machine's to have:"
+  echo "          ./scripts/deploy-and-configure.sh runs that half first and hands"
+  echo "          this one the file it wrote"
+  echo
+else
 [ -f "$MANIFEST" ] || die "no $MANIFEST: run ./scripts/deploy-agents.sh first, or set MANIFEST"
 # THE CONTROL, and it is one line: the same reader, asked for a column that
 # cannot be there, must refuse. Without it "the manifest has an `owner` column"
@@ -499,6 +537,7 @@ echo "owner     $OWNER"
 echo "policy    $POLICY"
 echo "          = $POLICY_HEX"
 echo
+fi
 
 # ── 1. install ────────────────────────────────────────────────────────────
 #
@@ -528,6 +567,17 @@ install_package() { # package-path module-name
     || die "$pkg has no '$VARIANT' variant, which is the one this machine needs.
 It carries: $(printf '%s ' $have)
 Build and package one (docs/basecamp.md), or set LGX_VARIANT deliberately."
+  # `--check` stops HERE, after the variant has been read out of the package and
+  # before a single byte is written. The check that matters on a strange machine
+  # is the one above — a package with no variant for this architecture is a
+  # module directory that looks complete and can never load — and it costs a
+  # `tar tzf`. Removing and re-unpacking somebody's installed module is not
+  # something a question should do.
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    echo "would install  $pkg  variant $VARIANT"
+    echo "          -> $dest"
+    return 0
+  fi
   echo "install   $pkg  variant $VARIANT"
   echo "          -> $dest"
   rm -rf "$dest"
@@ -688,19 +738,36 @@ record was. ./scripts/check-package-fresh.py says which."
     ;;
 
   source)
-    mkdir -p "$BUILD/sdkobj"
-    if [ ! -x "$HARNESS" ] || [ "$SRC" -nt "$HARNESS" ]; then
-      echo "build     $HARNESS  (from $SRC)"
-      compile_harness "$HARNESS" 1
-      echo "          built"
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      # The toolchain this needs was checked by name in the gate above; what a
+      # check must not do is spend two minutes running it.
+      echo "harness   $HARNESS  (would be compiled from $SRC)"
     else
-      echo "build     $HARNESS  (up to date)"
+      mkdir -p "$BUILD/sdkobj"
+      if [ ! -x "$HARNESS" ] || [ "$SRC" -nt "$HARNESS" ]; then
+        echo "build     $HARNESS  (from $SRC)"
+        compile_harness "$HARNESS" 1
+        echo "          built"
+      else
+        echo "build     $HARNESS  (up to date)"
+      fi
     fi
     ;;
 esac
 echo
 
 # ── 3. run Logos Core headless ────────────────────────────────────────────
+#
+# `--check` stops one line short of this, which is the only line that starts a
+# runtime. Everything above it has run: the prerequisite gate, the harness
+# against the record it was written for, the package against the variant this
+# machine needs, and — when there is a manifest — the by-name read of the agent,
+# its owner and its policy account, control included.
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  echo "check     every prerequisite of this half is present on this machine"
+  echo "          nothing was installed, compiled or started"
+  exit 0
+fi
 mkdir -p "$PERSISTENCE"
 if [ "$ALONGSIDE" -eq 1 ]; then
   echo "run       headless: init → add_modules_dir → start → load_module(${LOGOS_ALONGSIDE//,/) → load_module(}) → load_module($MODULE_NAME) → configure → start"

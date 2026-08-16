@@ -2,6 +2,12 @@
 # USE CASE 3 — the spending ceiling, accepted below it and refused above it.
 #
 #   ./scripts/use-cases/03-spending-threshold.sh
+#   THRESHOLD_NO_AGENT_KEY=1 ./scripts/use-cases/03-spending-threshold.sh
+#
+# The second form is for a machine that does not hold the agent's shielded key —
+# CI, for instance, which must not. It runs sections 1-5, which read the chain,
+# and refuses to run section 6, which is the only one that needs the key, saying
+# so in a line a caller can assert on. See the note above section 6.
 #
 # The prize asks for an agent that "acts autonomously below a threshold the
 # owner configures, and above it sends the proposed transaction to the owner and
@@ -442,6 +448,38 @@ else
 fi
 
 rule "6. above the ceiling: refused, two ways, before a transaction exists"
+# THE ONE SECTION THAT NEEDS A KEY, AND WHAT A MACHINE WITHOUT ONE MUST SAY.
+#
+# Everything above this reads the chain: the anchored envelope, the program that
+# owns it, the settlements, the ledger. This section is the only one that asks
+# the agent to try something, and asking requires the agent's own shielded key —
+# which lives in $AGENT_HOMES/<category>, deliberately outside this repository,
+# and must never be on a shared machine. So CI cannot run this section, and the
+# question is only whether it says so.
+#
+# `THRESHOLD_NO_AGENT_KEY=1` is that sentence, and it is deliberately loud. A
+# skipped step that reads like a passing one is the exact defect this repository
+# has been red for elsewhere, so the marker below is a line a caller has to
+# assert on, the closing banner changes, and neither claims the refusal was
+# demonstrated. What such a run does demonstrate is sections 1-5: that the
+# envelope on chain is the one this repository publishes, that the program which
+# owns it is the committed binary, that there is exactly one policy address per
+# agent, and that every settlement charged its ledger by exactly its price.
+if [ "${THRESHOLD_NO_AGENT_KEY:-0}" = 1 ]; then
+  echo "  SECTION 6 NOT RUN: no agent key on this machine"
+  note "THRESHOLD_NO_AGENT_KEY=1. The two refusals below are NOT attempted here."
+  note "They need the agent's own shielded key ($AGENT_HOMES/$CAT), which is what"
+  note "makes the attempt an attempt: spel builds the proof with it, and the"
+  note "program refuses 6005 (over the per-transaction ceiling) and 6014 (a"
+  note "window that is not on a period boundary) while it is being built."
+  note "Nothing in sections 1-5 depends on it, and nothing here should be read as"
+  note "showing the refusal. docs/use-cases.md carries the transcript of a run"
+  note "that did, on the machine that holds the key."
+  finish "Use case 3, partially: the ceiling is one account per agent and the chain
+keeps it, and every claim in sections 1-5 was decoded or fetched here. The
+refusal in section 6 was NOT exercised on this machine — it needs the agent's
+key. Nothing was spent."
+fi
 # Run against a COPY of the agent's wallet home. A refused `spend` panics inside
 # the guest while the proof is being built, and a panicking run leaves the wallet
 # store in a state the next run cannot load — observed here, and it would take

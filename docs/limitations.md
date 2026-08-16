@@ -150,72 +150,185 @@ written to last, and corrections that would otherwise live next to the code live
 in `docs/` instead. That is a deliberate trade and the reason some explanation
 here is longer than it would need to be if it could sit in the source.
 
-## spel builds every transaction against nonce 0
+## WITHDRAWN: "spel builds every transaction against nonce 0"
 
-The single root cause behind the whole "submitted, returns a hash, never lands"
-family, and it is a client bug rather than a chain rule.
+This heading was this file's diagnosis of the whole "submitted, returns a hash,
+never lands" family, and it is wrong. It is kept rather than deleted because it
+was confidently argued from real measurements, and because the measurements are
+still true — it is the causal claim on top of them that is not.
 
-Every public signer sits permanently at `nonce: 1` after its first landed
-transaction and never advances again. Measured across five independent fresh
-accounts, and corroborated by every signer in this repository: the ones that
-landed something read nonce 1, the ones that never did read nonce 0.
+What it said: that `spel` hardcodes nonce 0, that the sequencer checks the nonce
+for exact equality (`lee/state_machine/src/validated_state_diff/mod.rs:499-505`,
+which it does), and therefore that a public signer's second transaction is always
+dropped — so **any flow that needs a public signer to act twice is unavailable**.
 
-The sequencer checks the nonce for exact equality
-(`lee/state_machine/src/validated_state_diff/mod.rs:499-505`), so a second
-transaction carrying nonce 0 against an account now at nonce 1 is dropped
-silently. That explains why refreshing the wallet does not help, why
-re-importing the key into a clean home does not help, and why the failure is
-not specific to `create_policy` — `approve_spend` behaves identically.
+Two things falsify it:
 
-Consequence: **any flow that needs a public signer to act twice is
-unavailable** — re-anchoring, `update_policy`, and the owner approving a spend.
-Only the autonomous below-threshold path survives, because each agent signs
-once, and because a *private* account is not affected: it is a note rather than
-a nonce, so an agent can sign as many settlements as it can afford.
+- `spel` fetches the nonce. `vendor/spel/spel-cli/src/tx.rs:625-635` calls
+  `get_accounts_nonces` for every signer and exits rather than guessing if the
+  fetch fails; the value goes straight into `Message::new_preserialized` a few
+  lines below. There is no literal 0 on that path.
+- A public account reached **nonce 33** on this testnet (`DumJ4LCB…`), and the
+  owner used in the section below went 1 → 2 → 3 across an `auth-transfer init`,
+  a `create_policy` and an `approve_spend`. A client that always sent nonce 0
+  could not have produced either.
 
-This is why `update_policy` — the instruction that makes a wrong anchor
-recoverable — has no landed transaction on the public testnet. It is exercised
-against the deployed binary in `crates/agent-verifier-adversarial` (accepted for
-the owner the record names, refused 6012 for a stranger and for the agent
-itself), and to run it on chain the owner must be an account some program
-already owns. Any owner that has received a transfer is exempt; `DumJ4LCB…` is
-the worked example, with two landed anchors at nonces 29 and 30. The three
-owners in `artifacts/agents.tsv` are fresh public accounts, so each of them can
-anchor and nothing else — which is a property of the client, not of the program.
+The observation underneath — that the signers *in this repository* sit at nonce 1
+and never advance — is accurate, and it has a different cause: those accounts are
+unclaimed, so the SPEL macro drops them from the post-state and the transaction
+is rejected before the nonce is ever compared. That mechanism, its file:line, and
+the transactions that close it are in
+[the section below](#closed-an-owner-can-approve-a-spend-and-the-approved-spend-executes).
 
-## The owner can never approve a spend after anchoring a policy
+`update_policy` is still the one instruction with no landed transaction on the
+public testnet, and now for a stated reason rather than a supposed one: it is
+exercised against the deployed binary in `crates/agent-verifier-adversarial`
+(accepted for the owner the record names, refused 6012 for a stranger and for the
+agent itself), and running it on chain needs an owner that was claimed *before* it
+anchored. The three owners in `artifacts/agents.tsv` were not, and that is now
+irreversible for them.
 
-The most serious defect in the *tooling*, as against the program above, and it
-is structural rather than a bug.
+## CLOSED: an owner can approve a spend, and the approved spend executes
 
-The constraint measured on chain is **one program transaction per public signer
-account**, not one policy. Proven with a second instruction: `approve_spend`,
-against a policy that genuinely exists and is program-owned, with a fresh marker
-seed, also fails to land as its signer's second transaction.
+The above-threshold path now runs end to end on the public testnet. What this
+section used to say — that it could not, ever — was true of the accounts it was
+measured on and false as a general rule, and both halves are kept because the
+constraint is real and anyone anchoring a policy still has to design around it.
 
-`approve_spend` requires the owner as signer, and the program compares that
-signer against the `owner` field of the **policy record on chain** — the
-account's raw 32 bytes, read off the account rather than supplied in the call.
-So the approval must come from the same account that anchored the policy. That
-account has already spent its one transaction on `create_policy`. `update_policy`
-inherits the identical constraint for the identical reason.
+### What this said, and what was right about it
 
-So the above-threshold path cannot work as designed: the owner who anchored a
-policy is, by construction, unable to approve anything under it. The
-below-threshold autonomous path is unaffected.
+It said the constraint was **one program transaction per public signer account**,
+that `approve_spend` must be signed by the account named in the policy record's
+`owner` field, and that the account had already spent its one transaction on
+`create_policy` — so the owner who anchored a policy was, by construction, unable
+to approve anything under it.
 
-Ways out, none yet tried: make the owner account program-owned before anchoring
-(a funded account is exempt from the rule — `DumJ4LCB…` holds two landed
-anchors), or stop committing the signer's identity into `owner_id` so the
-approval can come from a different account than the anchor.
+Every one of those observations reproduces. What was wrong was calling it a
+property of *public signers*. It is a property of **unclaimed** public signers,
+and the difference is one transaction taken before the anchor rather than after.
 
-Also recorded because it was asserted here and is false: the
-`account get --account-id "Public/$signer"` refresh added to
+### The rule, as the state machine actually applies it
+
+Three pieces, and none of them is about nonces:
+
+1. The vendored SPEL macro filters accounts out of a program's post-state
+   (`vendor/spel/spel-framework-macros/src/lib.rs:303-328`). It drops any
+   `(pre, post)` pair where the pre-state's `program_owner` is the default **and**
+   the pre-state is not `Account::default()` **and** the post carries no claim.
+2. `create_policy` and `approve_spend` both *declare* `owner`, so a dropped owner
+   is a declared account missing from the output, and the state machine rejects
+   the whole transaction — `DeclaredAccountMissingFromOutput`
+   (`lee/state_machine/src/validated_state_diff/mod.rs:310-319`).
+3. The filter exists to dodge LEZ rule 7
+   (`lee/state_machine/core/src/program/mod.rs:730-738`), which refuses a
+   post-state that keeps the default program owner when the pre-state is no
+   longer `Account::default()`.
+
+A fresh public account *is* `Account::default()`, so its first program
+transaction passes. That transaction moves it off default, and every later one is
+dropped. **An account whose `program_owner` is not the default is never filtered
+and rule 7 never fires, so it can sign indefinitely.**
+
+### "Funded" was the wrong word — the owner needs to be *claimed*
+
+The way out recorded here was "make the owner account program-owned before
+anchoring (a funded account is exempt — `DumJ4LCB…` holds two landed anchors)".
+The direction was right and the mechanism was mis-stated. `DumJ4LCB…` checks out
+as far as it can be checked: `getAccount` reports it owned by the authenticated
+transfer program and sitting at **nonce 33**, which is thirty-three landed
+transactions from one public account. The two specific anchors it was said to
+hold, at blocks 8050 and 8051, are not recorded in this repository and could not
+be re-derived, so the count is cited from the account rather than from them.
+
+What is *not* required is a balance. The owner used below holds **0 LEZ** and has
+signed two program transactions:
+
+```
+HCV2Y4Vf…  {"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB",
+            "balance":0, "nonce":3}
+```
+
+What moves an account off the default owner is a **claim**, and
+`wallet auth-transfer init` is a claim with no transfer attached
+(`lez/programs/authenticated_transfer/src/main.rs:10-19`). Crediting an account
+claims it too (`:50-55`), but that is a side effect and not the point.
+
+### The window to claim closes, and for the three shipped owners it has closed
+
+This is the part the old "ways out" could not have known, and it is why the fix
+is not retroactive.
+
+`initialize_account` asserts the account is `Account::default()`
+(`lez/programs/authenticated_transfer/src/main.rs:14-17`), so it will not claim an account
+that has already done anything. A *credited* claim is checked no more loosely:
+`validate_execution` runs before the claim loop rewrites `program_owner`
+(`validated_state_diff/mod.rs:195-247`), so at the moment rule 7 is evaluated the
+post-state still carries the default owner, and an account with a non-default
+pre-state is refused.
+
+So a public account can be claimed **only while it is still pristine**. The three
+owners in [`artifacts/agents.tsv`](../artifacts/agents.tsv) each spent their
+pristine state on `create_policy`, and all three now read `nonce: 1` with the
+default program owner and no balance. Measured rather than inferred: an
+`auth-transfer init` against the storage owner `2dA9APZ…` submitted
+`a010f68242f120f167643836c586169daf29e5aff61886ea0faabe6d217d8d44` and **was
+never included** — ten blocks, six hundred seconds, and the account still reads
+exactly as it did before. Those three owners are frozen: they cannot sign again,
+cannot be claimed, and cannot be credited. `update_policy` over the shipped three
+is unreachable for the same reason and stays unreachable.
+
+The fix is therefore **an ordering requirement on new deployments**: claim the
+owner before it anchors. It does not rescue an owner that has already anchored.
+
+### The demonstration
+
+Run against the shipped program `697746f5…cb5370bf` — the same deployment the
+three agents are anchored under — with a fourth agent provisioned solely for this,
+because a ceiling of 1 LEZ makes "above the threshold" cost 2 LEZ instead of the
+51 the storage agent's ceiling of 50 would have needed. No existing agent was
+re-anchored and no policy was updated.
+
+| step | tx | block |
+|---|---|---|
+| owner `HCV2Y4Vf…` claimed, `auth-transfer init` | `ce2a23ec7168b6c48bf31098748d3c7e653a3ded7c8c42503f6291769ffae35c` | 10759 |
+| agent funded, 3 LEZ from `5Sa13Ny…` | `c33f9a567d0ef9bae1804c24d71641a445e13c95305bf9dbab79e99e22685ec1` | 10765 |
+| `claim_agent`, signed by the agent | `06b8e870d01c25be973957842dca8100e3b920984920dcee0d992b7bcd184a0d` | 10774 |
+| `create_policy`, the owner's **first** program transaction | `e684df9caa5012cdcbfdd0abc9c60ae53d352f8e23853413af323c7cd4cb2cc1` | 10775 |
+| `approve_spend`, the owner's **second** | `4104dde4f504d42862ac89056e2476c414c4342dc145934c8a238382863841d8` | 10776 |
+| `spend_approved`, signed by the agent | `c243eaedfcbba87dc11d5ad28aad4f8424916d087adf8c811747169668169597` | 10786 |
+
+The agent is `Private/2irWK3sw…FRFP`, its policy account `DaFSZy2u…V4kJ` holds
+`per_tx 1, per_period 10, period_blocks 1000`, and the approval marker is
+`GXEHQssw…kXmC`.
+
+**Holds above.** The autonomous path refuses the same 2 LEZ, and refuses it
+before anything is submitted:
+
+```
+Program error 6005: the spend needs an owner approval: use spend_approved
+```
+
+**Executes below**, and now above. The payee `BzYks91a…wLnu` — the blockchain
+agent's public receiving account, so `getAccount` can read it — went **4 → 6**,
+and the paying agent went 3 → 1. The approval marker went `spent 0` → `spent 1`,
+which is what makes it single-use.
+
+One thing the ledger deliberately does not show: the policy account's running
+total is still `spent 0`. `spend_approved` declares `policy` read-only and says
+why — "an approved payment is bounded by the approval, not by the envelope". The
+per-period budget meters the autonomous path; an owner approval is not drawn
+against it. That is the program's design, not a miscount, but it does mean the
+policy ledger is not where an approved payment is recorded — the marker is.
+
+### Also recorded, because it was asserted here and is false
+
+The `account get --account-id "Public/$signer"` refresh added to
 `scripts/deploy-agents.sh`, with a comment claiming it "is what makes the next
-anchor provable", does nothing. A second anchor was run with exactly that
-refresh in place, against freshly fetched chain state, and still did not land.
-Re-importing the signer into a completely fresh wallet home does not help
-either. The gate reads the signer's on-chain state, not the wallet's.
+anchor provable", does nothing. A second anchor was run with exactly that refresh
+in place, against freshly fetched chain state, and still did not land.
+Re-importing the signer into a completely fresh wallet home does not help either.
+The gate reads the signer's on-chain state, not the wallet's — and what it reads
+is the program owner.
 
 ### Exactly where this limitation begins, and what is above it
 
@@ -241,18 +354,19 @@ wallet.send above threshold: {"attempts":8,"delivered":8,"outcome":"owner_unreac
 with eight `emitEvent: "ownerApprovalRequested"` lines in the runtime's log
 between the call and the answer.
 
-What is **not** available is the step after a *successful* approval. An approved
-above-threshold spend is submitted through the policy program's `spend_approved`,
-which requires an approval account that only the owner's own `approve_spend`
-signature can create — and that is the transaction the constraint above makes
-impossible for the account that anchored the policy. So the module deliberately
-does not submit on approval either: it reports `{"outcome":"approved",
-"submitted":false}` and names `spend_approved` as the path that would have to
-carry it. That is a refusal to claim a payment that did not happen, not a bug in
-the wait.
+The step after a *successful* approval is the one that used to be missing. An
+approved above-threshold spend is submitted through the policy program's
+`spend_approved`, which requires an approval account that only the owner's own
+`approve_spend` signature can create — and for the three shipped agents that
+transaction is still impossible, because their owners anchored while unclaimed
+and can never sign again. So the module continues not to submit on approval: it
+reports `{"outcome":"approved","submitted":false}` and names `spend_approved` as
+the path that would have to carry it. That is a refusal to claim a payment that
+did not happen, not a bug in the wait.
 
-In one line: **the agent's side of the approval exchange works and is tested;
-the chain's side is unreachable on testnet today for the reason above.**
+In one line: **the agent's side of the approval exchange works and is tested; the
+chain's side works too, and is demonstrated above — but only for a policy whose
+owner was claimed before it anchored, which the shipped three were not.**
 
 Three things that used to be in this file are gone from it, because they were
 fixed rather than reworded: `spend` moved no balance at all, a second
@@ -617,10 +731,12 @@ it for being declared and missing instead
 **The precondition is narrower than it looks.** This only bites a signer that
 still has the **default** program owner. An account already owned by another
 program is exempt from both halves — it is never filtered, and rule 7 only fires
-on a default post-state owner. `DumJ4LCB…`, funded and therefore owned by the
-authenticated transfer program, holds two landed anchors on the public testnet
-at nonces 29 and 30 (blocks 8050 and 8051), and a locally claimed signer
-anchored three in a row.
+on a default post-state owner. `DumJ4LCB…`, claimed and therefore owned by the
+authenticated transfer program, reads **nonce 33** on the public testnet, and a
+locally claimed signer anchored three in a row. (This used to cite two anchors by
+that account at blocks 8050 and 8051. Those hashes are recorded nowhere in this
+repository and could not be re-derived, so the count is now taken off the account
+itself, which is the stronger statement anyway.)
 
 `owner` is **not** removed, though removing it would also clear the rejection.
 `spel` signs only for accounts an instruction declares as signers, so an
@@ -629,7 +745,13 @@ and `create_policy` would become permissionless. It is the account the program
 records as the owner and the account the claim is compared against (6020), so
 removing it would delete the binding that makes anchoring authenticated at all.
 So the requirement stands and is documented instead: **anchor with a signer that
-has already received a transfer**, or accept one anchor per signer.
+has already been claimed**, or accept one anchor per signer. A transfer is one
+way to claim an account and not the cheapest — `wallet auth-transfer init`
+claims it for nothing, and the worked owner below signs program transactions
+holding a balance of 0. Whichever way it is done, it has to happen while the
+account is still untouched; see
+[the closed section above](#closed-an-owner-can-approve-a-spend-and-the-approved-spend-executes)
+for why there is no second chance.
 
 The same rule is why `create_policy` cannot simply declare the agent as a second
 signer and be done in one transaction. `spel` signs only with keys the single
@@ -1184,12 +1306,13 @@ invoked. The shim is not decoration: with the same `PATH` and
   publishes. Not measured here: this repository is cloned, not downloaded as a
   zip, in every procedure it documents.
 
-## Two commands, not one, and what each needs before it will run
+## One command, and what it needs before it will run
 
 The prize asks that "the owner can deploy the agent and configure it with a
 single CLI command on any machine using Logos Core headless". That sentence has
-two halves and this repository answers them with two commands, because they
-deploy to two different places:
+two halves, and this section used to be titled **"Two commands, not one"**
+because this repository answered them with two — they deploy to two different
+places:
 
 ```sh
 SIGNER=<funded public account id> ./scripts/deploy-agents.sh   # on chain
@@ -1203,9 +1326,152 @@ window, no display — loading the module and calling `configure()` and `start()
 on it across the runtime's own transport, with the owner and policy account the
 first command anchored.
 
-Neither is one command on a *bare* machine, and the rest of this section is the
-exact list of what "prepared" means. It is written out because the reviewers for
-this programme clone the repository and follow the instructions.
+**Both are now one command**, and the two above are still there because it is
+composed out of them rather than instead of them:
+
+```sh
+SIGNER=<funded public account id> ./scripts/deploy-and-configure.sh storage
+```
+
+### What the count turned on, and why the old answer was wrong
+
+This section used to argue that the wrapper should not be written:
+
+> **A wrapper around both is writable and is not written.** It would be honest
+> only on a machine that has both a funded LEZ wallet and a Logos Core runtime,
+> and it would report one exit code for two unrelated failures — which hides the
+> gap rather than closing it.
+
+Both clauses are worth keeping, because the first is still true and the second
+was the mistake.
+
+The first is a statement of prerequisites, and prerequisites do not stop a
+command being one command — every command in this document has them. It is
+answered by listing them and checking them, which is what the rest of this
+section already did for each half separately.
+
+The second is the part that was wrong, and it was wrong about the specific
+thing it named. **The two failures are not unrelated.** The second half's
+prerequisites are knowable before the first half spends anything, and the first
+half's output is the second half's input. Those are the two facts that make a
+composition either safe or dangerous, and the wrapper is where they are acted
+on:
+
+- **Nothing is submitted until both halves say they can run.** The Logos Core
+  half's own gate is asked first — `logos-core-headless.sh --check`, which runs
+  that script's prerequisite list, its harness-against-record check and its
+  package-variant check, and then stops one line short of starting a runtime.
+  It is asked by *running that script*, not by keeping a second copy of its
+  ninety-line platform table here, so the two cannot drift. This matters because
+  anchoring is not idempotent and is not free: `claim_agent` and `create_policy`
+  are both `#[account(init)]`, a landed claim cannot be rewritten, and a funding
+  transfer that has left cannot be recalled. A machine that finds out it has no
+  `liblogos_core` *after* three agents are anchored has paid real transactions
+  for the discovery.
+- **The second half is handed the file the first half wrote.** No owner and no
+  policy account is passed on a command line. `deploy-agents.sh` records the
+  agent id, the owner and the policy account in `artifacts/agents.tsv`;
+  `logos-core-headless.sh` reads those three back **by header name** out of the
+  same file; the wrapper exports one `MANIFEST` path so that both are certainly
+  reading and writing the same file, and checks the row in between.
+- **And the exit codes are three, not one.** `0` both halves ran. `1` a
+  prerequisite was missing or the chain half failed — and in that case nothing
+  was configured, which is the safe direction. `2` **the chain half succeeded
+  and the Logos Core half did not**: agents are anchored, paid for, and not
+  configured. That is the only outcome that costs money, it gets a code of its
+  own, and the message names the free command that finishes the job
+  (`--configure-only`, which submits nothing).
+
+### The seam, which is the whole of the design
+
+`artifacts/agents.tsv` is **committed in this repository** — it is the evidence
+for the three agents already published. That is exactly what makes the handoff
+dangerous rather than trivial: a chain half that failed leaves that committed
+file in place, and a wrapper that simply carried on would install the module,
+configure it against agents the operator does not own, print an owner and a
+policy account that are genuinely on chain, and exit 0. Every individual
+assertion would hold. So the row is established as this run's before it is used:
+
+1. **The chain half's own last word.** `deploy-agents.sh` prints
+   `manifest: <path>` after the `mv` that moves a fully anchored manifest over
+   the real one, and reaches that line on no other path. Its stdout is teed and
+   that line is required. (stderr is left alone, so a twenty-minute deployment
+   is still watchable as it happens.)
+2. **The file on disk is not older than the run**, compared with `python3`
+   rather than with `[ -nt ]`. Bash 3.2 — what macOS ships — compares whole
+   seconds, and against a stub chain half that wrote the manifest in the same
+   second as the stamp, the first version of this guard refused four correct
+   runs in a row while reporting "older than this run" about a file written a
+   moment earlier.
+3. **The row agrees with the chain.** `record_prefix` is the first 73 bytes of
+   the policy account as the chain holds them — version, owner, per-transaction
+   limit, per-period limit, period — which is the whole immutable part of the
+   record; everything after byte 73 is the running total, which moves. One
+   `getAccount` decides it. An account nothing has written has no data at all,
+   so the comparison fails on silence too, which is the direction to fail in.
+
+Each of those three was made to fail on purpose, against stubbed halves, and
+each refuses: a chain half that exits 0 without writing a manifest, one that
+writes it and never says so, one that writes a row the chain contradicts, one
+that writes a manifest with no row for the requested category. And the two ends:
+a Logos Core half that fails after a good seam exits 2, and a clean run exits 0.
+
+### It is one command *given three inputs it cannot produce*
+
+Stated precisely, because "one command" is worth nothing if the sentence quietly
+assumes a prepared machine without saying so:
+
+1. **A funded public account id in `SIGNER`.** Balance comes from a faucet and
+   no script can mint it. This is the only prerequisite in this whole section
+   that is a testnet's policy rather than a package's.
+2. **A wallet home holding that account's key** (`LEE_WALLET_HOME_DIR`).
+3. **A Logos Core runtime.** On Linux `scripts/fetch-logos-core.sh` fetches one
+   in a checksum-pinned command; on macOS it ships inside LogosBasecamp.app and
+   upstream publishes no headless build.
+
+Everything else the command does itself. All three are checked by name before
+anything is spent, and `--dry-run` runs every check and stops, so a machine can
+be told whether it is one of the machines this works on without finding out by
+spending. Measured on the machine this repository was deployed from, where the
+funder is down to 10 LEZ after the settlements the use cases record:
+
+```
+  storage      holds 6 of the 5 it must, so nothing is transferred
+  messaging    holds 5 of the 55 it must, so 50 would be transferred
+  blockchain   holds 5 of the 5 it must, so nothing is transferred
+  funder       <id> holds 10
+missing: testnet balance on SIGNER: it holds 10 and 50 has to be transferred
+         THIS IS THE ONE PREREQUISITE THAT CANNOT BE SCRIPTED.
+```
+
+Note what that figure is not. It is **not** the sum of the funding floors:
+`fund_agent` sends nothing to an agent that already holds its floor, and on a
+re-anchor it must not — a shielded transfer does not credit an existing note, it
+mints a new one under a new account id, and an agent whose id moves after it has
+claimed has both of its accounts at addresses nothing will look at again. So the
+number a balance is compared against is the **shortfall**, read per agent the
+same way `fund_agent` reads it. Comparing against 65 instead would refuse a
+perfectly good re-run on a funder that has spent down since.
+
+The floors and the category list are parsed out of `deploy-agents.sh`'s own
+`deploy_agent` lines rather than copied here, so a fourth category or a changed
+floor cannot become a silent disagreement between two files — the shape that
+disagreement would take is this command approving a balance that is not enough,
+which is a check passing when it should not.
+
+### One command deploys three agents and configures one
+
+Said plainly because it is the kind of thing a headline elides.
+`deploy-agents.sh` deploys **three** agents — one per default skill category,
+which is what the prize asks for — and the wrapper configures **one** of them in
+Logos Core, the one named by the category argument. Both facts are printed, and
+the closing message names the free commands that configure the other two.
+
+### The prerequisites, per half
+
+Neither half is one command on a *bare* machine, and the rest of this section is
+the exact list of what "prepared" means. It is written out because the reviewers
+for this programme clone the repository and follow the instructions.
 
 ### What used to be here, and why it was worse than a missing list
 
@@ -1427,7 +1693,7 @@ the transcript is in `basecamp.md`. What the list above says is what a *reviewer
 has to install to re-run it, which is the same class of prerequisite as the rest
 of this section and is longer than any of them.
 
-### What is still not one command, and what the count actually turns on
+### What the count actually turns on
 
 - **Deploying and configuring the published agent in Logos Core headless is one
   command**, and that is the command the criterion's own instrument names. On a
@@ -1436,19 +1702,20 @@ of this section and is longer than any of them.
   it across the runtime's transport, and reads the owner and policy account back
   out of `meta.status`. It needs no chain access and no argument beyond the
   category, because `artifacts/agents.tsv` is committed.
-- **Deploying an agent of your own is two**, and the second is
-  `SIGNER=… ./scripts/deploy-agents.sh`. That command does nothing a Logos Core
-  runtime does — it creates a shielded identity, funds it, and anchors a
-  spending envelope on LEZ — and the prize's own Scope lists that beside
-  deployment rather than inside it: "a CLI for agent deployment, configuration,
-  **and initial funding**". A reviewer can read the sentence either way, and
-  this submission does not rest a verdict on which; it states the reading and
-  the cost.
-- **A wrapper around both is writable and is not written.** It would be honest
-  only on a machine that has both a funded LEZ wallet and a Logos Core runtime,
-  and it would report one exit code for two unrelated failures — which hides the
-  gap rather than closing it. That is a choice, and it is the reason the box
-  below is not argued on the count.
+  `./scripts/deploy-and-configure.sh storage --configure-only` is the same thing
+  with the row checked against the chain first, and submits nothing either.
+- **Deploying an agent of your own is also one command**, and it is
+  `SIGNER=… ./scripts/deploy-and-configure.sh storage`. It was two, and the
+  argument for leaving it at two is retracted in full at the top of this
+  section. The chain half still does nothing a Logos Core runtime does — it
+  creates a shielded identity, funds it, and anchors a spending envelope on LEZ
+  — and the prize's own Scope lists that beside deployment rather than inside
+  it: "a CLI for agent deployment, configuration, **and initial funding**". A
+  reviewer can read that sentence either way and no longer has to: both readings
+  are one command now.
+- **What that command cannot do is mint testnet balance.** It names the
+  shortfall and stops. That is a prerequisite, in the same class as a Logos Core
+  runtime, and it is listed as one rather than counted as a second command.
 - **"On any machine" — closed, on both clauses.**
   Every platform the Logos app is published for is covered and exercised:
   macOS arm64, Linux x86-64, Linux aarch64. There is no fourth; Logos Core has
@@ -1471,10 +1738,14 @@ of this section and is longer than any of them.
   testnet's policy and cannot be scripted. The agents this repository publishes
   need none of it.)
 
-What *is* met: on a prepared machine each half is a single command that takes no
-arguments beyond the agent's category, deploys, configures, and verifies itself
-by reading back what it wrote — the policy record byte for byte off the chain,
-and the owner and policy account out of the running module's `meta.status`.
+What *is* met: on a prepared machine, `./scripts/deploy-and-configure.sh
+<category>` is a single command that takes no argument beyond the agent's
+category, deploys, configures, and verifies itself by reading back what it wrote
+— the policy record byte for byte off the chain, twice, once by the half that
+anchored it and once by the wrapper before it hands the row on, and the owner
+and policy account out of the running module's `meta.status`. Either half can
+still be run on its own, and both are documented above, because a composition
+whose parts cannot be run separately is a composition nobody can debug.
 
 Two other things in this repository drive Logos Core, and neither is part of the
 deployment path this section is about — both are checks:

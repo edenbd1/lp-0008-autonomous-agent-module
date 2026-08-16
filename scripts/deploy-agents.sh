@@ -117,10 +117,32 @@ recorded_signer() { # program category -> signer id, if one was recorded
 # Does the owner's wallet home actually hold this key? Asked before anything is
 # funded or claimed, because every failure that costs something is downstream of
 # this one being false.
+#
+# THE LIST IS CAPTURED BEFORE IT IS MATCHED, and that is not a style preference.
+# This was
+#
+#     "$WALLET" account list … | grep -qE "Public/$1([[:space:]]|$)"
+#
+# under this file's own `set -o pipefail`. `grep -q` exits the instant it
+# matches; the wallet is then still writing, takes SIGPIPE and exits 101; and
+# pipefail hands the PIPELINE's status back as 101 — so a key the home is
+# holding reads as a key it does not have. The failure is order-dependent, which
+# is why it survived every run that put the interesting account last: a match on
+# the final line of `account list` leaves nothing unwritten and no signal to
+# take. Measured against the wallet home this deployment was signed from, 28
+# accounts with the funder on line 13, `rc=101` for an id that is right there.
+#
+# What it would have done here is the worst version of it. `resolve_signer` had
+# just recorded that account as this agent's owner, and the caller's answer to
+# `signer_available` returning false is to refuse the whole agent with
+# "$SIGNER_HOME holds no key for …" — a refusal naming a key the operator can
+# see in `wallet account list`, with nothing to do about it. A herestring is not
+# a pipeline, so there is no reader to break and no status to misreport.
 signer_available() { # account id
-  LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
-    "$WALLET" account list </dev/null 2>/dev/null \
-  | grep -qE "Public/$1([[:space:]]|$)"
+  local list
+  list=$(LEE_WALLET_HOME_DIR="$SIGNER_HOME" NSSA_WALLET_HOME_DIR="$SIGNER_HOME" \
+           "$WALLET" account list </dev/null 2>/dev/null)
+  grep -qE "Public/$1([[:space:]]|$)" <<<"$list"
 }
 
 signer_publics() {
