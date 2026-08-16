@@ -314,4 +314,44 @@ repository was in before this directory existed.
 | `src/plugin.{h,cpp}` | The Qt plugin object and the ABI-critical `IComponent` declaration |
 | `src/agent_console.{h,cpp}` | The console: every button is one call on the loaded module |
 | `package-ui.sh` | Packaging, with the seven refusals above |
+| `agent-ui.lgx.sources` | What the committed package was built from — see below |
 | `tests/ui_plugin_load_test.cpp` | The load harness |
+
+## What the committed package was built from
+
+`agent-ui.lgx` is a binary in a repository, and nothing about a binary says what
+source it came from. `module/agent.lgx` has shipped stale twice for exactly that
+reason — once left behind by five commits to `module/src`, once signing Agent
+Cards with an algorithm this repository's own verifier rejects — and the two
+layers built to stop it a third time covered `module/` only. This package had no
+record at all.
+
+`agent-ui.lgx.sources` is that record, written by `package-ui.sh` at the moment
+the package is made and recomputed by `scripts/check-package-fresh.py` on every
+CI run. It holds the SHA-256 of every build input, and per variant the shipped
+binary's SHA-256 and length, the format and architecture read out of the
+binary's own header, and the Qt it was linked against. What is checked back:
+
+- every build input hashes as it did, and the file *set* is compared, so a
+  source added to `app/src` and forgotten is caught as surely as one edited;
+- every string literal of ≥ 8 bytes in `app/src` is present in each of the three
+  shipped binaries — the record is a record, and a hand-edited one is a claim
+  about a build that did not happen, so this is what the hashes are corroborated
+  with. How many there were is printed by the run rather than written down here,
+  and the checker refuses to call it corroboration below a floor: a scanner that
+  extracts nothing finds nothing missing from any binary at all;
+- every variant really is the architecture its name claims, from the ELF or
+  Mach-O header, because the flattening instructions above hand an installer one
+  variant and a directory holding another platform's binary looks complete and
+  can never load;
+- every variant was built against Qt 6.9 or lower, the ceiling Basecamp 0.2.2
+  bundles. `package-ui.sh` asks that of the platform it runs on and cannot ask
+  it of a variant built elsewhere; the checker asks it of all three, out of
+  `LC_LOAD_DYLIB` on Mach-O and the `Qt_6.9` symbol version on ELF.
+
+The three variants were recorded from the package's own bytes rather than from
+three builds, because the package was committed before the record existed and
+no one machine can build all three. That is written into the record's own
+`recorded_from` field, along with what it therefore cannot say: `compiler` and
+`built_on` are `null`, and repackaging any variant replaces its entry with a
+real build's.

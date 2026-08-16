@@ -324,6 +324,35 @@ if failures:
     sys.exit("\n".join("  FAIL  " + f for f in failures))
 PY
 
+# The record of what this package was built from.
+#
+# The mtime check at the top of this script catches a build tree older than the
+# source. It cannot catch the other half of the same defect, which is the one
+# module/agent.lgx has now shipped twice: a package that was correct when it was
+# made and was left behind by later commits to the source beside it. This package
+# was in a worse state than that — it had no record at all, so nothing could tell
+# a fresh one from a stale one, and `.github/workflows/ci.yml` did not contain
+# the string `app/` anywhere to check with. Nothing in a .lgx says what source it
+# came from, so the answer is written down beside it at the one moment it is
+# known for certain, which is here, and read back on every CI run by
+# scripts/check-package-fresh.py.
+#
+# Same writer as module/package-basecamp.sh uses, with --package app: a second
+# script would be how the two come to disagree about what a build input is.
+#
+# Only for the canonical artefact. Packaging to some other path is a throwaway
+# and must not rewrite the record for the committed one.
+canonical="$here/agent-ui.lgx"
+if [ "$(cd "$(dirname "$out")" && pwd)/$(basename "$out")" = "$canonical" ]; then
+    QT_VERSIONS="${qtrefs:+$(printf '%s\n' "$qtrefs" | tr -d ')' | awk '{print $NF}' | sort -u | tr '\n' ' ')}" \
+    COMPILER="$( (c++ --version 2>/dev/null || echo unknown) | head -1)" \
+    BUILT_ON="$(uname -srm)" \
+    VARIANT="$variant" \
+    python3 "$here/../scripts/write-package-record.py" --package app "$out" "$plugin"
+else
+    echo "  <-    not $canonical, so app/agent-ui.lgx.sources is left alone"
+fi
+
 "$lgx" verify "$out"
 "$lgx" manifest "$out"
 echo

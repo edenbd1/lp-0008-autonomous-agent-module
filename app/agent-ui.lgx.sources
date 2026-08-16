@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "Written by app/package-ui.sh; checked by scripts/check-package-fresh.py in",
+    "CI. Do not hand-edit: the point of this file is that it is a by-product of",
+    "a real build, and an edited one is a claim about a build that did not",
+    "happen.",
+    "",
+    "If CI says app/agent-ui.lgx is stale, the fix is to rebuild and repackage",
+    "(app/README.md), not to update the hashes here.",
+    "",
+    "One package carries three platform variants and one machine can build one",
+    "of them, so recording a variant MERGES it into whatever is already here; a",
+    "variant already recorded is kept only if the bytes still in the package",
+    "are the bytes it was recorded for AND those bytes still contain every",
+    "string literal of the source being recorded. A stale sibling cannot ride",
+    "along on a fresh variant's repackaging.",
+    "",
+    "package_root_hash is the manifest's content-derived root, not the",
+    "archive's sha256: gzip records a timestamp, so repackaging identical",
+    "contents produces a different file. variants[].sha256 is the load-bearing",
+    "one \u2014 the root hash covers the variants tree and not the manifest's name,",
+    "type or author.",
+    "",
+    "variants[].format is read out of the binary's own header, not out of the",
+    "directory it sits in. app/README.md tells an installer to flatten ONE",
+    "variant into the plugins directory and warns that a directory holding",
+    "another platform's binary looks complete and can never load, so the claim",
+    "the variant name makes about the file inside it is checked rather than",
+    "trusted.",
+    "",
+    "variants[].qt is the Qt each binary was linked against, read from",
+    "LC_LOAD_DYLIB on Mach-O and from the Qt_x.y symbol version on ELF. Qt is a",
+    "CEILING: Basecamp 0.2.2 bundles 6.9.2 and refuses a plugin built against a",
+    "higher minor, which presents as a load that reports success and then times",
+    "out on every call. app/package-ui.sh can only ask that of the platform it",
+    "is running on; the checker asks it of all three."
+  ],
+  "built_from": {
+    "app/CMakeLists.txt": "7897b18eedc2d7b6213d1043bcfc1c87815b5bd361e1e7244e2524c1512b5d5e",
+    "app/metadata.json": "4d919f38c70368e97869e7111e18132a0b488b85771abcbaa72b93619903c58d",
+    "app/src/agent_console.cpp": "9e2fa9094e7696d18c728f7948a37640a093463008b9074a16fa5d354662afed",
+    "app/src/agent_console.h": "9245fb24b29f21cf8d5810c6cfc23aa8b8d54eb30ae08a35ecec5e021c21e43d",
+    "app/src/plugin.cpp": "f4c488102c2f539d438c8a7e054f885977fce48ce46337b3054c37197bff2565",
+    "app/src/plugin.h": "23d3f9efb0ce3259402826c5d0b16762cb8d1dcc074e40192b33c1a40b70482d"
+  },
+  "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
+  "package": "app/agent-ui.lgx",
+  "package_root_hash": "250e0ed7434884d7abf8269fe49ddde1e4e87d53879e0403e242385119f10afb",
+  "recorded_from": "the package's own bytes, not a build: this record was written for a package that was already committed without one. Every variant was put through what a carried-forward sibling is put through \u2014 the bytes in the package, the architecture its own header declares, and every string literal of built_from inside it \u2014 and the fields only the building machine could know are null. Repackaging any variant with cmake --build build-ui -j8 && app/package-ui.sh build-ui replaces its entry with a real build's.",
+  "variants": {
+    "darwin-arm64": {
+      "built_on": null,
+      "bytes": 209136,
+      "compiler": null,
+      "format": "Mach-O arm64",
+      "main": "agent_ui.dylib",
+      "qt": "6.9",
+      "qt_reported": null,
+      "sha256": "a327ce86ebc9fe97076d05addd9cd295954447a1bd69afc9ec7f3c91cd8600e1"
+    },
+    "linux-amd64": {
+      "built_on": null,
+      "bytes": 203000,
+      "compiler": null,
+      "format": "ELF x86-64",
+      "main": "agent_ui.so",
+      "qt": "6.9",
+      "qt_reported": null,
+      "sha256": "69be20c153f8754a4ea43680a2b66d8ea582ab23872c2973484807a01293bfa9"
+    },
+    "linux-arm64": {
+      "built_on": null,
+      "bytes": 234544,
+      "compiler": null,
+      "format": "ELF aarch64",
+      "main": "agent_ui.so",
+      "qt": "6.9",
+      "qt_reported": null,
+      "sha256": "3b0096240ebd56d56fd782ec9bd8a2cf1d5a887ea79b21a5c2b5fd4aa79e6f28"
+    }
+  }
+}

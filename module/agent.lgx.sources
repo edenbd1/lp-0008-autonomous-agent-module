@@ -22,15 +22,15 @@
     "name, type or author."
   ],
   "built_from": {
-    "module/CMakeLists.txt": "d74285614227498d2af10b1a25c4952fb7f5600ffd670a1f8de128c590e3e849",
+    "module/CMakeLists.txt": "567c0bec1d6da188f5f5da815014b63386c46786d745ca646a06ee352da4ae2e",
     "module/agent_module_plugin_export.h": "149a9597119d18ff7630b1bac939e1051d6c975129e17c4f33513a1dada85aa9",
     "module/generated_code/agent_dispatch.cpp": "26140ef3be69032b4006d43939843ad37ffd0660707d6f83d57cb1b27d88c2a1",
     "module/generated_code/agent_events.cpp": "544722ac079d102aa47c3613b458c7b559644b263727712cc9286f65ce9f93c2",
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "cdcb6fc27a5a4dca407572041d62e475f4123941bb350ff10eca9ac399deb492",
-    "module/src/agent_module_plugin.h": "9d5b90d251b34a4a1707ed772b6348388d2ec0ada18ee88173f09e1ba5627dfd",
+    "module/src/agent_module_plugin.cpp": "471abbc64a806ccb6d74313d0f6a5039a7935ff5b1f6115c543e04ee68882653",
+    "module/src/agent_module_plugin.h": "472d32c8e8dab19848599694237eb1c1a098c9539d3815c93d06e0d1fa013a6e",
     "module/src/agent_skills.cpp": "e741574536996fe0f8ae0bebefefa3caa6d5e88a461db6826a590ae182045374",
     "module/src/agent_skills.h": "d2cc5d784f57603269ac69bccb904f8e1f0115f505398e52b2d19e106ba3820f",
     "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",
@@ -56,31 +56,40 @@
   },
   "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
   "package": "module/agent.lgx",
-  "package_root_hash": "fdafdde1c228959c65ba3cbe8824487a22e05b6b871df228b43e0eff1bda8924",
+  "package_root_hash": "fd3f07fbaeec18864a587bca46964dbc3e84d8d661fa25919dcd185176042954",
   "variants": {
     "darwin-arm64": {
-      "bytes": 4441216,
+      "built_on": null,
+      "bytes": 4442640,
       "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
       "delivery": null,
+      "format": "Mach-O arm64",
       "main": "agent_plugin.dylib",
-      "qt": "6.9.2",
-      "sha256": "9ae13e4310b74b1538e074f26bb3747fe8cd145d84384b59c93bb3ab791e7cf3"
+      "qt": "6.9",
+      "qt_reported": "6.9.2",
+      "sha256": "978ef374da49f39239556a2171039189912a6320a515b30239b58daa55cf5162"
     },
     "linux-amd64": {
-      "bytes": 6951104,
+      "built_on": null,
+      "bytes": 6955896,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
+      "format": "ELF x86-64",
       "main": "agent_plugin.so",
-      "qt": null,
-      "sha256": "08c7dd9a433edbf3d6917300f9e2cec5be9a69294cdb943becd3108a97b384e3"
+      "qt": "6.9",
+      "qt_reported": null,
+      "sha256": "e23dd725936474b642ce7a3b2695f98a90878cb3d54d45a08d55943009118fe5"
     },
     "linux-arm64": {
-      "bytes": 7032848,
+      "built_on": null,
+      "bytes": 7033832,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
+      "format": "ELF aarch64",
       "main": "agent_plugin.so",
-      "qt": null,
-      "sha256": "fd55db35f44279f900f3c1978a5ba325a7b669fd7ba70f2242e6238be99eb34c"
+      "qt": "6.9",
+      "qt_reported": null,
+      "sha256": "45baa42c5dc5d4a9c72e6546cba104198ce41bd253ada5af3b346334f382be5f"
     }
   }
 }

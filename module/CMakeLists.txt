@@ -83,12 +83,28 @@ if(LOGOS_DELIVERY_ROOT)
             "without it nothing in src/delivery_runtime.cpp can compile.")
     endif()
     set(_agent_delivery_headers "${LOGOS_DELIVERY_ROOT}/library")
-    foreach(_ext dylib so)
-        if(EXISTS "${LOGOS_DELIVERY_ROOT}/build/liblogosdelivery.${_ext}")
-            set(_agent_delivery_lib "${LOGOS_DELIVERY_ROOT}/build/liblogosdelivery.${_ext}")
-            break()
-        endif()
-    endforeach()
+    # ONE extension, chosen by the platform being built for -- not the first of
+    # {dylib, so} that happens to exist.
+    #
+    # This loop was `foreach(_ext dylib so)`, first match wins, no platform
+    # guard. Building the Linux variants in a container with the checkout bind
+    # mounted from a macOS host, the container sees the host's Mach-O
+    # `liblogosdelivery.dylib`, matches it first, and links an ELF plugin
+    # against it -- and `module/package-basecamp.sh` would then have SHIPPED that
+    # dylib inside the Linux `.lgx`, because it copies `*.dylib` siblings
+    # unconditionally and its pairing check only globs `*.${pluginext}`. Nothing
+    # downstream looks at the architecture of a sibling, so a Mach-O library
+    # inside a linux-amd64 variant would have travelled all the way to a
+    # reviewer's machine and failed there.
+    if(APPLE)
+        set(_agent_delivery_ext dylib)
+    else()
+        set(_agent_delivery_ext so)
+    endif()
+    if(EXISTS "${LOGOS_DELIVERY_ROOT}/build/liblogosdelivery.${_agent_delivery_ext}")
+        set(_agent_delivery_lib
+            "${LOGOS_DELIVERY_ROOT}/build/liblogosdelivery.${_agent_delivery_ext}")
+    endif()
     if(NOT _agent_delivery_lib AND NOT LOGOS_DELIVERY_LIBRARY_OPTIONAL)
         message(FATAL_ERROR
             "LOGOS_DELIVERY_ROOT=${LOGOS_DELIVERY_ROOT} has no "
