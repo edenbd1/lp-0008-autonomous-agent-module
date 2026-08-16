@@ -267,3 +267,33 @@ finish() {
   echo "FAILED — see the failures above." >&2
   exit 1
 }
+
+# --- spends recorded outside the A2A manifest ----------------------------------
+# A shielded payment is the same `spend` instruction against the same policy
+# account, but it lands in artifacts/shielded-settlement.tsv, because a shielded
+# payee has no public balance to compare a delta against. Any check that reads
+# the ledger and compares it to a running total must count those too, or it
+# reports a settlement the chain has and the repository does not -- which is a
+# defect in the reading, not in the record.
+#
+# Two things it must get right, and both were wrong before they were separated:
+# a ledger address is PDA(program, agent), so a spend by one agent says nothing
+# about another's ledger; and a shielded spend can land BETWEEN two settlements,
+# so only the ones before a given block are in that settlement's reading.
+shielded_payer_ledger() {  # <idl> <program-bin> -> the ledger those spends charge
+  local f=artifacts/shielded-settlement.tsv payer
+  [ -f "$f" ] || { echo ""; return; }
+  payer=$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next}
+                       $h["role"]=="settlement"{print $h["payer_account"];exit}' "$f")
+  [ -n "$payer" ] || { echo ""; return; }
+  policy_account_of "$1" "$2" "$payer" 2>/dev/null
+}
+
+shielded_before() {  # <deploy-tx> <block> <ledger> <shielded-ledger> -> amount
+  local f=artifacts/shielded-settlement.tsv
+  [ -f "$f" ] && [ -n "$4" ] && [ "$3" = "$4" ] || { echo 0; return; }
+  awk -F'\t' -v prog="$1" -v before="$2" '
+    NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+    $h["role"]=="settlement" && $h["program"]==prog && ($h["block"]+0) < (before+0) { s += $h["amount"] }
+    END { print s+0 }' "$f" 2>/dev/null
+}

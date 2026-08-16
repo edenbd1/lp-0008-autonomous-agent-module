@@ -256,6 +256,8 @@ else
   for _c in price settlement_tx server_pay_account; do
     column_of "$SETTLEMENTS" "$_c" >/dev/null || die "$SETTLEMENTS has no $_c column"
   done
+  # The ledger the shielded spends charge, if any. See lib.sh.
+  SH_LEDGER=$(shielded_payer_ledger "$IDL" "$PROGRAM")
   n_rows=$(rows_of "$SETTLEMENTS"); row_i=1
   while [ "$row_i" -le "$n_rows" ]; do
     r=$(row_of "$SETTLEMENTS" "$row_i") || die "could not read row $row_i"
@@ -293,10 +295,15 @@ else
       else
         bad "  it charged the ledger $d for a price of $price"
       fi
-    elif [ -n "$spent" ] && [ "$spent" -eq "$price" ]; then
-      ok "  period $window opened at zero and its ledger reads $spent after this"
+    elif [ -n "$spent" ] && sb=$(shielded_before "$DEPLOY_TX" "$(kv "$f" block)" "$ledger" "$SH_LEDGER") \
+         && [ "$spent" -eq "$((price + sb))" ]; then
+      if [ "${sb:-0}" -gt 0 ]; then
+        ok "  its ledger reads $spent after this: $price here, $sb charged by shielded spend before it"
+      else
+        ok "  period $window opened at zero and its ledger reads $spent after this"
+      fi
     else
-      bad "  the ledger reads ${spent:-<none>} after the first settlement of period ${window:-?}, for a price of $price"
+      bad "  the ledger reads ${spent:-<none>} after the first settlement of period ${window:-?}, for a price of $price plus $(shielded_before "$DEPLOY_TX" "$(kv "$f" block)" "$ledger" "$SH_LEDGER") charged before it"
     fi
     [ "$ledger" = "$prev_ledger" ] || total=0
     prev_spent=$spent; prev_window=$window; prev_ledger=$ledger
@@ -308,6 +315,21 @@ else
   # off this agent's own. They are not always the same account: a ledger address
   # is a PDA of (program, agent), so the settlements in this manifest span two
   # programs and two paying agents between them.
+  # The ledger counts every spend the program made through this policy, and the
+  # A2A manifest is not the only place they are recorded: a shielded payment is
+  # the same `spend` instruction and charges the same account, but it lands in
+  # artifacts/shielded-settlement.tsv because a shielded payee has no public
+  # balance to compare against. Summing one manifest against a total that counts
+  # both reported a missing settlement that does not exist. Add the shielded
+  # spends charged to this same ledger by the same payer.
+  SHIELDED=artifacts/shielded-settlement.tsv
+  if [ -f "$SHIELDED" ]; then
+    extra=$(shielded_before "$DEPLOY_TX" 999999999 "$prev_ledger" "$SH_LEDGER")
+    if [ "${extra:-0}" -gt 0 ]; then
+      note "plus $extra LEZ of shielded spend charged to the same ledger ($SHIELDED)"
+      total=$((total + extra))
+    fi
+  fi
   LIVE_SPENT=$(policy_record "$prev_ledger" spent)
   LIVE_WINDOW=$(policy_record "$prev_ledger" window_start)
   [ "$prev_ledger" = "$POLICY" ] \

@@ -41,6 +41,14 @@ command -v "$SPEL" >/dev/null 2>&1 || [ -x "$SPEL" ] \
        echo "then re-run, or set SPEL_BIN=\$PWD/vendor/spel/target/release/spel" >&2; exit 1; }
 IDL=idl/agent_verifier.idl.json
 PROGRAM=artifacts/programs/agent_verifier.bin
+# The deploy transaction of the program above, derived rather than copied, and
+# the ledger any shielded spends charge. Both are needed to reconcile this
+# manifest against a ledger that also counts spends recorded elsewhere.
+PROGRAM_HASH=$(python3 -c "
+import hashlib, struct
+b = open('artifacts/programs/agent_verifier.bin','rb').read()
+print(hashlib.sha256(struct.pack('<I', len(b)) + b).hexdigest())")
+SH_LEDGER=$(shielded_payer_ledger "$IDL" "$PROGRAM")
 AGENTS="${A2A_AGENTS:-artifacts/agents.tsv}"
 SETTLEMENTS="${A2A_MANIFEST:-artifacts/a2a-task.tsv}"
 CARDS=artifacts/agent-cards
@@ -153,7 +161,11 @@ if [ -n "$CARD_KEY_KIND" ]; then
   if python3 -c "
 import json
 card = json.load(open('$CARD'))
-card['x-logos']['pricePerTask'] = 1
+# Derived from the card's own price, never a literal. It used to be 1, and the
+# day the card was re-signed AT price 1 the 'mutation' became byte-identical to
+# the original: the tamper control verified, and passed, and proved nothing. A
+# control whose value can collide with the thing it mutates is not a control.
+card['x-logos']['pricePerTask'] = int(card['x-logos']['pricePerTask']) + 1
 print(json.dumps(card))" | verify_card --quiet 2>/dev/null; then
     bad "control: a card with the price rewritten still verified — the check above is meaningless"
   else
@@ -386,8 +398,17 @@ if [ -s "$SETTLEMENTS" ]; then
       # say is the total, and a period's total opens at zero — so after the
       # first settlement of a period the total IS the amount that settlement
       # charged. Later settlements are differenced above and do not rely on it.
-      if [ "$SPENT" -eq "$PRICE_K" ]; then
-        ok "  it moved $SPENT: period $WIN opened at zero and its ledger reads $SPENT after this"
+      # ...unless a spend recorded in another manifest charged the same ledger
+      # first. A shielded payment is the same instruction against the same
+      # account; counting only this file reported a settlement the chain has and
+      # the repository does not. lib.sh counts them, by ledger and by block.
+      SB=$(shielded_before "$PROGRAM_HASH" "$(kv "$F" block)" "$LEDGER" "$SH_LEDGER")
+      if [ "$SPENT" -eq "$((PRICE_K + SB))" ]; then
+        if [ "${SB:-0}" -gt 0 ]; then
+          ok "  it moved $PRICE_K: its ledger reads $SPENT, $SB of it charged by shielded spend before this"
+        else
+          ok "  it moved $SPENT: period $WIN opened at zero and its ledger reads $SPENT after this"
+        fi
       else
         bad "  the ledger reads $SPENT after the first settlement of period $WIN, for an advertised price of $PRICE_K"
         ROW_OK=0
@@ -455,10 +476,19 @@ if [ -n "$PREV_LEDGER" ]; then
   elif [ "$LIVE_WINDOW" != "$PREV_WINDOW" ]; then
     note "period has rolled from $PREV_WINDOW to $LIVE_WINDOW, so the live total has"
     note "reset and is not comparable with settlements made in the old one"
-  elif [ "$LIVE_SPENT" -eq "$SUM" ]; then
-    ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: the sum of every price charged to it"
   else
-    bad "it reads $LIVE_SPENT for period $LIVE_WINDOW; the prices charged to it sum to $SUM"
+    # Plus anything charged to this same ledger and recorded in another manifest.
+    # The ledger counts spends, not rows of this file.
+    SB_TOTAL=$(shielded_before "$PROGRAM_HASH" 999999999 "$PREV_LEDGER" "$SH_LEDGER")
+    if [ "$LIVE_SPENT" -eq "$((SUM + SB_TOTAL))" ]; then
+      if [ "${SB_TOTAL:-0}" -gt 0 ]; then
+        ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: $SUM from this manifest, $SB_TOTAL from artifacts/shielded-settlement.tsv"
+      else
+        ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: the sum of every price charged to it"
+      fi
+    else
+      bad "it reads $LIVE_SPENT for period $LIVE_WINDOW; the prices charged to it sum to $((SUM + SB_TOTAL))"
+    fi
   fi
 fi
 
