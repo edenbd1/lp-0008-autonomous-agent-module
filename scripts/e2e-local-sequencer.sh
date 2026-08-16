@@ -283,11 +283,31 @@ if echo "$SECOND" | grep -q 'Transaction confirmed'; then
   echo "$SECOND" | tail -8
   die "a SECOND, unlimited policy was anchored for the same agent"
 fi
-# It has to have been REFUSED, not merely not-confirmed: spel must have got as
-# far as the program and come back with an error from it.
-echo "$SECOND" | grep -qiE 'already initialized|AccountAlreadyInitialized|Program error' \
+# It has to have been REFUSED, not merely not-confirmed. The first version of
+# this asked spel for a program error string, and that is unavailable on this
+# path: the sequencer DISCARDS a failing transaction at block-build time rather
+# than returning a reason, so a refused anchor and a never-submitted one both
+# come back "Transaction not found in preconfigured amount of blocks". Demanding
+# a message the chain does not emit made a correct refusal look like a broken
+# test.
+#
+# The positive that IS available is the submitted hash. spel prints one only
+# after it has read the IDL, built the instruction against the program, and
+# handed the transaction to the sequencer — the exact steps a renamed flag, a
+# moved binary or a bad --idl path never reach, which is what the old guard was
+# protecting against. So: a hash was submitted, that hash is NOT on chain, and
+# the account still reads what the owner anchored. Three positives, and no
+# single failure mode produces all three.
+SECOND_TX=$(echo "$SECOND" | grep -oE 'tx_hash: [0-9a-f]{64}' | tail -1 | awk '{print $2}')
+[ -n "$SECOND_TX" ] \
   || { echo "$SECOND" | tail -8
-       die "the second anchor produced neither a confirmation nor a program refusal — it never reached the chain, so nothing was demonstrated"; }
+       die "the second anchor never even submitted a transaction, so it did not reach the program and nothing was demonstrated"; }
+SECOND_ON_CHAIN=$(curl -s -m 10 -X POST "$RPC" -H 'Content-Type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$SECOND_TX\"]}" \
+  | python3 -c "import json,sys; print('yes' if (json.load(sys.stdin).get('result') is not None) else 'no')")
+[ "$SECOND_ON_CHAIN" = "no" ] \
+  || die "the second, unlimited anchor $SECOND_TX IS on chain — the bypass is open"
+echo "  submitted $SECOND_TX, and the chain does not hold it"
 # And the account still says what the OWNER anchored, which is the property the
 # refusal is about. An unlimited policy that was refused and an unlimited policy
 # that was written both leave "no Transaction confirmed" in some failure mode.
