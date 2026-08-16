@@ -212,14 +212,33 @@ else
   bad "the agent's owner claim did not read back"
 fi
 echo
-echo "   and losing that race is not what happened: the honest owner anchored"
-echo "   AFTERWARDS, at the same address the attack aimed at."
-echo "     $HONEST_ANCHOR"
-if q "$HONEST_ANCHOR" | grep -q '"result":\['; then
-  ok "in a block"
-else
+# The ordering is DERIVED, not narrated. An earlier version of this said the
+# honest owner anchored "AFTERWARDS, at the same address the attack aimed at"
+# and asserted only that the hash was in some block. Both halves were wrong: the
+# honest anchor is one block EARLIER, and the attack landed against the
+# superseded program, so a policy account -- a PDA of the program -- cannot be
+# the same address. A reviewer pasting the two hashes into getTransaction, which
+# this file trains them to do, disproved its own narration in two calls. In a
+# script whose pitch is that nothing is asserted, the one asserted sentence was
+# false.
+echo "   the honest anchor and the accepted attack, ordered by the chain:"
+A_BLK=$(q "$ATTACK_ACCEPTED" | python3 -c "import sys,json;r=json.load(sys.stdin).get('result');print(r[1] if r else '')")
+H_BLK=$(q "$HONEST_ANCHOR"   | python3 -c "import sys,json;r=json.load(sys.stdin).get('result');print(r[1] if r else '')")
+echo "     attack $ATTACK_ACCEPTED  block ${A_BLK:-<absent>}"
+echo "     honest $HONEST_ANCHOR  block ${H_BLK:-<absent>}"
+if [ -z "$H_BLK" ]; then
   bad "the honest anchor is not on chain"
+elif [ -z "$A_BLK" ]; then
+  bad "the accepted attack is not on chain — section 5 has nothing to compare"
+elif [ "$H_BLK" -lt "$A_BLK" ]; then
+  ok "both are in blocks, and the honest anchor is the earlier of the two"
+else
+  ok "both are in blocks, and the attack is the earlier of the two"
 fi
+echo "   They are not the same address: the attack was accepted by the program"
+echo "   this repository REPLACED, and a policy account is a PDA of its program,"
+echo "   so the two anchors cannot name one account. That is the point of the"
+echo "   replacement, and section 5 above executed it against both programs."
 if curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$HONEST_POLICY\"]}" \
    | python3 -c "

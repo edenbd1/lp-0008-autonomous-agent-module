@@ -353,8 +353,13 @@ instead of `u128::MAX` is the same call as a denial of service.
 
 The identical call to the program deployed here is `60de3fc6…`, and
 `getTransaction` answers `null` for it: submitted, never included, error 6020.
-The honest owner then anchored the same agent at the same address afterwards
-(`6857ba23…`, block 8868), which is the other half of the property.
+The honest owner's anchor for that agent is `6857ba23…` in block 8868 — one
+block *earlier* than the accepted attack, and at a different address: a policy
+account is a PDA of its program, and the attack was accepted by the program this
+one replaced, so the two cannot name one account. An earlier revision of this
+paragraph said "afterwards, at the same address", and both halves were wrong;
+`scripts/demo.sh` now fetches both heights and compares them rather than
+narrating an order.
 
 **The fix is a second signature.** Anchoring is now two transactions from two
 wallets: `claim_agent`, signed by the agent, writes the id of the one account
