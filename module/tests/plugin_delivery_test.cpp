@@ -366,6 +366,29 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     const int rounds = qEnvironmentVariableIntValue("LP0008_ROUNDS") > 0
                            ? qEnvironmentVariableIntValue("LP0008_ROUNDS")
                            : 40;
+    // HOW LONG TO WAIT FOR THE PEER'S STATUS UPDATES, WHICH IS NOT THE SAME
+    // QUESTION AS HOW LONG TO WAIT FOR ITS CARD.
+    //
+    // A settlement blocks the paying module for as long as the proof takes —
+    // 418 s in the run this repository cites, 767 s in one the day before — and
+    // a module that is blocked publishes nothing. So in `settle` mode the two
+    // sides are waiting for very different things: the payer unblocks to find
+    // its peer's updates already on the topic, and the peer has to outwait a
+    // proof it cannot see.
+    //
+    // With one bound for both, that mode could not pass, and the failure would
+    // have read as the lifecycle being broken rather than as this harness
+    // timing a proof. `rounds` is 40 polls at three seconds — two minutes,
+    // against a step measured at seven.
+    //
+    // The seller knows it is the seller without asking anyone: it is the side
+    // whose own card carries a price. Nothing here times the peer or waits on a
+    // message from it; the bound is a function of this process's own
+    // configuration. In `peers` mode neither side has a price, so both keep the
+    // short bound and a broken run still goes red in two minutes.
+    const int updateRounds = qEnvironmentVariableIntValue("LP0008_UPDATE_ROUNDS") > 0
+                                 ? qEnvironmentVariableIntValue("LP0008_UPDATE_ROUNDS")
+                                 : (price.isEmpty() ? rounds : rounds * 12);
     bool sawOther = false;
     bool published = false;
     QJsonObject seen;
@@ -613,7 +636,12 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     QStringList authors;
     int selfIgnored = 0, applied = 0;
     QJsonArray history;
-    for (int i = 0; i < rounds; ++i) {
+    note(QStringLiteral("polling for the peer's updates, up to %1 rounds of 3 s%2")
+             .arg(updateRounds)
+             .arg(price.isEmpty() ? QString()
+                                  : QStringLiteral(" — this agent advertises a price, so its "
+                                                   "peer is paying and is blocked while it proves")));
+    for (int i = 0; i < updateRounds; ++i) {
         updates = call(p, "agent.poll",
                        QStringLiteral(R"({"agent_address":"%1","task_id":"%2","since":%3})")
                            .arg(other, myTask)
