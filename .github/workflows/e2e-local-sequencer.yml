@@ -127,6 +127,12 @@ jobs:
           done
           echo "every stage of the lifecycle is present in the log"
 
-      - name: Sequencer log on failure
-        if: failure()
+      # `failure()` alone is NOT enough, and this was measured rather than
+      # reasoned about: run 31950647965 ran past its 340-minute cap, GitHub
+      # marked it `cancelled` rather than `failed`, this step was SKIPPED, and
+      # the one diagnostic the job exists to leave behind was not written. A
+      # timeout is the case where the sequencer log is most wanted and the only
+      # case where `failure()` does not fire.
+      - name: Sequencer log on failure or timeout
+        if: failure() || cancelled()
         run: find /tmp -name 'sequencer.log' -newermt '-2 hours' -exec tail -100 {} \; 2>/dev/null || true

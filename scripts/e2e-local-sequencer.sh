@@ -58,6 +58,90 @@ TEST_SIGNER=CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
 die() { echo "error: $*" >&2; exit 1; }
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# ---------------------------------------------------------------------------
+# SHOWING THE WAIT.
+#
+# Every proof in here is a `wallet_run … >/dev/null 2>&1` that returns when it
+# returns. On a fast runner that is 25 minutes; on 2026-08-16 it was 1h42, three
+# times over, and the job was killed at its 340-minute cap in the middle of the
+# fourth. What the log held for those five hours was four lines. A run that
+# prints nothing while it works cannot be told from one that has hung, and the
+# only way to learn that runner was three times slower than usual was to read
+# the timestamps after it was dead.
+#
+# So: a line a minute while a proof runs, the elapsed time of each one when it
+# lands, and -- once the first one has landed and there is a rate to reason from
+# -- what the rest of the run will cost at that rate, against the cap. That last
+# line is the one that would have said "this run cannot finish" at minute forty,
+# instead of leaving it to be discovered at hour five.
+T_START=$(date +%s)
+PROOFS_DONE=0; PROOFS_SECS=0
+# How many `beat` calls a full run makes. Derived at the end of this file by the
+# check that every stage name appears, not guessed: fund, claim, anchor, the
+# refused second anchor, the spend inside the envelope, the spend outside it.
+PROOFS_EXPECTED=6
+CAP_SECS=$(( ${E2E_CAP_MINUTES:-340} * 60 ))
+
+hms() { printf '%dh%02dm%02ds' $(($1/3600)) $((($1%3600)/60)) $(($1%60)); }
+
+beat() {   # beat <label> <command...>  -- run it quietly, narrate the wait
+  local label="$1"; shift
+  local t0 pid rc now
+  t0=$(date +%s)
+  "$@" </dev/null >/dev/null 2>&1 & pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 60
+    kill -0 "$pid" 2>/dev/null || break
+    now=$(date +%s)
+    printf '    %s: still proving, %s in (run %s)\n' \
+      "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))"
+  done
+  wait "$pid"; rc=$?
+  now=$(date +%s)
+  PROOFS_DONE=$((PROOFS_DONE + 1))
+  PROOFS_SECS=$((PROOFS_SECS + now - t0))
+  printf '    %s: %s\n' "$label" "$(hms $((now - t0)))"
+  # The prediction, from measured rate rather than from the comment at the top.
+  if [ "$PROOFS_DONE" -ge 1 ] && [ "$PROOFS_DONE" -lt "$PROOFS_EXPECTED" ]; then
+    local rate=$((PROOFS_SECS / PROOFS_DONE))
+    local left=$(( (PROOFS_EXPECTED - PROOFS_DONE) * rate ))
+    local projected=$(( now - T_START + left ))
+    if [ "$projected" -gt "$CAP_SECS" ]; then
+      printf '    PACE: %s a proof, %d left -> about %s in total, past the %s cap.\n' \
+        "$(hms "$rate")" "$((PROOFS_EXPECTED - PROOFS_DONE))" "$(hms "$projected")" "$(hms "$CAP_SECS")"
+      printf '    This run is on a slow machine and will not finish. Re-dispatch it.\n'
+    else
+      printf '    pace: %s a proof, %d left, about %s in total against a %s cap\n' \
+        "$(hms "$rate")" "$((PROOFS_EXPECTED - PROOFS_DONE))" "$(hms "$projected")" "$(hms "$CAP_SECS")"
+    fi
+  fi
+  return $rc
+}
+
+# The same, for a call whose output the script goes on to read. `beat` throws
+# stdout away, and three of these calls are parsed for a tx hash and for
+# `Transaction confirmed` -- wrapping those in `beat` would have made the script
+# quieter AND blinder.
+beat_cap() {   # beat_cap <label> <outfile> <command...>
+  local label="$1" out="$2"; shift 2
+  local t0 pid rc now
+  t0=$(date +%s)
+  "$@" </dev/null >"$out" 2>&1 & pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 60
+    kill -0 "$pid" 2>/dev/null || break
+    now=$(date +%s)
+    printf '    %s: still proving, %s in (run %s)\n' \
+      "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))"
+  done
+  wait "$pid"; rc=$?
+  now=$(date +%s)
+  PROOFS_DONE=$((PROOFS_DONE + 1))
+  PROOFS_SECS=$((PROOFS_SECS + now - t0))
+  printf '    %s: %s\n' "$label" "$(hms $((now - t0)))"
+  return $rc
+}
+
 [ -d "$LEZ_SRC" ] || die "no LEZ checkout at $LEZ_SRC. Clone logos-execution-zone there, or set LEZ_SRC."
 CONFIG_SRC="$LEZ_SRC/lez/sequencer/service/configs/debug/sequencer_config.json"
 [ -f "$CONFIG_SRC" ] || die "no standalone config at $CONFIG_SRC"
@@ -191,8 +275,9 @@ LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   wallet_run account show-keys --account-id "Private/$SEED" </dev/null 2>/dev/null \
   | grep -E "^[0-9a-f]{64,}$" > "$WORK/agent.keys"
 [ -s "$WORK/agent.keys" ] || die "could not export the agent's keys"
-wallet_run auth-transfer send --from "Public/$TEST_SIGNER" \
-  --to-keys "$WORK/agent.keys" --amount 1000 </dev/null >/dev/null 2>&1 \
+beat "funding the agent" \
+  wallet_run auth-transfer send --from "Public/$TEST_SIGNER" \
+    --to-keys "$WORK/agent.keys" --amount 1000 \
   || die "could not fund the agent"
 AGENT=""
 for _ in $(seq 1 30); do
@@ -259,9 +344,11 @@ echo "  policy $POLICY  (per-tx $PER_TX, per-period $PER_PERIOD)"
 # an uninitialised account and refuses with 6019, loudly.
 LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   wallet_run account sync-private </dev/null >/dev/null 2>&1
-COUT=$(LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
+beat_cap "claim_agent" "$WORK/claim.out" \
+  env LEE_WALLET_HOME_DIR="$AGENT_HOME" NSSA_WALLET_HOME_DIR="$AGENT_HOME" \
   spel --idl "$IDL" --program "$PROGRAM" -- claim_agent \
-    --agent "Private/$AGENT" --owner-id "$OWNER_HEX" 2>&1)
+    --agent "Private/$AGENT" --owner-id "$OWNER_HEX"
+COUT=$(cat "$WORK/claim.out")
 CLAIM_TX=$(echo "$COUT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
 [ -n "$CLAIM_TX" ] \
   || { echo "$COUT" | tail -8; die "claim_agent submitted no transaction"; }
@@ -269,9 +356,10 @@ echo "$COUT" | grep -q 'Transaction confirmed' \
   || { echo "$COUT" | tail -8; die "claim_agent built $CLAIM_TX but it never confirmed"; }
 echo "  agent claimed $TEST_SIGNER as the only account that may anchor it -> $CLAIM_TX"
 
-spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
-  --agent-id "$AGENT_HEX" \
-  --per-tx "$PER_TX" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" >/dev/null 2>&1 \
+beat "create_policy" \
+  spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
+    --agent-id "$AGENT_HEX" \
+    --per-tx "$PER_TX" --per-period "$PER_PERIOD" --period-blocks "$PERIOD" \
   || die "create_policy failed"
 echo "  policy anchored"
 
