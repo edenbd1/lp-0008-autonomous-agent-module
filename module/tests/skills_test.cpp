@@ -164,6 +164,11 @@ const char *kBuiltinSkills[] = {
     "agent.poll",          "agent.cancel",
     "meta.status",         "meta.configure",   "meta.skills",
     "agent.evaluate_task",
+    // The owner's side of the channel, added for the second-Basecamp path and
+    // missing from this list until CI went red on it: the list is spelled out
+    // on purpose, so a skill that is registered and not named here fails the
+    // suite by name -- which is what happened, and is the list doing its job.
+    "owner.watch",         "owner.pending",    "owner.answer",
 };
 constexpr std::size_t kBuiltinCount = sizeof(kBuiltinSkills) / sizeof(kBuiltinSkills[0]);
 
