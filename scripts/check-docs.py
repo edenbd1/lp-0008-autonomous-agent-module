@@ -422,6 +422,43 @@ ABOUT_SKILLS = re.compile(r"skill|card|registry|registered|dispatch", re.I)
 HISTORICAL = "(count-as-it-was)"
 
 
+def skills_test_names():
+    """The names `module/tests/skills_test.cpp` spells out in kBuiltinSkills[].
+
+    That list is deliberately spelled out rather than counted, so a skill that
+    is registered and not named there fails the suite BY NAME. The cost of it
+    drifting is not cosmetic: the step runs under `set -euo pipefail`, so when
+    it failed, the ten steps after it in the same job never ran -- module
+    recovery, wallet, program, agent-coordination, the A2A driver, the owner
+    channel and task persistence all stopped being verified on the public
+    branch, and a real regression in any of them would have been
+    indistinguishable from a miscount. This compares the two lists so the drift
+    is caught here, in seconds, instead of there.
+    """
+    src = open(os.path.join(ROOT, "module/tests/skills_test.cpp"),
+               encoding="utf-8").read()
+    start = src.index("const char *kBuiltinSkills[] = {")
+    end = src.index("};", start)
+    return set(re.findall(r'"([a-z_]+\.[a-z_]+)"', src[start:end]))
+
+
+def registered_skill_names():
+    """The names `installBuiltinSkills` registers, read off the registrations."""
+    src = open(os.path.join(ROOT, "module/src/agent_module_plugin.cpp"),
+               encoding="utf-8").read()
+    names = set()
+    for base in os.listdir(os.path.join(ROOT, "module/src")):
+        if not base.endswith((".h", ".cpp")):
+            continue
+        text = open(os.path.join(ROOT, "module/src", base), encoding="utf-8").read()
+        # `std::string name() const override { return "owner.watch"; }` -- the
+        # one place a skill states its own identifier.
+        names |= set(re.findall(
+            r'name\(\)\s*const\s*override\s*\{\s*return\s+"([a-z_]+\.[a-z_]+)"',
+            text))
+    return names
+
+
 def registered_skill_count():
     """How many built-ins `installBuiltinSkills` actually registers."""
     src = open(os.path.join(ROOT, "module/src/agent_module_plugin.cpp"),
@@ -488,4 +525,21 @@ if failures:
     for f in failures:
         print("  " + f)
     sys.exit(1)
+
+# --- the test's spelled-out list against the module's own name() overrides ---
+_test_names = skills_test_names()
+_code_names = registered_skill_names()
+_missing = sorted(_code_names - _test_names)
+_extra = sorted(_test_names - _code_names)
+if _missing or _extra:
+    for n in _missing:
+        problem("module/tests/skills_test.cpp", 0,
+                "kBuiltinSkills does not name %s, which the module registers" % n)
+    for n in _extra:
+        problem("module/tests/skills_test.cpp", 0,
+                "kBuiltinSkills names %s, which the module does not register" % n)
+else:
+    print("checked %d skill name(s): the suite's list and the module agree"
+          % len(_code_names))
+
 print("every path, link target, line citation and symbol citation resolves")
