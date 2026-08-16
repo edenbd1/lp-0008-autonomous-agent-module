@@ -110,8 +110,9 @@ A2A task id.
 
 A task topic is derived from **the peer's account and the task id**, and both
 ends compute it the same way, so no rendezvous or session setup is needed: the
-client publishes its request there and the server publishes its status updates
-there. `agent.subscribe` subscribes to exactly the same string
+client publishes its request there (`agent.task`), the server publishes its
+status updates there (`agent.update`), and the client reads them back off it
+(`agent.poll`). `agent.subscribe` subscribes to exactly the same string
 (`SubscribeSkill` in `agent_skills.cpp`).
 
 Two consequences a third party must understand before deploying this:
@@ -412,7 +413,7 @@ true` in a discovery summary means "carries a signatures member", not "verified"
 | `message/send` (new task) | client → server | `taskTopic(server, taskId)` | `TaskSkill` in `agent_skills.cpp` |
 | `message/send` (continuation) | client → server | `taskTopic(server, taskId)` | `TaskSkill` in `agent_skills.cpp` |
 | `tasks/cancel` | client → server | `taskTopic(server, taskId)` | `CancelSkill` in `agent_skills.cpp` |
-| `TaskStatusUpdateEvent` | server → client | `taskTopic(server, taskId)` | consumed by `TaskStore::applyUpdate`, `applyUpdate` in `agent_skills.cpp` |
+| `TaskStatusUpdateEvent` | server → client | `taskTopic(server, taskId)` | emitted by `UpdateSkill`; read and applied by `PollSkill` through `TaskStore::applyUpdate`, all in `agent_skills.cpp` |
 | Agent Card | publisher → all | `discoveryTopic(ns)` | §3.2 |
 | `tasks/get` | — | — | **not implemented**, §7.1 |
 | `message/stream`, `tasks/resubscribe` | — | — | not sent; §4.5 |
@@ -454,15 +455,44 @@ A cancellation:
 `taskId`. That is A2A's own inconsistency between `Message.taskId` and
 `TaskIdParams.id`, faithfully reproduced.
 
-A status update, in the shape the receiving side accepts:
+A status update, exactly as `agent.update` builds it:
 
 ```json
-{"taskId": "<taskId>", "status": {"state": "working", "message": "reading the file"}}
+{
+  "kind": "status-update",
+  "taskId": "<taskId>",
+  "contextId": "<contextId>",
+  "final": false,
+  "status": {
+    "state": "working",
+    "message": {
+      "kind": "message",
+      "role": "agent",
+      "messageId": "<32 hex>",
+      "taskId": "<taskId>",
+      "contextId": "<contextId>",
+      "parts": [{ "kind": "text", "text": "reading the file" }]
+    }
+  },
+  "metadata": { "x-logos": { "from": "<publisher's LEZ account>" } }
+}
 ```
 
-`{"id": …, "status": {…}}` — an A2A `Task` object — is accepted too
-(`applyUpdate` in `agent_skills.cpp`). See §7.2 for where this diverges from A2A's
-`TaskStatusUpdateEvent` and what a conforming sender should emit.
+`final` is **derived** from the state (`isTerminalState`), not taken from the
+caller: A2A defines it as "this is the last event for this task", which is a fact
+about the state machine rather than something a sender may assert.
+
+`metadata` is A2A's extension point, and `x-logos.from` is the one thing A2A has
+no field for because HTTP answered it: over a shared topic there is no connection
+to attribute a frame to, so the frame says. `agent.poll` applies an update only
+when that name is the task's peer — see §7.3 for what the claim is worth.
+
+`TaskStore::applyUpdate` is looser than what `agent.update` emits, deliberately:
+it takes `taskId` or `id`, a `status.state`, and `status.message` either as an
+A2A `Message` (reading the text out of its `parts[]`) or as a bare string. So an
+`{"id": …, "status": {…}}` `Task` object from some other implementation is
+understood by the store — though `agent.poll` will not feed it one, because it
+requires A2A's `kind` discriminator before it will treat a frame as an event.
 
 ### 4.2 Reliable channel or bare topic
 
@@ -597,9 +627,17 @@ updates. That is the meaning of the design rule stated at `TaskState` in `agent_
 ### 4.5 Streaming
 
 A2A §3.3 makes streaming explicitly transport-specific. Here it is topic
-subscription: the server publishes `TaskStatusUpdateEvent`s to the task topic,
-and `agent.subscribe(agent_address, task_id)` subscribes the client to that same
-topic (`SubscribeSkill` in `agent_skills.cpp`) and records `subscribed: true` on the task.
+subscription plus a poll: the server publishes `TaskStatusUpdateEvent`s to the
+task topic (`agent.update`), `agent.subscribe(agent_address, task_id)` subscribes
+the client to that same topic (`SubscribeSkill` in `agent_skills.cpp`) and
+records `subscribed: true` on the task, and `agent.poll(agent_address, task_id,
+since)` reads what has arrived and applies it to the store.
+
+A poll rather than a callback, because the transport gives no other option:
+`DeliveryPort::receive` is a non-draining read of what a topic has carried and
+`since`/`next_since` is how a caller says where it got to — the same shape
+`messaging.receive` uses. A client that stops polling stops learning; nothing is
+pushed into the store behind its back.
 
 No `message/stream` and no `tasks/resubscribe` request is ever sent. On this
 transport that is not a gap in the same way it is over HTTP: there is no
@@ -719,6 +757,56 @@ an unknown task, a task with a different peer, a task already in a terminal stat
 ("there are no further updates to stream"), and a transport that is not ready.
 Otherwise subscribes to the task topic and sets `subscribed`.
 
+**`agent.update(agent_address, task_id, context_id, state, message)`** —
+`UpdateSkill` in `agent_skills.cpp`. The server's half. Publishes a
+`TaskStatusUpdateEvent` on `taskTopic(agent_address, task_id)`, where
+`agent_address` is the agent *serving* the task — its own account, when a server
+answers a request it read there. Refuses a state A2A does not define, an
+identifier that would forge a topic segment, a missing `context_id`, a transport
+that is not ready, and an agent with no account of its own to publish as.
+
+Three things it does not do. It does not touch the publisher's own `TaskStore`:
+the store holds tasks this agent *opened*, and a task it is serving belongs to
+the peer that minted it. It does not refuse to publish about a task the publisher
+opened itself — that would put the check on the wrong side, since a stranger's
+module cannot be configured from here and the receiver has to refuse a
+self-authored update anyway. And it signs nothing (§7.3).
+
+Requiring `context_id` is not pedantry: the client mints it and it appears
+nowhere but in the request, so an update carrying the right one was published by
+something that had read the request. That is not authentication — the request is
+readable by anyone on the topic — but it is the difference between an answer and
+a guess.
+
+**`agent.poll(agent_address, task_id, since)`** — `PollSkill` in
+`agent_skills.cpp`. The client's half, and the skill that lets a task advance
+*from the wire*. Refuses a task this agent never opened, a task whose peer is not
+`agent_address`, a forged identifier, a negative `since`, a transport that is not
+ready and a build with no read path. Otherwise it reads the task topic from
+`since` and, for each frame, applies it only if **all** of these hold:
+
+| The frame | or it is counted as |
+|---|---|
+| parses, and nests no deeper than the module's JSON bound | `ignored.malformed` |
+| carries `kind: "status-update"` | `ignored.not_a_status_update` |
+| names this `taskId` | `ignored.other_task` |
+| names this task's `contextId` | `ignored.other_context` |
+| says who published it, in `metadata["x-logos"]["from"]` | `ignored.unattributed` |
+| was published by the task's peer — not by this agent | `ignored.self` / `ignored.other_party` |
+
+Then `TaskStore::applyUpdate` decides whether the transition is legal; one it
+refuses is reported in `refused[]` with the store's own reason rather than
+swallowed, because a peer saying something impossible is a fact the caller needs.
+The counts are reported rather than dropped for a reason that is about evidence:
+"no self-authored update was applied" is equally consistent with the rule working
+and with no such frame ever arriving, and only the count tells the two apart.
+
+The author rule is the one that matters. A Delivery node receives its own
+published messages, so everything this agent put on the topic comes back to it —
+its own request, and any status update it published. Without that rule a single
+process could drive its own task to `completed` and the transcript would read
+exactly like two agents cooperating.
+
 **`agent.cancel(agent_address, task_id)`** — `CancelSkill` in `agent_skills.cpp`. Refuses an
 unknown task, a mismatched peer, and a task already terminal. **Refuses while the
 transport is down** rather than marking the task canceled locally, because a
@@ -741,6 +829,8 @@ party MUST NOT read a local `canceled` as a statement about the peer.
 | `agent.task`, new | refused before the task exists | task → `failed` | never created / `failed`, nothing paid |
 | `agent.task`, continuation | refused | refused | stays in `input-required` / `auth-required`, retryable |
 | `agent.subscribe` | refused | subscription refused | unchanged |
+| `agent.update` | refused | refused, "could not be delivered" | unchanged — it is not this agent's task |
+| `agent.poll` | refused | — | unchanged; nothing is read, so nothing is applied |
 | `agent.cancel` | refused | refused | unchanged — **not** locally canceled |
 | payment (after a successful publish) | — | settlement returns no hash | task → `failed`, "the payment did not settle", no retry |
 
@@ -1018,26 +1108,45 @@ what the testnet evidence covers.
 
 Carried over honestly, including the parts that are uncomfortable.
 
-### 7.1 The server half is not implemented
+### 7.1 The server half is a driver's job: nothing dispatches
 
-There is no code in this repository that **receives** an A2A request. Nothing
-routes an inbound Delivery event into `TaskStore::applyUpdate`; nothing reads a
-`message/send` off a task topic, dispatches the named skill, and publishes status
-updates back. `applyUpdate` is exercised by `agent_skills_test.cpp` and by the
-lifecycle driver described below, never by a peer.
+This section used to open "there is no code in this repository that **receives**
+an A2A request", and that sentence has been retired in two steps. The first was
+`messaging.receive`, which let a peer read a `message/send` off its own task
+topic. The second is `agent.update` and `agent.poll`: the server can publish a
+`TaskStatusUpdateEvent` and the client's own `TaskStore` advances on what
+arrives. `./scripts/delivery-in-plugin.sh peers` (exit 0, both processes) is two
+loaded modules doing exactly that across the public network, each ending
+`completed` on updates published by the other account.
 
-Concretely, the following are all true at once:
+What is still missing is the middle of that sentence: **dispatch**. Nothing in
+the module reads an inbound request, looks up the skill it names, runs it, and
+publishes the states that work moves through. A serving agent here is a module
+plus a host that calls `messaging.receive`, decides, and calls `agent.update` —
+which is what the harness is. The module supplies the wire, the store and the
+state machine; the *policy* of what to serve and when is above it, and this
+document will not describe a harness calling three skills in order as the module
+serving a request.
 
-- `agent.task`, `agent.subscribe` and `agent.cancel` are complete **client-side**
-  implementations with a validated lifecycle, a transport seam and a payment
-  path.
-- `TaskPort` is not bound to Logos Delivery by any shipped host: `start()` calls
-  `installBuiltinSkills(SkillPorts{})` with every callback default-constructed
-  (`AgentModuleImpl::start`, `SkillPorts`), so in the **loaded** module
-  `agent.task` refuses with "delivery node is not started", `agent.discover` with
-  "no discovery transport is configured", and `agent.card` with "the agent has no
-  LEZ account to identify itself with". A host may call `registerBuiltinSkills`
-  with wired ports before `start()`; none in this repository does.
+Two consequences worth stating plainly. There is no `rejected` on an unknown
+skill, because nothing looks a skill up. And nothing binds a status update to
+work actually performed: `agent.update` publishes what its caller says, so
+`completed` is a claim by the server's host, exactly as `submitted` is a claim by
+the client's.
+
+Also still true:
+
+- `agent.task`, `agent.subscribe`, `agent.poll` and `agent.cancel` are complete
+  **client-side** implementations with a validated lifecycle, a transport seam
+  and a payment path; `agent.update` is the only server-side emitter.
+- `TaskPort` is wired to Logos Delivery *by the module itself* —
+  `installBuiltinSkills` builds `ready`, `send`, `subscribe`, `receive` and
+  `selfAccount` out of its own `DeliveryRuntime` — so a loaded plugin refuses
+  with "delivery node is not started" until `meta.configure("delivery","on")`
+  arrives, and with `{"state":"absent"}` for ever in a build compiled without the
+  Delivery library. A host may still call `registerBuiltinSkills` with ports of
+  its own before `start()`; those are kept and the module's are not built over
+  them.
 - `tasks/get` is not implemented in either direction. A2A §11.1.2 lists it among
   the three methods an agent MUST implement.
 - The end-to-end testnet evidence in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) covers
@@ -1056,33 +1165,58 @@ Concretely, the following are all true at once:
   document will not describe a printed line as a transition, and now neither
   will the scripts it documents.
 
-### 7.2 The status-update shape is looser than A2A's
+### 7.2 The status-update shape, and what it took to make it A2A's
 
 A2A's `TaskStatusUpdateEvent` requires `kind: "status-update"`, `taskId`,
 `contextId`, `final` and `status`, and its `status.message` is a **`Message`
 object**, not a string. In A2A's streaming transports it arrives wrapped in a
 JSON-RPC success response.
 
-`TaskStore::applyUpdate` requires only a task id (`taskId` or `id`) and a
-`status.state` naming a state A2A defines. Extra members are ignored. A
-spec-shaped event is therefore **accepted** — but its `status.message`, being an
-object rather than a string, fails the `is_string()` test at
-`applyUpdate` in `agent_skills.cpp` and the note is silently dropped.
+This section used to say: "A conforming sender SHOULD emit the full
+`TaskStatusUpdateEvent`. A conforming receiver SHOULD read
+`status.message.parts[]` for the note. Neither is implemented; the first is a
+one-line change on the sending side and the second is a small one on the
+receiving side, and both are stated here rather than done." Both are now done.
+`agent.update` emits every required member, with the note as a `Message` of
+`TextPart`s and `final` derived from the state; `TaskStore::applyUpdate` reads
+the text out of `parts[]` as well as accepting the bare string it took before.
 
-A conforming sender SHOULD emit the full `TaskStatusUpdateEvent`. A conforming
-receiver SHOULD read `status.message.parts[]` for the note. Neither is
-implemented; the first is a one-line change on the sending side and the second is
-a small one on the receiving side, and both are stated here rather than done.
+Two divergences remain, and they are in opposite directions:
 
-### 7.3 Status updates are not authenticated
+- **The store is looser than the event.** `applyUpdate` still accepts `{"id": …,
+  "status": {…}}` — an A2A `Task` object — and ignores extra members. That is
+  deliberate: it is a store, not a wire parser, and an implementation that sends
+  a `Task` where an event was expected is understood rather than dropped.
+  `agent.poll` is the strict one, and it requires `kind` before it will treat
+  anything as an event.
+- **The event is not wrapped in a JSON-RPC response.** §4.4 stands: there is no
+  response path on this transport, so an update is published bare rather than as
+  the `result` of a call nobody made.
+
+### 7.3 Status updates are not authenticated, and `x-logos.from` is a claim
 
 A task topic is a public rendezvous. Anyone can publish a status update on it,
-and the only defence is the transition matrix: a stranger cannot resurrect a
-completed task, but can drive a task you opened from `submitted` to `failed`.
+and the only defences are the transition matrix and the author check: a stranger
+cannot resurrect a completed task, and a stranger who does not write the peer's
+account into `metadata["x-logos"]["from"]` is ignored — but a stranger who *does*
+write it there is believed, and can drive a task you opened from `submitted` to
+`failed`.
 
-Cards are signed; task traffic is not. Signing status updates with the peer's
-account key — the same construction as §3.5 — is the obvious fix and is not
-implemented.
+So be exact about what the author check buys. It is not authentication: nothing
+is signed and nothing is verified, and the account in a frame is a string the
+publisher chose. What it buys is that a frame says which agent published it, and
+therefore that **one process cannot satisfy an assertion about a peer by talking
+to itself** — which is the failure mode a Delivery node's own loopback makes
+free, and the reason the two-agent harness publishes a self-authored `completed`
+onto the topic it reads and requires it to be refused.
+
+Cards are signed; task traffic is not. Signing status updates with the
+publisher's account key — the same construction as §3.5 — is the obvious fix. The
+sending half is available today, since the module already runs a `card_signer`
+delegate; the receiving half is not, because verifying a BIP-340 signature needs
+a crypto library inside the module and `agent.discover` performs no cryptography
+either (§3.6). Attaching a signature nothing verifies would look like security
+and be none, so neither half is done.
 
 ### 7.4 Metadata leaks
 
@@ -1197,14 +1331,14 @@ Honest, item by item. "Agent compliance" in A2A v0.3.0 §11.1.
 | §11.1.1 Support at least one transport | **Extension only.** `logos-messaging` per §3.2.4. No core transport, and §3.1's HTTP(S) requirement is not met (§1.2) |
 | §11.1.1 Expose a valid `AgentCard` | **Yes.** The published card and the one `CardSkill` emits both validate mechanically against the A2A v0.3.0 JSON Schema published at [a2aproject/A2A](https://github.com/a2aproject/A2A/blob/v0.3.0/specification/json/a2a.json) — every required field present, no type mismatch, the only non-schema members the `x-` extensions of §1.3 — plus the two binding rules of §3.4. Note what that validation does *not* catch: §7.5's hex signature passed it for the life of the file, because the schema types `signature` as `string` |
 | §11.1.1 Declare transport capabilities | **Yes.** `url` + `preferredTransport`, consistent per §5.6.4 |
-| §11.1.2 `message/send` | **Client side yes, server side no** (§7.1) |
+| §11.1.2 `message/send` | **Client side yes; server side reads and answers, but nothing dispatches** (§7.1) |
 | §11.1.2 `tasks/get` | **No** (§7.1) |
 | §11.1.2 `tasks/cancel` | **Client side yes, server side no** (§7.1) |
 | §11.1.3 `message/stream` / `tasks/resubscribe` | Optional. Not sent; streaming is topic subscription (§4.5) |
 | §11.1.3 `tasks/pushNotificationConfig/*` | Optional. Not implemented; card declares `pushNotifications: false` |
 | §11.1.4 Multi-transport equivalence | N/A — one transport |
 | §11.1.5 Valid JSON-RPC 2.0 request/response objects | **Requests yes, responses no** (§4.4) |
-| §11.1.5 A2A data objects | **Mostly.** Card, `Message`, `DataPart`, `TaskState`, `TaskIdParams` are A2A shapes; `TaskStatusUpdateEvent` is accepted in a looser form (§7.2) |
+| §11.1.5 A2A data objects | **Mostly.** Card, `Message`, `DataPart`, `TaskState`, `TaskIdParams` and `TaskStatusUpdateEvent` are A2A shapes — the event is emitted with every required member and its note as a `Message` (§7.2); the store additionally accepts looser forms |
 | §11.1.5 A2A error codes | **No.** Failures are local `{"ok": false, "error": "…"}` (§4.4) |
 | §3.2.4 Functional equivalence with core transports | **No** — `tasks/get` and the response path are missing |
 | §3.2.4 Clear namespace identifiers | **Yes** (§1.3) |
@@ -1212,7 +1346,10 @@ Honest, item by item. "Agent compliance" in A2A v0.3.0 §11.1.
 | §3.2.4 Migration path from core transports | **Described, not built** (§7.6) |
 
 The two lines that would most change this table are `tasks/get` and a response
-path, and both are the same missing piece: nothing here receives.
+path. What used to be said here — "both are the same missing piece: nothing here
+receives" — is no longer the reason: a peer's request is read and a peer's status
+update is applied. What is missing now is *dispatch* and a JSON-RPC response
+object, which are two different pieces (§7.1, §4.4).
 
 ---
 
@@ -1249,7 +1386,10 @@ A checklist for someone writing a peer, in the order the work has to happen.
 8. **Publish status updates** on the same topic as full `TaskStatusUpdateEvent`s
    (§7.2), respecting the transition matrix in §5.2. Repeat `working` for
    progress; use `input-required` when you need more, and expect the answer as a
-   continuation on the same `taskId`.
+   continuation on the same `taskId`. Carry `metadata["x-logos"]["from"]` with
+   your own account, or a client following this binding will ignore everything
+   you publish (§7.3). This is what `agent.update` does, and a client polling
+   with `agent.poll` will take it.
 9. **Expect payment after submission, not before work** (§6.4), into the account
    your card advertises. Verify it as §6.5 does — the transaction landed *and*
    the balance moved by exactly the price — before treating the task as paid.
@@ -1291,6 +1431,8 @@ renaming a symbol out from under this document turns it red.
 | `agent.discover` | `DiscoverSkill`, `module/src/agent_skills.cpp` |
 | `agent.task` | `TaskSkill`, `module/src/agent_skills.cpp` |
 | `agent.subscribe` | `SubscribeSkill`, `module/src/agent_skills.cpp` |
+| `agent.update` | `UpdateSkill`, `module/src/agent_skills.cpp` |
+| `agent.poll` | `PollSkill`, `module/src/agent_skills.cpp` |
 | `agent.cancel` | `CancelSkill`, `module/src/agent_skills.cpp` |
 | Ports (`CardPort`, `DiscoveryPort`, `TaskPort`) | the `struct …Port` declarations in `module/src/agent_skills.h` |
 | Content topics | `discoveryTopic`, `module/src/messaging_skills.cpp` |

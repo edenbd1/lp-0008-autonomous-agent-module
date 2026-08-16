@@ -256,7 +256,7 @@ model. A real dependency cannot be made to fail on demand; a fake can.
 | Messaging | `messaging.send`, `messaging.receive`, `messaging.join`, `messaging.create_group` | `DeliveryPort` |
 | Blockchain | `wallet.balance`, `wallet.send`, `wallet.history` | `WalletPort` (+ owner channel) |
 | Blockchain | `program.query`, `program.call`, `program.deploy` | `ProgramPort`, `SequencerPort` |
-| Agent / A2A | `agent.card`, `agent.discover`, `agent.task`, `agent.subscribe`, `agent.cancel` | `CardPort`, `DiscoveryPort`, `TaskPort` |
+| Agent / A2A | `agent.card`, `agent.discover`, `agent.task`, `agent.subscribe`, `agent.update`, `agent.poll`, `agent.cancel` | `CardPort`, `DiscoveryPort`, `TaskPort` |
 | Meta | `meta.status`, `meta.configure` | `StatusPort`, `ConfigPort` |
 | Optional | `agent.evaluate_task` | `HttpTransport` |
 

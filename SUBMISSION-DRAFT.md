@@ -71,8 +71,9 @@
 > transport binding; `docs/DEPLOYMENT.md` has been regenerated; the agent module
 > has a **window** in the Logos app and an owner has approved a spend from it;
 > and a module Logos Core **loads** now builds its own Logos Delivery ports, so
-> two of them discovered each other's signed Agent Cards on the public network
-> and an owner approved and denied a spend over Logos Messaging.
+> two of them discovered each other's signed Agent Cards on the public network,
+> ran an A2A task lifecycle to `completed` on each other's status updates, and
+> an owner approved and denied a spend over Logos Messaging.
 >
 > CI is **not** on that list, and it was, twice. It is green on `main` as this is
 > written, and it has been red on `main` twice today — once because a job could
@@ -432,8 +433,8 @@ one of them — `meta.skills` — was documented in three headers before it exis
   ok logos_core_load_module() reports success
   <- loaded modules: capability_module agent
   ok configure() is accepted across the transport
-  <- skills(): 23 entries
-  ok it lists exactly 23 — no more, no fewer (got 23)
+  <- skills(): 25 entries
+  ok it lists exactly 25 — no more, no fewer (got 25)
   ```
 
   A module that loads and offers nothing looks identical to one that works, which
@@ -592,14 +593,19 @@ one of them — `meta.skills` — was documented in three headers before it exis
   All twenty-one are implemented **and registered**, which are different claims:
   thirteen skills were implemented here before anything registered them, and the
   module answered `skills()` with an empty card while looking perfectly healthy.
-  `installBuiltinSkills` registers 23 skills — the prize's twenty-one, plus
+  `installBuiltinSkills` registers 25 skills — the prize's twenty-one, plus
   `agent.evaluate_task`, which the prize does not ask for and which is kept
   because it is the only skill on the pluggable-inference seam a *different*
-  criterion requires, plus `messaging.receive`, which it does not ask for either
-  and without which the A2A lifecycle only runs in one direction: `agent.task`
-  puts a real request on the wire and, until it existed, the agent being asked
-  had no skill that could read it — and `start()` calls it itself when no host wired the
-  ports, so a module loaded as a plugin offers a full card.
+  criterion requires, plus three the prize does not ask for either and without
+  which the A2A lifecycle only runs in one direction. `messaging.receive` is the
+  first: `agent.task` puts a real request on the wire and, until it existed, the
+  agent being asked had no skill that could read it. `agent.update` and
+  `agent.poll` are the other two, and they are the return path — one publishes an
+  A2A `TaskStatusUpdateEvent` on the task's topic, the other reads that topic and
+  applies a peer's update to this agent's own `TaskStore`, so a task can reach
+  `completed` because of what arrived rather than because this process said so.
+  `start()` calls `installBuiltinSkills` itself when no host wired the ports, so a
+  module loaded as a plugin offers a full card.
 
   `meta.skills` was the last one missing, and it was missing in the way that is
   hardest to see: `invoke()` is a plain map lookup with no special case, so
@@ -615,13 +621,13 @@ one of them — `meta.skills` — was documented in three headers before it exis
   Asserted by execution against the **packaged artefact**, not a rebuild:
   `module/tests/plugin_load_test.cpp` loads the committed `module/agent.lgx`
   through `QPluginLoader` (exit 0) and `./scripts/logos-core-headless.sh` loads it
-  through the installed Basecamp's own `liblogos_core` (exit 0). Both report 23
+  through the installed Basecamp's own `liblogos_core` (exit 0). Both report 25
   entries, each with a parameter schema, `invoke()` dispatching to every one, and
-  `meta.skills` listing all 23 — including itself — over the boundary.
+  `meta.skills` listing all 25 — including itself — over the boundary.
   Documented in [`docs/skills.md`](docs/skills.md), and the count is gated:
-  `./scripts/check-docs.py` (exit 0) reports `checked 19 skill-count mention(s)
-  against the 23 the module registers`, and `examples/agent-console/run.sh`
-  asserts `docs/skills.md §7 lists exactly the 23 skills the module registers`.
+  `./scripts/check-docs.py` (exit 0) reports `checked 21 skill-count mention(s)
+  against the 25 the module registers`, and `examples/agent-console/run.sh`
+  asserts `docs/skills.md §7 lists exactly the 25 skills the module registers`.
 
 - [x] **MET — A2A-compatible: cards follow the A2A schema, tasks follow the A2A
   lifecycle, documented as an A2A transport binding over Logos Messaging.**
@@ -660,18 +666,25 @@ one of them — `meta.skills` — was documented in three headers before it exis
   own**: A2A v0.3.0 publishes no transition table, `docs/a2a-binding.md` §5.2 says
   so, and only 13 of the 81 cells are asserted anywhere.
 
-- [ ] **UNMET — Two or more agents discover each other via Agent Cards, execute a
+- [x] **MET — Two or more agents discover each other via Agent Cards, execute a
   task following the A2A lifecycle, and transfer LEZ payment autonomously, without
   owner intervention.**
-  This is a conjunction, and until today its parts held separately: discovery on
-  the public network between two loaded modules, serving between the same two,
-  and settlements on chain from a shell script. `./scripts/delivery-in-plugin.sh
-  settle` (exit 0) is the three of them in one flow, in one call. Settlement 8 in
-  the table below — `23046b54…`, block 9389 — is that call's payment, made by the
-  committed script run start to finish, `SCRIPT_EXIT=0` with both processes at 0.
-  Settlement 7 is the same flow a run earlier, under a copy of the script that
-  was two lines short of the committed one; it is left in the table because it
-  happened, and `docs/basecamp.md` §5 says why it is not the one cited.
+  This is a conjunction, and it is met by **two runs of one harness**, which is
+  stated first because it is the thing a reviewer should check hardest.
+  `module/tests/plugin_delivery_test.cpp peer` is one code path. The runner hands
+  the seller a price and the buyer a signer, tells neither which the other is,
+  and both then run the same code — so one binary is buyer, seller, client and
+  server, and every asymmetry in the transcripts below comes from a card that
+  arrived over the network. `./scripts/delivery-in-plugin.sh
+  settle` (exit 0) ran it with a price and produced settlement 8 —
+  `23046b54…`, block 9389. `./scripts/delivery-in-plugin.sh peers` (exit 0, and
+  **both** processes at 0) ran it without one and carried the task through the
+  A2A lifecycle over the network to `completed`. Nothing has run all three
+  conjuncts in a single process invocation since the lifecycle step was added,
+  and the reason is money: a settlement is real LEZ on a testnet whose faucet is
+  gone, and re-running `settle` to fold the two transcripts into one would spend
+  it for a claim the two transcripts already carry between them. That command is
+  the one to run to close even this gap.
 
   Two modules loaded through `QPluginLoader`, each with its own Delivery node,
   its own LEZ account, its own wallet and its own working directory, on one
@@ -700,6 +713,9 @@ one of them — `meta.skills` — was documented in three headers before it exis
   ok and READ the other agent's A2A request off its own task topic
   ```
 
+  That transcript ends where the harness ended at `049faea`: with the request
+  read and nothing published back. The next section is what follows it now.
+
   The two-process shape is not decoration. A Delivery node receives its own
   published messages, so a single process can satisfy any "a card arrived"
   assertion with every other agent on earth switched off; each side here accepts
@@ -708,6 +724,68 @@ one of them — `meta.skills` — was documented in three headers before it exis
   path — one `agent.task` call, one card, and the answer differs only because the
   card does. Without them, "the module reported a transaction hash" would be
   indistinguishable from "the module reports one whenever it opens a task".
+
+  **And the lifecycle, which used to stop at `submitted`.** The paragraph that
+  stood here said the peer published no status update back and the client's task
+  never advanced *from the wire*, because no skill ingested one. Two skills now
+  do: `agent.update` publishes an A2A `TaskStatusUpdateEvent` on the task's
+  topic, and `agent.poll` reads that topic and applies what the peer published to
+  the client's own `TaskStore`. `./scripts/delivery-in-plugin.sh peers` (exit 0,
+  both processes at 0, no money spent) is that, between the same two loaded
+  modules on the public network. Each side, symmetrically:
+
+  ```
+  ok  carrying the context id the other agent minted: 14f41545b80ea18eaebf535f8b085ebe
+  ok  this agent publishes `working` for the task it was asked to do
+  ok  signed with its own account — which agent.update reads off this module's
+      configuration, not off the call: 5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ
+  ok  and not final, because `working` is not terminal
+  ok  then `completed`, which agent.update marks final because the state is
+  ok  and it puts a forged `completed` for its OWN task on the topic it reads
+  ok  THIS agent's own TaskStore reached `completed`, and every transition into
+      it came off the wire
+  ok  applying 2 status update(s) the peer published
+  ok  all of them published by BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu, the
+      OTHER account — none by this one
+  ok  while the forged update this agent published about its own task was read
+      back off the same topic and refused (1 of them)
+  ok  and the walk it records is submitted -> working -> completed
+  ```
+
+  Three properties of that transcript are load-bearing, and each of them closes
+  a way one process could have produced the whole thing alone:
+
+  1. **The terminal state is asserted on the client's own store, not on the
+     wire.** `agent.poll` reports the state it read back out of `TaskStore` after
+     applying, never the state it thinks it produced.
+  2. **The updates that moved it name the other account.** `x-logos.from` is not
+     a call parameter — `agent.update` reads it from the same `agent_account`
+     setting `agent.card` builds the agent's signed card out of, so an agent
+     whose updates claim an account is an agent whose card claims it.
+  3. **The frame a self-satisfying harness would use is on the wire and is
+     refused.** Before it polls, each agent publishes a `completed` update *for
+     its own task*, as itself, onto the very topic it is about to read —
+     identical to the peer's in every respect but the account it names. The
+     assertion is not "no such update was applied", which would also hold if the
+     frame never arrived: it is that the poll **counted** one and ignored it
+     (`ignored.self`), which is only true if it was there.
+
+     That assertion has been watched failing, against a real build and a real
+     network. The module was rebuilt with the author rule deleted — `if (author
+     != task.agent)` replaced by `if (false)` — and the two agents run again:
+     both processes exit 1, on this line and on no other, reading `refused (0 of
+     them)`. Note what *did* still pass on that build, because it is the whole
+     argument for counting rather than asserting an absence: the peer's two
+     updates happened to arrive first, so the forged one was refused by the
+     state machine as a second `completed` and never reached `applied[]` — and
+     "no self-authored update was applied" would have been true of a module with
+     no author rule in it at all.
+
+  The exchange is polled, not pushed, and the poll loop is bounded: nothing here
+  asserts that one process got somewhere before the other. That rule was learned
+  expensively — `docs/limitations.md` has the section on the assertion that was
+  right most of the time and lost once, four lines in front of a step that spends
+  money.
 
   **What made the payment possible from inside a plugin.** `TaskPort::pay` was
   unwired, with a note saying a settlement needs a wallet and a sequencer "and
@@ -740,23 +818,44 @@ one of them — `meta.skills` — was documented in three headers before it exis
   and a module that reads "I do not know" as "no limit" pays a task nobody
   configured it for.
 
-  **Three things this does not claim, and the first is the one to read.** What
-  crosses the wire in this flow is the A2A `message/send` request and the
-  payment. The task reaches `submitted` in the real `TaskStore` and the peer
-  reads the request off its own task topic — but the peer does not publish a
-  status update back, and the client's task does not advance to `working` or
-  `completed` *from the wire*, because no skill ingests a peer's status update
-  into the store. Those transitions are exercised, through the same `TaskStore`
-  and against the A2A v0.3.0 state enum, by `a2a_drive lifecycle` and by
-  `module/tests/agent_skills_test.cpp` — locally. A reviewer who reads "execute a
-  task following the A2A lifecycle" as requiring the served agent to drive the
-  state machine over the network should read this criterion as still open; a
-  reviewer who reads it as the task following A2A's lifecycle and its wire
-  format should not. The repository is not going to decide that by wording it
-  favourably.
+  **Four things this does not claim, and the first is the one to read.**
 
-  `TaskPort::refund` is still unwired — a refund would have to be signed by the
-  payee, whose key the payer does not hold. And an above-envelope *task* price is
+  1. **No single run has done all three conjuncts since the lifecycle step
+     existed.** The payment is settlement 8 from a `settle` run at `049faea`;
+     the lifecycle is a `peers` run of the harness as committed here. Same file,
+     same code path, two invocations — and a reviewer who requires one
+     transcript should read this criterion as open until somebody spends 1 LEZ
+     running `./scripts/delivery-in-plugin.sh settle` again. That is a command,
+     not a change.
+  2. **Nothing dispatches.** The module does not read an inbound request, look
+     up the skill it names, run it, and publish the states that work moves
+     through. A serving agent here is this module plus a host that calls
+     `messaging.receive`, decides, and calls `agent.update` — in these runs the
+     host is the harness. So `completed` is a claim by the server's host about
+     work it says it did, exactly as `submitted` is a claim by the client's;
+     what the module supplies is the wire, the store and the state machine that
+     refuses an illegal move. `docs/a2a-binding.md` §7.1 is the long form. No
+     *owner* is in either path — that is the part the criterion asks about, and
+     no run here waits on a human — but "autonomous" here means unattended, not
+     model-driven.
+  3. **A status update is not authenticated.** `x-logos.from` is a string the
+     publisher chose. It stops one process satisfying an assertion about a peer
+     by talking to itself, which is what the harness needed; it does not stop a
+     third party on a public topic publishing an update in the peer's name and
+     driving a task you opened to `failed`. Cards are signed and task traffic is
+     not — `docs/a2a-binding.md` §7.3, including why half a fix was refused.
+  4. **The server keeps no record of what it serves.** `agent.update` publishes
+     without consulting any local state machine, because the module's `TaskStore`
+     holds tasks this agent *opened*. Ordering on the serving side is therefore
+     the host's discipline; the *client's* store is where an illegal sequence is
+     refused. That refusal is exercised in `module/tests/agent_skills_test.cpp`,
+     which publishes `working` after `completed` through these same two skills
+     and requires the poll to report it refused, with the store's own reason,
+     rather than apply it — not in the live run, where nobody publishes an
+     impossible state.
+
+  Also still true: `TaskPort::refund` is unwired — a refund would have to be
+  signed by the payee, whose key the payer does not hold. And an above-envelope *task* price is
   refused immediately rather than put to the owner: `wallet.send` has that path,
   `agent.task` does not, because on this chain the owner who anchored a policy
   can never approve under it (one program transaction per public signer), so the
@@ -968,7 +1067,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   ok  a second skill of the same name is refused
   ok  the skill answered through the module
   ok  malformed parameters are refused … and the same call afterwards returns the same answer
-  ok  docs/skills.md §7 lists exactly the 23 skills the module registers
+  ok  docs/skills.md §7 lists exactly the 25 skills the module registers
   ok  the digest matches shasum -a 256 of the same input
   ok  and does not match the digest of altered input
   ok  nothing under module/ was modified — the criterion's words, checked
@@ -1253,11 +1352,14 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   `RISC0_DEV_MODE=0` was active.**
   Not recorded. Blocker 1, and the only blocker with irreducible work in it.
 
-**Tally: 15 MET, 8 UNMET, of the 23 criteria the prize lists** — Functionality
-6 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-3 of 6. The one that moved is the shielded account: it can now be **paid** at,
-not only spent from, and the settlement that shows it is `5942d6cd…d53a03d61` in
-block 9360.
+**Tally: 16 MET, 7 UNMET, of the 23 criteria the prize lists** — Functionality
+7 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+3 of 6. The one that moved is the A2A conjunction — two agents discovering each
+other, running the lifecycle across the network, and paying — and it moved on two
+runs of one harness rather than one, which its entry states before it states
+anything else. The move before it was the shielded account: it can now be **paid**
+at, not only spent from, and the settlement that shows it is `5942d6cd…d53a03d61`
+in block 9360.
 
 The breakdown above already read "Functionality 6 of 11" while the header said
 14 and the section held 5 — the previous revision's count was one high in the
@@ -1295,12 +1397,18 @@ settles on the public testnet with no owner key in the path. The seller runs the
 identical code against a card advertising no price and comes back with no
 settlement hash, which is what makes the buyer's hash mean something.
 
-What is still driven by the client rather than by the peer that received the
-request is the *rest* of the lifecycle: the task reaches `submitted` and the far
-side reads it, and nothing yet serves it back to a terminal state over the wire,
-because no skill ingests a peer's status update into the store. This paragraph
-previously called the whole path "the part that has actually run", which read as
-one flow and was four; it is now two, and the seam is named.
+The rest of the lifecycle used to stop there: the task reached `submitted`, the
+far side read it, and nothing served it back over the wire because no skill
+ingested a peer's status update into the store. `agent.update` and `agent.poll`
+are that skill pair, and `./scripts/delivery-in-plugin.sh peers` (exit 0, both
+processes) is two loaded modules walking `submitted → working → completed` on
+frames published by the other account — with each side's own forged `completed`
+sitting on the same topic, counted and refused, so the transcript cannot be
+produced by one process talking to itself. What is *not* there is dispatch:
+nothing routes an inbound request to the skill it names, so the decision to serve
+is the host's and not the module's. This paragraph previously called the whole
+path "the part that has actually run", which read as one flow and was four; it is
+now two, and both seams are named.
 
 The limits are not incidental. The **owner cannot approve an above-threshold
 spend** after anchoring a policy, which removes half of the spending-threshold

@@ -35,6 +35,15 @@
 // card carrying the OTHER account: neither can satisfy itself. Run two of them
 // with the same run id and swapped accounts.
 //
+// That rule is applied twice, because the lifecycle needs it as badly as
+// discovery did. Step 5 has each agent publish status updates for the task it
+// was asked to do, and read its OWN task's topic until its store reaches
+// `completed` — and before it reads, it publishes a forged `completed` for its
+// own task onto that same topic, as itself. A node receives what it publishes,
+// so without an author rule that one frame would end the step alone. The
+// assertion is not that no such update was applied, which would also hold if it
+// never arrived: it is that the poll counted one and refused it.
+//
 // A NOTE ON WORKING DIRECTORIES, WHICH COST AN AFTERNOON ELSEWHERE
 //
 // A Delivery node keeps reliable-channel state in the CURRENT WORKING
@@ -52,6 +61,7 @@
 #include <QPluginLoader>
 #include <QRegularExpression>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 
 #include <chrono>
@@ -451,6 +461,10 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     // reports a transaction hash" is distinguished from "the module reports a
     // transaction hash whenever it is asked to open a task".
     const QString settlement = r.value("settlement_tx").toString();
+    // Captured now rather than read out of `r` later: the context id this agent
+    // minted for its own task, which the peer will echo back in every status
+    // update and which the decoy below has to carry to be a decoy at all.
+    const QString myContext = r.value("context_id").toString();
     const double paidPrice = r.value("price").toDouble();
     note(QStringLiteral("price %1, settlement_tx '%2', %3 s")
              .arg(paidPrice).arg(settlement).arg(paidMs));
@@ -473,8 +487,30 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
               "nothing when nothing was paid");
     }
 
+    // THE UPDATE TOPIC IS OPENED HERE, BEFORE THE PEER CAN HAVE ANSWERED.
+    //
+    // One call, and no assertion about what it found. The peer's first status
+    // update can only follow the request that has just gone out — but "can only
+    // follow" is about causality, not about scheduling, and the peer may well
+    // have read, worked and answered before this line runs. So what is asserted
+    // is that the poll ANSWERS; asserting it found nothing would be an
+    // assertion about which process got there first, which is the mistake
+    // `docs/limitations.md` records costing a settlement.
+    const QString myUpdates =
+        QStringLiteral("/lp-0008/1/task-") + other + "-" + myTask + "/json";
+    QJsonObject updates =
+        call(p, "agent.poll",
+             QStringLiteral(R"({"agent_address":"%1","task_id":"%2"})").arg(other, myTask));
+    check(updates.value("ok").toBool(),
+          "agent.poll answers on the task's own topic, and opens it for reading: " +
+              updates.value("error").toString());
+    check(updates.value("topic").toString() == myUpdates,
+          "which is the topic the request was sent to — one topic per task, both ways");
+    int since = updates.value("next_since").toInt();
+
     bool served = false;
     QString servedText;
+    QString servedContext;
     for (int i = 0; i < rounds && !served; ++i) {
         inbox = call(p, "messaging.receive", QStringLiteral(R"({"topic":"%1"})").arg(myInbox));
         for (const QJsonValue &entry : inbox.value("messages").toArray()) {
@@ -489,6 +525,11 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
             if (message.value("taskId").toString() == theirTask) {
                 served = true;
                 servedText = text;
+                // The context id the OTHER agent minted, which appears nowhere
+                // but in this request. `agent.update` requires it, so an update
+                // this agent publishes below is one it could not have published
+                // without having read what arrived.
+                servedContext = message.value("contextId").toString();
             }
         }
         if (!served) std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -496,10 +537,126 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     check(served,
           "and READ the other agent's A2A request off its own task topic — the half of the "
           "lifecycle that had no skill until messaging.receive");
-    if (served) note("served: " + servedText.left(220) + QStringLiteral("..."));
+    if (!served) {
+        std::fprintf(stderr, "\nFAILED (%d failure(s))\n", failures);
+        return 1;
+    }
+    note("served: " + servedText.left(220) + QStringLiteral("..."));
+    check(!servedContext.isEmpty(),
+          "carrying the context id the other agent minted: " + servedContext);
+
+    // -----------------------------------------------------------------------
+    step("5. and the task moves BECAUSE OF WHAT ARRIVED, not because we say so");
+    // -----------------------------------------------------------------------
+    //
+    // Everything up to here happened inside one agent's own store. `agent.task`
+    // opens a task in `submitted` and leaves it there on purpose — "local state
+    // is never a claim about the remote agent" — so `working` and `completed`
+    // were states this repository could reach only by driving `TaskStore`
+    // itself, which is one process asserting about itself.
+    //
+    // This step is the other thing. Each agent SERVES the task it just read,
+    // publishing A2A `TaskStatusUpdateEvent`s on that task's topic; and each
+    // agent POLLS its own task's topic and applies what the peer published. The
+    // terminal state below is asserted on THIS agent's store and was written
+    // into it by a frame from the other account.
+    const auto publish = [&](const QString &state, const QString &text) {
+        return call(p, "agent.update",
+                    QStringLiteral(R"({"agent_address":"%1","task_id":"%2","context_id":"%3",)"
+                                   R"("state":"%4","message":"%5"})")
+                        .arg(me, theirTask, servedContext, state, text));
+    };
+    QJsonObject u = publish(QStringLiteral("working"),
+                            QStringLiteral("accepted, reading the request"));
+    check(u.value("ok").toBool(), "this agent publishes `working` for the task it was asked to "
+                                  "do: " + u.value("error").toString());
+    check(u.value("from").toString() == me,
+          "signed with its own account — which agent.update reads off this module's "
+          "configuration, not off the call: " + u.value("from").toString());
+    check(u.value("final").toBool() == false, "and not final, because `working` is not terminal");
+    u = publish(QStringLiteral("completed"), QStringLiteral("done"));
+    check(u.value("ok").toBool() && u.value("final").toBool(),
+          "then `completed`, which agent.update marks final because the state is");
+
+    // THE DECOY, AND IT IS NOT OPTIONAL.
+    //
+    // A Delivery node receives its own published messages. So this agent now
+    // publishes, on the very topic it is about to read, a `completed` update
+    // about its OWN task — the frame a process talking to itself would use to
+    // satisfy every assertion below with the other agent switched off. It is
+    // identical to the peer's in every respect but the account it names.
+    u = call(p, "agent.update",
+             QStringLiteral(R"({"agent_address":"%1","task_id":"%2","context_id":"%3",)"
+                            R"("state":"completed","message":"I declare myself served"})")
+                 .arg(other, myTask, myContext));
+    check(u.value("ok").toBool(),
+          "and it puts a forged `completed` for its OWN task on the topic it reads");
+
+    // THE LOOP WAITS FOR BOTH FACTS, AND THIS IS THE SECOND TIME THAT RULE HAS
+    // HAD TO BE APPLIED IN THIS FILE.
+    //
+    // Written the obvious way — poll until the task is `completed` — the
+    // self-ignored assertion below becomes an assertion about the scheduler.
+    // The decoy is published to this node a moment before the loop starts, but
+    // it comes back through the relay like anything else, and if the peer's two
+    // updates were already waiting the FIRST poll applies them, exits with the
+    // task complete, and the decoy is counted in a poll that never happens. That
+    // is exactly the shape `docs/limitations.md` records under "an assertion
+    // that was right most of the time": it would pass nearly always and fail on
+    // an afternoon when nothing was wrong.
+    //
+    // So both conditions gate the exit. Neither is about ordering between the
+    // processes: one says the peer's terminal update arrived, the other says
+    // this agent's own frame came back off its own node, and a bounded loop that
+    // never sees either fails honestly rather than intermittently.
+    QString state = QStringLiteral("submitted");
+    QStringList authors;
+    int selfIgnored = 0, applied = 0;
+    QJsonArray history;
+    for (int i = 0; i < rounds; ++i) {
+        updates = call(p, "agent.poll",
+                       QStringLiteral(R"({"agent_address":"%1","task_id":"%2","since":%3})")
+                           .arg(other, myTask)
+                           .arg(since));
+        if (!updates.value("ok").toBool()) {
+            note("agent.poll: " + updates.value("error").toString());
+            break;
+        }
+        since = updates.value("next_since").toInt();
+        selfIgnored += updates.value("ignored").toObject().value("self").toInt();
+        for (const QJsonValue &entry : updates.value("applied").toArray()) {
+            authors.append(entry.toObject().value("from").toString());
+            ++applied;
+        }
+        state = updates.value("state").toString();
+        history = updates.value("history").toArray();
+        if (state == QLatin1String("completed") && selfIgnored >= 1) break;
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+    note("agent.poll: " +
+         QString::fromUtf8(QJsonDocument(updates).toJson(QJsonDocument::Compact)).left(400));
+    check(state == QLatin1String("completed"),
+          "THIS agent's own TaskStore reached `completed`, and every transition into it came "
+          "off the wire");
+    check(applied >= 2 && !authors.isEmpty(),
+          QStringLiteral("applying %1 status update(s) the peer published").arg(applied));
+    check(!authors.contains(me) && authors.count(other) == int(authors.size()),
+          "all of them published by " + other + ", the OTHER account — none by this one");
+    check(selfIgnored >= 1,
+          QStringLiteral("while the forged update this agent published about its own task was "
+                         "read back off the same topic and refused (%1 of them)")
+              .arg(selfIgnored));
+    QStringList walk;
+    for (const QJsonValue &s : history) walk.append(s.toString());
+    check(walk == QStringList{QStringLiteral("submitted"), QStringLiteral("working"),
+                              QStringLiteral("completed")},
+          "and the walk it records is submitted -> working -> completed: " + walk.join(" -> "));
 
     std::fprintf(stderr, "\n%s (%d failure(s))\n",
-                 failures ? "FAILED" : "two loaded modules discovered each other", failures);
+                 failures ? "FAILED"
+                          : "two loaded modules discovered each other and ran a task lifecycle "
+                            "across the network",
+                 failures);
     return failures ? 1 : 0;
 }
 

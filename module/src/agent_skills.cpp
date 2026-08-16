@@ -443,9 +443,34 @@ bool TaskStore::applyUpdate(const std::string &eventJson, std::string &err)
         err = "'" + stateName + "' is not an A2A task state";
         return false;
     }
+    // The note, in both shapes the wire carries it in.
+    //
+    // A2A's `TaskStatus.message` is a `Message` object and the text lives in its
+    // `parts[]`, each part a `TextPart`, a `FilePart` or a `DataPart`. This
+    // store read `is_string()` only, so a conforming sender's message was
+    // dropped without a word — `docs/a2a-binding.md` §7.2 named that as the
+    // receiving half not being implemented, and this is it.
+    //
+    // Every member is type-checked rather than read with `value()`, for the
+    // reason `restore()` gives at length: `value()` throws when the key is
+    // present with the wrong type, and this document comes off a public topic
+    // where any type at all can be present.
     std::string note;
-    if (status.contains("message") && status["message"].is_string()) {
-        note = status["message"].get<std::string>();
+    if (status.contains("message")) {
+        const json &message = status["message"];
+        if (message.is_string()) {
+            note = message.get<std::string>();
+        } else if (message.is_object() && message.contains("parts") &&
+                   message["parts"].is_array()) {
+            for (const auto &part : message["parts"]) {
+                if (!part.is_object()) continue;
+                if (!part.contains("kind") || !part["kind"].is_string()) continue;
+                if (part["kind"].get<std::string>() != "text") continue;
+                if (!part.contains("text") || !part["text"].is_string()) continue;
+                if (!note.empty()) note += " ";
+                note += part["text"].get<std::string>();
+            }
+        }
     }
     return advance(id, to, note, err);
 }
@@ -1395,6 +1420,304 @@ std::string SubscribeSkill::invoke(const std::string &paramsJson)
                      {"topic", topic},
                      {"state", taskStateName(task.state)},
                      {"already", task.subscribed}});
+}
+
+// ---------------------------------------------------------------------------
+// agent.update — the server's half of the lifecycle, put on the wire
+// ---------------------------------------------------------------------------
+
+std::string UpdateSkill::parameterSchema() const
+{
+    return R"({"type":"object","required":["agent_address","task_id","context_id","state"],)"
+           R"("properties":{"agent_address":{"type":"string","description":"the agent SERVING )"
+           R"(the task, whose account the task topic is keyed on"},)"
+           R"("task_id":{"type":"string"},"context_id":{"type":"string"},)"
+           R"("state":{"type":"string","description":"an A2A TaskState: submitted, working, )"
+           R"(input-required, auth-required, completed, canceled, failed, rejected"},)"
+           R"("message":{"type":"string","description":"a note, carried as a TextPart"}}})";
+}
+
+std::string UpdateSkill::invoke(const std::string &paramsJson)
+{
+    std::string err;
+    const json p = parse(paramsJson, err);
+    if (!err.empty()) return fail(err);
+
+    std::string agentAddress, taskId, contextId, stateName, message;
+    if (!field(p, "agent_address", agentAddress, err)) return fail(err);
+    if (!field(p, "task_id", taskId, err)) return fail(err);
+    // Required, and the requirement is not pedantry. A2A makes `contextId` a
+    // member of `TaskStatusUpdateEvent`, the CLIENT mints it, and it appears
+    // nowhere but in the request — so an update carrying the right one was
+    // published by something that had read the request. That is not
+    // authentication (§7.3: a public topic, and anyone can read the request
+    // too), but it is the difference between a peer answering and a process
+    // shouting task ids it guessed.
+    if (!field(p, "context_id", contextId, err)) return fail(err);
+    if (!field(p, "state", stateName, err)) return fail(err);
+    if (!optionalString(p, "message", message, err)) return fail(err);
+    if (!isTopicIdentifier(agentAddress)) return fail(badTopicIdentifier("agent_address"));
+    if (!isTopicIdentifier(taskId)) return fail(badTopicIdentifier("task_id"));
+
+    TaskState state = TaskState::Unknown;
+    if (!taskStateFromName(stateName, state)) {
+        return fail("'" + stateName + "' is not an A2A task state");
+    }
+
+    // WHO IS PUBLISHING, READ OFF THIS AGENT'S CONFIGURATION RATHER THAN ITS
+    // CALLER. See `TaskPort::selfAccount`: a caller-supplied author is an author
+    // anybody can be, and the receiving side's whole defence is that the author
+    // of an accepted update is the other party.
+    if (!port_.selfAccount) {
+        return fail("no account is wired for this agent, so it cannot say who is publishing "
+                    "this update");
+    }
+    const std::string from = port_.selfAccount();
+    if (from.empty()) {
+        return fail("this agent has no account configured, so it cannot say who is publishing "
+                    "this update");
+    }
+
+    if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
+    const std::string topic = taskTopic(agentAddress, taskId);
+    if (topic.empty()) return fail(badTopicIdentifier("agent_address"));
+
+    // A conforming `TaskStatusUpdateEvent`: `kind`, `taskId`, `contextId`,
+    // `final` and `status`, with the note as a `Message` of `TextPart`s rather
+    // than the bare string this repository used to emit. §7.2 described the
+    // difference and called the sending half a one-line change; this is it, and
+    // `TaskStore::applyUpdate` now reads both.
+    //
+    // `final` is DERIVED from the state, not taken from the caller. A2A defines
+    // it as "this is the last event for this task", which is a fact about the
+    // state machine — `isTerminalState` — and a caller that could type it would
+    // be able to say `completed, and there is more coming`.
+    json status{{"state", taskStateName(state)}};
+    if (!message.empty()) {
+        status["message"] = json{{"kind", "message"},
+                                 {"role", "agent"},
+                                 {"messageId", randomId()},
+                                 {"taskId", taskId},
+                                 {"contextId", contextId},
+                                 {"parts", json::array({json{{"kind", "text"},
+                                                             {"text", message}}})}};
+    }
+    const json event{{"kind", "status-update"},
+                     {"taskId", taskId},
+                     {"contextId", contextId},
+                     {"final", isTerminalState(state)},
+                     {"status", status},
+                     // A2A's extension point on this event, carrying the one
+                     // thing A2A has no field for because HTTP answered it: over
+                     // a shared topic there is no connection to attribute a
+                     // frame to, so the frame says.
+                     {"metadata", json{{"x-logos", json{{"from", from}}}}}};
+
+    if (!port_.send || !port_.send(topic, event.dump())) {
+        return fail("the status update for task " + taskId + " could not be delivered");
+    }
+    return done(json{{"task_id", taskId},
+                     {"context_id", contextId},
+                     {"state", taskStateName(state)},
+                     {"final", isTerminalState(state)},
+                     {"from", from},
+                     {"topic", topic}});
+}
+
+// ---------------------------------------------------------------------------
+// agent.poll — and the store advances because of what a peer put on the wire
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// What a frame on a task topic was, when it was not an update to apply.
+///
+/// Counted rather than dropped, and named rather than counted in one lump. The
+/// harness that proves a peer moved this agent's task has to be able to say that
+/// this agent's OWN frames were on the same topic and were refused — otherwise
+/// "no self-authored update was applied" is equally consistent with none having
+/// arrived, which is an assertion about the network rather than about the rule.
+struct IgnoredFrames {
+    std::size_t malformed = 0;       ///< not JSON, not an object, or too deep
+    std::size_t notAnUpdate = 0;     ///< a request, a cancellation, anything else
+    std::size_t otherTask = 0;       ///< a status update about a different task
+    std::size_t otherContext = 0;    ///< the right task id, the wrong contextId
+    std::size_t unattributed = 0;    ///< no author at all
+    std::size_t self = 0;            ///< published by this agent
+    std::size_t otherParty = 0;      ///< published by neither party to the task
+
+    json toJson() const
+    {
+        return json{{"malformed", malformed},
+                    {"not_a_status_update", notAnUpdate},
+                    {"other_task", otherTask},
+                    {"other_context", otherContext},
+                    {"unattributed", unattributed},
+                    {"self", self},
+                    {"other_party", otherParty}};
+    }
+};
+
+/// `metadata["x-logos"]["from"]`, or empty. Type-checked at every level: this is
+/// a document off a public topic, where `metadata` can be a number and `x-logos`
+/// can be a string, and `value()` throws on both.
+std::string frameAuthor(const json &frame)
+{
+    if (!frame.contains("metadata") || !frame["metadata"].is_object()) return {};
+    const json &metadata = frame["metadata"];
+    if (!metadata.contains("x-logos") || !metadata["x-logos"].is_object()) return {};
+    const json &x = metadata["x-logos"];
+    if (!x.contains("from") || !x["from"].is_string()) return {};
+    return x["from"].get<std::string>();
+}
+
+/// Whether `frame` carries `key` as exactly `want`.
+bool stringIs(const json &frame, const char *key, const std::string &want)
+{
+    return frame.contains(key) && frame[key].is_string() &&
+           frame[key].get<std::string>() == want;
+}
+
+} // namespace
+
+std::string PollSkill::parameterSchema() const
+{
+    return R"({"type":"object","required":["agent_address","task_id"],)"
+           R"("properties":{"agent_address":{"type":"string"},"task_id":{"type":"string"},)"
+           R"("since":{"type":"integer","minimum":0,"description":"skip this many frames )"
+           R"(already read on this topic"}}})";
+}
+
+std::string PollSkill::invoke(const std::string &paramsJson)
+{
+    std::string err;
+    const json p = parse(paramsJson, err);
+    if (!err.empty()) return fail(err);
+
+    std::string agentAddress, taskId;
+    if (!field(p, "agent_address", agentAddress, err)) return fail(err);
+    if (!field(p, "task_id", taskId, err)) return fail(err);
+    if (!isTopicIdentifier(agentAddress)) return fail(badTopicIdentifier("agent_address"));
+    if (!isTopicIdentifier(taskId)) return fail(badTopicIdentifier("task_id"));
+    std::uint64_t since = 0;
+    bool present = false;
+    if (!optionalUnsigned(p, "since", since, present, err)) return fail(err);
+
+    // A task this agent opened, or nothing. `applyUpdate` refuses an unknown
+    // task rather than creating one, and this refuses earlier and says more: a
+    // status update for a task nobody opened is not a task, it is a stranger's
+    // traffic on a topic we have no business reading.
+    TaskStore::Task task;
+    if (!tasks_.find(taskId, task)) return fail("no task " + taskId);
+    if (task.agent != agentAddress) {
+        return fail("task " + taskId + " is with " + task.agent + ", not " + agentAddress);
+    }
+
+    if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
+    if (!port_.receive) return fail("no delivery receive path is wired");
+    const std::string topic = taskTopic(agentAddress, taskId);
+    if (topic.empty()) return fail(badTopicIdentifier("agent_address"));
+
+    // This agent's own account, when it has one. Only used to tell "we published
+    // this" from "somebody who is not the peer published this" — both are
+    // refused either way, and an agent that cannot name itself still refuses
+    // everything the peer did not sign its name to.
+    const std::string self = port_.selfAccount ? port_.selfAccount() : std::string{};
+
+    const std::vector<std::string> frames = port_.receive(topic);
+    IgnoredFrames ignored;
+    json applied = json::array();
+    json refused = json::array();
+    for (std::size_t i = since; i < frames.size(); ++i) {
+        const std::string &text = frames[i];
+        // Before the parse, on the raw text, for the reason `parse()` gives:
+        // everything past this point holds the document, and `applyUpdate`
+        // copies it.
+        if (!withinJsonDepth(text, kMaxJsonDepth)) {
+            ++ignored.malformed;
+            continue;
+        }
+        const json frame = json::parse(text, nullptr, false);
+        if (frame.is_discarded() || !frame.is_object()) {
+            ++ignored.malformed;
+            continue;
+        }
+        // A2A's own discriminator. The task topic carries the request, the
+        // cancellation and the updates, so `kind` is what separates them —
+        // and requiring it rather than sniffing for a `status` member is what
+        // stops an `{"id":…,"status":{…}}` Task object minted by anybody from
+        // being read as an event about progress.
+        if (!stringIs(frame, "kind", "status-update")) {
+            ++ignored.notAnUpdate;
+            continue;
+        }
+        if (!stringIs(frame, "taskId", taskId)) {
+            ++ignored.otherTask;
+            continue;
+        }
+        if (!task.contextId.empty() && !stringIs(frame, "contextId", task.contextId)) {
+            ++ignored.otherContext;
+            continue;
+        }
+        const std::string author = frameAuthor(frame);
+        if (author.empty()) {
+            ++ignored.unattributed;
+            continue;
+        }
+        if (author != task.agent) {
+            // THE RULE THIS SKILL EXISTS FOR. A Delivery node receives its own
+            // published messages: without this, an agent that published
+            // `completed` about its own task would read it back and advance,
+            // and every assertion downstream would hold with the peer switched
+            // off.
+            if (!self.empty() && author == self) {
+                ++ignored.self;
+            } else {
+                ++ignored.otherParty;
+            }
+            continue;
+        }
+        std::string why;
+        if (!tasks_.applyUpdate(text, why)) {
+            // Not a failure of the poll. An update the state machine refuses —
+            // a second `completed`, a state after a terminal one — is a fact
+            // about what arrived, and reporting it is how a caller finds out
+            // that a peer is saying something impossible.
+            refused.push_back(json{{"index", i}, {"from", author}, {"error", why}});
+            continue;
+        }
+        json entry{{"index", i}, {"from", author}};
+        // `contains` first, even though `applyUpdate` has just accepted this
+        // document and could not have without a `status` object: `operator[]`
+        // on a const json whose key is absent is undefined behaviour, and
+        // "another function checked" is how that becomes true at a distance.
+        if (frame.contains("status") && frame["status"].is_object() &&
+            frame["status"].contains("state") && frame["status"]["state"].is_string()) {
+            entry["state"] = frame["status"]["state"].get<std::string>();
+        }
+        if (frame.contains("final") && frame["final"].is_boolean()) {
+            entry["final"] = frame["final"].get<bool>();
+        }
+        applied.push_back(std::move(entry));
+    }
+
+    // Read back rather than tracked: the store is what decides, and reporting
+    // the state this skill THINKS it produced would be the local claim this
+    // whole file refuses to make.
+    TaskStore::Task after;
+    if (!tasks_.find(taskId, after)) return fail("no task " + taskId);
+    return done(json{{"task_id", taskId},
+                     {"topic", topic},
+                     {"agent", after.agent},
+                     {"state", taskStateName(after.state)},
+                     {"history", after.history},
+                     {"note", after.note},
+                     {"applied", applied},
+                     {"count", applied.size()},
+                     {"refused", refused},
+                     {"ignored", ignored.toJson()},
+                     {"total", frames.size()},
+                     {"next_since", frames.size()}});
 }
 
 // ---------------------------------------------------------------------------

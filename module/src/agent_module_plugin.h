@@ -69,7 +69,8 @@ struct SkillPorts {
     /// Where other agents' cards are read from, for `agent.discover`.
     DiscoveryPort discovery;
     /// Transport and settlement for `agent.task`, `agent.subscribe`,
-    /// `agent.cancel`.
+    /// `agent.update`, `agent.poll` and `agent.cancel` — both directions of the
+    /// task topic, since `agent.poll` reads the one the others write.
     TaskPort task;
     /// What `meta.status` reports on. The four fields the module knows about
     /// itself — configured, started, owner, policy hash — are wired to the

@@ -90,11 +90,11 @@ Three rules, all enforced rather than documented:
   hypothetical, and silent replacement is how it would happen.
 - **A third party wins a contested name.** If a third-party skill registers
   `wallet.send` first, `registerBuiltinSkills` skips that built-in, reports a
-  failure naming it, and registers the other twenty. The registry keeps exactly
+  failure naming it, and registers the other twenty-four. The registry keeps exactly
   one skill per name, so the card cannot advertise anything `invoke()` will not
   dispatch. Whichever skill holds the name answers for it.
 
-The module's own twenty-three arrive the same way, through
+The module's own twenty-five arrive the same way, through
 `registerBuiltinSkills(SkillPorts)`, which is a convenience over `registerSkill`
 and not a privileged path.
 
@@ -286,8 +286,8 @@ Two further boundaries, for completeness:
   *pass* a closure over Qt Remote Objects, and it does not follow that a module
   cannot *build* one. The module now links `liblogosdelivery` and constructs its
   own `DeliveryPort` (`module/src/delivery_runtime.cpp`), so `messaging.*`,
-  `agent.discover`, `agent.task` and `agent.subscribe` work in a loaded plugin —
-  see `docs/basecamp.md`. What is left needs a storage node, a signing wallet or
+  `agent.discover`, `agent.task`, `agent.subscribe`, `agent.update` and
+  `agent.poll` work in a loaded plugin — see `docs/basecamp.md`. What is left needs a storage node, a signing wallet or
   a local `spel` inside the module's process, which no amount of port plumbing
   supplies. Each of those refuses naming the port it is missing, which is the
   opposite of the failure worth hiding: a module that loads, answers `skills()`
@@ -308,7 +308,7 @@ Two further boundaries, for completeness:
 
 ## 7. Reference: the registered skills
 
-The module registers **22** skills; each `--skill` library adds one more. This
+The module registers **25** skills; each `--skill` library adds one more. This
 table is a snapshot. **The module is the authority**, and it prints itself:
 
 ```sh
@@ -371,12 +371,23 @@ than quietly refused.
 | `agent.discover` | **`topic`** string, `require_signed` boolean | other agents' cards from a discovery topic |
 | `agent.task` | **`agent_address`** string, `skill`, `params`, `price`, `max_price`, `pay_account`, `card`, `task_id`, `context_id`, `message` | an A2A task, following the lifecycle |
 | `agent.subscribe` | **`agent_address`** string, **`task_id`** string | streaming status updates |
+| `agent.update` | **`agent_address`** string — the agent *serving* the task, **`task_id`** string, **`context_id`** string, **`state`** an A2A `TaskState`, `message` string | publishes an A2A `TaskStatusUpdateEvent` on the task's topic |
+| `agent.poll` | **`agent_address`** string, **`task_id`** string, `since` integer | the peer's status updates, applied to this agent's own `TaskStore` |
 | `agent.cancel` | **`agent_address`** string, **`task_id`** string | cancellation, and any applicable refund |
 
 `agent.task`'s `message` is for supplying input to a task in `input-required`.
 What of that lifecycle is reachable in shipped code, and what is not, is in
 [`a2a-binding.md`](a2a-binding.md); it is not summarised here, because two
 accounts of one mechanism is how they come to disagree.
+
+`agent.update` and `agent.poll` are the two ends of one thing, and they are the
+reason a task can now reach `completed` without this process saying so. The
+server publishes; the client reads and applies. `agent.poll` applies an update
+**only** when the frame names the task's peer as its author — a Delivery node
+receives its own publications, so an ingest without that rule would let one
+process drive its own task to `completed` and read as two. The author is a
+claim, not a credential: task traffic is unsigned, and
+[`a2a-binding.md`](a2a-binding.md) §7.3 says what that does and does not buy.
 
 ### Meta
 
@@ -441,8 +452,10 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Blockchain | `wallet.send` | **on chain** — `spend`, enforced by the anchored envelope |
 | Blockchain | `program.call` | **on chain** — same path, same threshold |
 | Blockchain | `wallet.balance`, `wallet.history`, `program.query` | reads over JSON-RPC, and reachable from `agent-console` — §5 has the recorded answers |
-| Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet |
-| Messaging | `messaging.send`, `messaging.receive`, `messaging.join`, `messaging.create_group` | **written against the Delivery API**, compiled; not yet exercised against a running node |
+| Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet, and between two loaded modules by `./scripts/delivery-in-plugin.sh` |
+| Agent | `agent.update`, `agent.poll` | **demonstrated between two loaded modules** — `./scripts/delivery-in-plugin.sh peers`, where each agent's own `TaskStore` reaches `completed` on updates the other account published, and a self-authored one on the same topic is counted and refused |
+| Messaging | `messaging.send`, `messaging.receive`, `messaging.join` | **run against live Delivery nodes** from a loaded plugin — `send` and `receive` between two of them on the public network (`delivery-in-plugin.sh peers`), `join` against a started node (`delivery-in-plugin.sh`, no argument) |
+| Messaging | `messaging.create_group` | **written against the Delivery API**, compiled; the one messaging skill not yet exercised against a running node |
 | Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
 | Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |

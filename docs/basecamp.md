@@ -27,19 +27,19 @@ method table and asserts on the module's real behaviour:
   ok    `main` (agent_plugin) names the file that was built (agent_plugin)
   ok    it casts to PluginInterface across the boundary
   ok    it casts to LogosProviderPlugin across the boundary
-  <-    getMethods(): start, skills, configure, invoke, status, stop
+  <-    getMethods(): status, stop, configure, approveSpend, start, invoke, skills
   ok    before configure it reports itself unconfigured
   ok    configure refuses a malformed policy hash
   ok    a second configure is refused — the binding is the agent's identity
   ok    before start, skills() is an error rather than an empty card
   ok    status reflects the running agent
-  <-    skills(): 23 entries: storage.share, wallet.send, program.deploy, …
+  <-    skills(): 25 entries: storage.list, program.deploy, meta.configure, …
   ok    every skill the module ships with is listed: missing none
-  ok    the card has exactly 23 entries, and 22 distinct names
+  ok    the card has exactly 25 entries, and 25 distinct names
   ok    each carries a parameter schema: all present
   ok    invoke() dispatches to every one of them: undispatched none
-  <-    invoke(meta.skills): {"count":22,"ok":true,"skills":[{"name":"agent.cancel", …
-  ok    meta.skills lists all 23 skills over the boundary, and counts them
+  <-    invoke(meta.skills): {"count":25,"ok":true,"skills":[{"name":"agent.cancel", …
+  ok    meta.skills lists all 25 skills over the boundary, and counts them
   ok    and every one of them carries the parameter schema skills() published for it
   ok    including itself: it is a registered skill, not a special case in invoke()
   ok    an unwired skill refuses as itself, not as a name nobody registered
@@ -92,12 +92,12 @@ module, which the runtime runs in its own `logos_host` process:
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
   ok    skills() answers with a JSON array, not an error object: [{"name":"agent.cancel", …
-  <-    skills(): 23 entries
-  ok    the loaded module lists all 23 documented skills
-  ok    it lists exactly 22 — no more, no fewer (got 22)
-  ok    every listed skill carries a parameter schema (22 checked)
+  <-    skills(): 25 entries
+  ok    the loaded module lists all 25 documented skills
+  ok    it lists exactly 25 — no more, no fewer (got 25)
+  ok    every listed skill carries a parameter schema (25 checked)
   ok    and it answered as a running agent, not as a stopped one
-  ok    invoke() dispatches to every one of the 23
+  ok    invoke() dispatches to every one of the 25
   <-    meta.status durability: {"path":".../agent-persistence/agent/a45bddb77136/tasks.json","recovered_active":0,"recovered_tasks":0,"recovery":"absent","recovery_ran":true,"settled_payments":0,"uncertain_payments":0}
   ok    the loaded module reports a durability record, not null: it was given a persistence directory and opened a task snapshot in it
   ok    and the snapshot lives under the persistence base the host set
@@ -243,8 +243,45 @@ agent A                                    agent B
   ok  discovered the OTHER agent's signed Agent Card over the public network
                                               ok  (the same, in the other direction)
   ok  which is signed — `require_signed` was on
-two loaded modules discovered each other (0 failure(s))
+  ok  this agent opened an A2A task addressed to the other one
+  ok  and READ the other agent's A2A request off its own task topic
+  ok  carrying the context id the other agent minted
+  ok  this agent publishes `working` for the task it was asked to do
+  ok  signed with its own account, which agent.update reads off this module's
+      configuration and not off the call
+  ok  then `completed`, which agent.update marks final because the state is
+  ok  and it puts a forged `completed` for its OWN task on the topic it reads
+  ok  THIS agent's own TaskStore reached `completed`, and every transition into
+      it came off the wire
+  ok  applying 2 status update(s) the peer published
+  ok  all of them published by the OTHER account — none by this one
+  ok  while the forged update this agent published about its own task was read
+      back off the same topic and refused (1 of them)
+  ok  and the walk it records is submitted -> working -> completed
+two loaded modules discovered each other and ran a task lifecycle across the
+network (0 failure(s))
 ```
+
+The second half of that is the A2A lifecycle running **between** the two
+processes rather than inside either. `agent.update` publishes a
+`TaskStatusUpdateEvent` on the task's topic; `agent.poll` reads that topic and
+applies what the peer published to this agent's own `TaskStore`, refusing any
+frame that does not name the peer as its author. The forged line is why the rest
+of it means anything: a node receives what it publishes, so each agent puts the
+exact frame a self-satisfying harness would use — `completed`, for its own task,
+as itself — onto the topic it is about to read, and asserts the poll counted it
+and refused it. "No self-authored update was applied" would also be true if none
+had arrived; "one arrived and was refused" is not.
+
+**The negative control for it is a rebuilt module, not an argument.** Delete the
+author rule from `PollSkill` — `if (author != task.agent)` becomes `if (false)`
+— rebuild the plugin, and run the same two agents: both processes exit 1 on
+exactly the forged-update line, `refused (0 of them)`, and on nothing else. The
+run is worth reading for what still passed on that build. The peer's updates
+arrived before the forged one, so the state machine refused it as a second
+`completed` and it never reached `applied[]` — meaning the weaker assertion, "no
+self-authored update was applied", was **true of a module with no author check
+in it**. The count is the assertion that discriminates.
 
 The cards are real: `agent.card` is assembled by the loaded module out of its
 own registry — so it cannot advertise a skill the agent has not registered — and
@@ -258,7 +295,8 @@ signs payment instructions is the last place to put one.
 **5. A loaded module pays for the task it was served**
 (`module/tests/plugin_delivery_test.cpp`, `peer` mode with a payment configured;
 run it with `./scripts/delivery-in-plugin.sh settle`). Harness 4 ends with two
-agents that have found each other and served each other, and no money moving.
+agents that have found each other, served each other and driven each other's
+tasks to `completed`, and no money moving.
 That was not a limitation of the plugin boundary either — it was
 `TaskPort::pay` left unwired, with a note in `agent_module_plugin.cpp` saying a
 settlement needs a wallet and a sequencer "and this module has neither". It is
@@ -301,6 +339,15 @@ buyer                                       seller
                                                   back for it
   ok  and READ the other agent's A2A request off its own task topic
 ```
+
+**That transcript ends where the harness ended when it was run.** The lifecycle
+step that harness 4 shows above was added afterwards, and `settle` is the one
+mode that costs money, so it has not been re-run to fold the two into one
+transcript: the same `peer` code path now continues into `agent.update` and
+`agent.poll`, and a `settle` run would print harness 4's last ten lines as well
+as these. That is a 1 LEZ command rather than a change, and
+`SUBMISSION-DRAFT.md` states it as the first thing that criterion does not
+claim.
 
 The seller's two lines are the control, and they are the same code path: one
 `agent.task` call, one card, and the answer differs only because the card does.
@@ -654,9 +701,9 @@ stayed committed across five commits to the sources; and `d995d85` made the
 module sign Agent Cards `secp256k1-bip340` instead of the `EdDSA` that
 `scripts/use-cases/verify-agent-card.py` rejects, without repackaging, so the
 published `.lgx` signed cards this repository's own verifier refuses. Both
-binaries load, cast, and answer `skills()` with all 23 entries, and the stale
-one is the same 3699040 bytes as the fresh one, so nothing in `module/tests/`
-could tell them apart.
+binaries load, cast, and answer `skills()` with all 23 entries  (count-as-it-was),
+and the stale one is the same 3699040 bytes as the fresh one, so nothing in
+`module/tests/` could tell them apart.
 
 Do not hand-edit that file. If CI says the package is stale, the fix is to
 rebuild and repackage; editing the hashes is a claim about a build that did not
@@ -746,7 +793,7 @@ $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 That prints root hash
-`7240ef68f13b5541f98f8294cc5b6898a9f31cdd7ad8358fa63105dae9f0c123`. Rebuilding
+`424c9f7151e5dee98924b5ac08be0bc858f3b1b32eb691336a06959e8d15fd45`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -794,7 +841,7 @@ redistribution — see below.
 
 **Leaving it out is survivable, and that is the point.** The plugin does not
 link the library; it opens it with `dlopen` when a node is first asked for. A
-module directory missing it still loads, still registers all 23 skills, and
+module directory missing it still loads, still registers all 25 skills, and
 answers `meta.status` with the file it wanted and every path it tried:
 
 ```json
@@ -1042,7 +1089,7 @@ Before `app/` existed the same command returned that list without its first
 entry. That is the criterion's "accessible from the Logos app", read out of the
 app itself.
 
-What the window then does — bind the agent, start it, list its 23 skills,
+What the window then does — bind the agent, start it, list its 25 skills,
 invoke any of them, and answer the spends it asks the owner to approve — is in
 `app/README.md`, with the transcript of a completed approval round trip. The
 two module-side facts that round trip depends on are in
@@ -1055,7 +1102,7 @@ Honest list, in the order that matters:
 
 1. The skills need their ports wired from inside the loaded module. This item
    has been rewritten twice and is now mostly done. It first read "the plugin
-   has to construct and register the skill objects"; it does, and all 23
+   has to construct and register the skill objects"; it does, and all 25
    dispatch. It then read "`registerBuiltinSkills` takes `std::function` ports
    that cannot cross a plugin boundary", which was the wrong conclusion from a
    right premise — a host cannot pass a closure, and a module can build one. The

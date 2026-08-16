@@ -730,6 +730,23 @@ Two facts behind it that generalise past this harness:
   if the other process got there first.** The ones that would not are not
   assertions about the system; they are assertions about the scheduler.
 
+**The rule was applied again the same day, to the step that closed the
+lifecycle.** That step has each agent publish a forged `completed` for its *own*
+task onto the topic it is about to read, and assert that the poll counted it and
+refused it — the frame a single process would use to satisfy every other
+assertion in the step by itself. Written the obvious way, the poll loop exits as
+soon as the task is `completed`, and the decoy is only counted if it happens to
+come back off the relay before the peer's terminal update does. It did, both
+times it was run. It would not always, and the failure would have arrived on an
+afternoon when nothing was wrong.
+
+So the loop exits on **both** facts — the peer's terminal update applied, and at
+least one self-authored frame refused — and neither is a statement about which
+process got somewhere first: one is about a frame the peer published, the other
+about a frame this node published to itself. A bounded loop that never sees
+either fails, which is the honest outcome, because if the decoy never arrived
+then "it was refused" was never true.
+
 ## The node runs are local, not CI
 
 Building the Delivery and Storage libraries takes tens of minutes and the runs
