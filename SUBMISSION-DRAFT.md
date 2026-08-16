@@ -40,7 +40,7 @@
 > document", in which every value was a literal somebody had typed; its balances
 > had never been true; the three transactions it led with are ones
 > `docs/DEPLOYMENT.md` disowns by name; and the two snippets it offered a
-> reviewer for checking the manifests without trusting the author both crashed,
+> reader for checking the manifests without trusting the author both crashed,
 > because they named a column that had been renamed. None of it was noticed for
 > weeks. A hand-written fact does not announce that it has gone stale, and on a
 > content-addressed chain every redeploy moves all of them at once.
@@ -49,19 +49,26 @@
 >
 > | # | Blocker | State |
 > |---|---|---|
-> | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the one blocker with real work left in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
-> | 2 | **`CI` is red on `main`.** Five of six jobs pass; `The illustrative use cases verify against the public testnet` fails, for two reasons that are both small and both ours: the Agent Card negative control rewrites the price to the literal `1` and the tip commit re-signed that card *at* `1`, so the control now mutates nothing; and the paying agent's period-9000 ledger reads `2` on chain while `artifacts/a2a-task.tsv` records prices summing to `1`, so a settlement landed that the manifest never recorded. Neither is a limit breached. No run id is written in this row on purpose: `gh run list --branch main --limit 1` answers it, and the last two versions of this row were wrong because a number was typed into them. | Fix the control's mutation and record the missing settlement. |
+> | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the only blocker left, and it is the one with real work in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
 >
-> This row has now held three different blockers, and each departure is recorded
+> This table has now held four different blockers, and each departure is recorded
 > rather than quietly deleted, because a stale blocker is more corrosive than a
-> stale claim — it tells a reviewer that the tree they cloned is not the tree
+> stale claim — it tells a reader that the tree they cloned is not the tree
 > being described, which invites them to distrust everything else, including the
 > parts that are checkable. It read "`HEAD` is ahead of `origin/main` and
 > unpushed"; `HEAD` **is** `origin/main`. It then read "the end-to-end run
-> against a real local sequencer is not green on `main`"; that run is now green
-> on `main` twice over, by dispatch and by schedule, and the criterion it gates
-> is marked MET. What is red today is the ordinary `CI` workflow, which is the
-> reverse of the arrangement the last version of this section described.
+> against a real local sequencer is not green on `main`"; that run has since
+> completed green on `main` twice over, by dispatch and by schedule. It then read
+> "`CI` is red on `main`. Five of six jobs pass", and named two defects: the Agent
+> Card negative control rewrote the price to the literal `1` while the card had
+> been re-signed *at* `1`, so the control mutated nothing; and the paying agent's
+> period-9000 ledger read `2` on chain while `artifacts/a2a-task.tsv` recorded
+> prices summing to `1`. **Both are fixed in the tree and both fixes are checked
+> against the chain**, the workflow has eight jobs rather than six, and all eight
+> are green. The evidence is in the CI criterion under
+> [Supportability](#supportability), and the command that answers it without
+> trusting this document is
+> `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.
 >
 > Resolved while this was written, and no longer blockers: the
 > `spend`-does-not-bind-the-policy defect, the caller-supplied period total and
@@ -79,14 +86,20 @@
 > ran an A2A task lifecycle to `completed` on each other's status updates, and
 > an owner approved and denied a spend over Logos Messaging.
 >
-> CI is **not** on that list, and it was, twice. It is **red on `main` as this is
-> written** — blocker 2 above — and it has been red repeatedly for real reasons: a
-> job that could not build `spel`, a coverage floor added by one piece of work
-> reading a line of output added by another, and now a negative control the tip
-> commit made vacuous. Every one was a gate catching something, and none is a
-> reason to write "CI is green" into a document that outlives the run. Ask:
+> CI is on that list now, and it was not on the last three versions of it. The
+> `CI` workflow's **eight** jobs are green on `main`: the last four completed,
+> uncancelled runs each return eight jobs and eight `success` conclusions. That is
+> written here as an observation about the commits
+> those runs ran on, not as a property of the repository, because it has been red repeatedly
+> for real reasons — a job that could not build `spel`, a coverage floor added by
+> one piece of work reading a line of output added by another, a negative control
+> a re-signed Agent Card made vacuous. Every one was a gate catching something,
+> and a green run is only ever a statement about the commit it ran on. So the
+> command is given rather than a badge:
 > `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main
-> --limit 1`.
+> --limit 1`. Note that `ci.yml` sets `cancel-in-progress: true`, so a run
+> superseded by the next push reports `cancelled` — which is neither red nor
+> green, and is not evidence either way.
 >
 > The Success Criteria Checklist marks unmet criteria **UNMET**, including
 > criteria for which working, tested code exists. Code existing is not the
@@ -145,9 +158,13 @@ host loaded**, in the same call that discovered the payee's card and opened the
 task: `./scripts/delivery-in-plugin.sh settle`. That sentence used to read "have
 run an A2A task to completion and settled it in LEZ", which implied one flow
 where there were two; the settlement and the discovery are now genuinely one, and
-what is still separate is named in the checklist entry rather than smoothed over
-here — the peer that receives a request does not drive it to a terminal state
-over the wire.
+so is the rest of the lifecycle. The same invocation walks each agent's own
+`TaskStore` `submitted → working → completed` on status updates the *other*
+account published — `agent.update` publishes them, `agent.poll` ingests them —
+so the peer that receives a request now does drive it to a terminal state over
+the wire. What is still separate is named in the checklist entry rather than
+smoothed over here: nothing **dispatches**, so the decision to serve is the
+host's rather than the module's.
 
 Agent-to-agent coordination is A2A-shaped: cards carry the A2A schema plus an
 `x-logos` extension for the price and payment address that vanilla A2A has no
@@ -161,13 +178,22 @@ one.
 [`docs/limitations.md`](docs/limitations.md), and it is substantial: the owner
 can never approve an above-threshold spend after anchoring a policy; the
 **storage** skills have never been run against a live node, because nothing has
-put a Logos Storage node inside the module's own process; no agent has yet
-*served* another agent's task through to a terminal state, so the far side reads
-a request and never answers it; no model has ever been run against the inference
-port; and there is no video.
+put a Logos Storage node inside the module's own process; nothing **dispatches**
+an inbound request to the skill it names, so a serving agent is this module plus
+a host that reads the request, decides, and publishes the states the work moves
+through; no model has ever been run against the inference port; and there is no
+video.
 
-The messaging half of that sentence used to be in it and has been taken out,
-because it stopped being true: `messaging.send`, `messaging.join`,
+Two clauses have left that sentence, and both are recorded rather than quietly
+dropped. The first was "no agent has yet *served* another agent's task through to
+a terminal state, so the far side reads a request and never answers it". It
+stopped being true: `agent.update` and `agent.poll` carry a peer's task
+`submitted → working → completed` on frames the other account published, in the
+same run as the payment. What is left of it is the narrower fact above — that
+nothing dispatches — which is a smaller claim and the accurate one.
+
+The second was the messaging half, and it went for the same reason:
+`messaging.send`, `messaging.join`,
 `messaging.receive`, `agent.discover`, `agent.task` and `agent.subscribe` all run
 from a loaded plugin against real Logos Delivery nodes on the public network
 (`./scripts/delivery-in-plugin.sh`).
@@ -215,7 +241,7 @@ show is emitted as a sentence saying so.
 Two earlier commands lived here, offered for exactly this purpose, and **both of
 them crashed** — they read `artifacts/agents.tsv` and `artifacts/anchored.tsv`
 for a `policy_hash` column that had been renamed to `policy_account` some
-commits earlier, so a reviewer who ran them got `KeyError` and no reason to
+commits earlier, so a reader who ran them got `KeyError` and no reason to
 believe anything else here. That is why the check is now a script that runs in
 CI rather than a snippet nobody executes. The manifests are still read by
 **column name**, never by position; positional reads have produced three
@@ -424,17 +450,23 @@ Every UNMET carries its **cause** in the same line as its verdict, so an
 unchecked box can be read without the prose around it:
 
 - **`[NOT BUILT]`** — nothing outside this repository prevents it. It is work
-  that has not been done here, and a reviewer should read it as such.
+  that has not been done here, and it should be read as such.
 - **`[UPSTREAM]`** — the Logos stack as published does not permit it from here,
   and saying so is a claim about a named artefact, checked, not an inference
   from something that failed.
 
-Both unchecked boxes below are `[NOT BUILT]`, and there is no `[UPSTREAM]` label
-left on this list. **Nothing here is blocked outright.** That is a harder thing
+There is exactly **one** unchecked box below, it is `[NOT BUILT]`, and there is no
+`[UPSTREAM]` label left on this list. **Nothing here is blocked outright.** That is
+a harder thing
 to write than "the host forbids it", and it is the true one: two of these entries
 said the host forbade it, the host did not, and both are now MET — built, run,
 and quoted below. An unbuilt thing dressed as an impossible one costs exactly one
 criterion each time, and this is what that cost looked like.
+
+The counts stated with this list are **22 MET and 1 UNMET of 23**, and they are
+repeated once, at the end of the list, with the arithmetic beside them. If a box
+and a count ever disagree, the boxes are the authority — a summary that has to be
+believed rather than counted is how the previous three tallies here went wrong.
 
 Every MET below names a command that was run and the output it produced. Nothing
 here is upgraded on the strength of reading code: this repository has shipped
@@ -535,7 +567,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   directory too, which is exactly how this repository's own module gets in. The
   bundle was never the constraint.
 
-  **The one thing that took real work, recorded because a reviewer will hit it.**
+  **The one thing that took real work, recorded because a reader will hit it.**
   `logos-delivery-module`'s tip does not build against `logos-delivery`'s tip:
   the library's C ABI moved on 2026-08-14 (reply callbacks went from
   `(int, const char*, size_t, void*)` to `(int, const char*, const char*,
@@ -558,9 +590,14 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
 - [x] **MET — The agent has its own shielded LEZ account and can send and
   receive tokens independently of the owner's wallet.**
-  *Send*: `./scripts/verify-deployment.sh` (exit 0) re-decodes 4 settlements
-  under the shipped program from the chain's own copy, each a privacy-preserving
-  transaction signed by the agent's own shielded account, not the owner's.
+  *Send*: `./scripts/verify-deployment.sh` (exit 0) re-decodes **11 settlements
+  under the shipped program** from the chain's own copy — its own closing line,
+  `11 settlement(s) under the shipped program (need 2)` — each a
+  privacy-preserving transaction signed by the agent's own shielded account, not
+  the owner's. The count is the script's, re-run for this pass and not recalled:
+  it read 4 here and 9 in the spending-threshold entry below at two different
+  moments, and a settlement total that is typed in two places is two places to
+  forget.
   *Receive*, at that same shielded account: transaction
   `5942d6cd…d53a03d61`, block 9360 — the messaging agent paying the storage
   agent **at its shielded keys**, under the shipped `spend` instruction, with no
@@ -607,7 +644,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   the prize's own Scope lists beside deployment rather than inside it: "a CLI for
   agent deployment, configuration, **and initial funding**". So: deploying and
   configuring *the published agent* in Logos Core headless is one command;
-  standing up an agent of your own is two. A reviewer can read the sentence
+  standing up an agent of your own is two. A reader can read the sentence
   either way and this submission does not rest a verdict on it in either
   direction. The wrapper over both is writable and is not written, because it
   would report one exit code for two unrelated failures and hide the gap rather
@@ -906,14 +943,14 @@ one of them — `meta.skills` — was documented in three headers before it exis
   waits for approval before submitting."
 
   **Below threshold, executed autonomously, on the public testnet.**
-  `./scripts/verify-deployment.sh` (exit 0) re-decodes **9 settlements under the
+  `./scripts/verify-deployment.sh` (exit 0) re-decodes **11 settlements under the
   shipped program** from the chain's own copy, each one a `spend` inside the
   paying agent's anchored per-transaction limit, submitted by the agent with no
   owner in the loop. The generated settlement table above prints them with the
-  block each landed in. `./scripts/use-cases/03-spending-threshold.sh` reads the
-  per-period ledger back off the chain and shows four of them charging it
-  *exactly* the advertised price — `it charged the anchored ledger 1, exactly the
-  price`, against a limit the chain holds rather than the caller supplies.
+  block each landed in. `./scripts/use-cases/03-spending-threshold.sh` (exit 0)
+  reads the per-period ledger back off the chain and shows four of them charging
+  it *exactly* the advertised price — `it charged the anchored ledger 1, exactly
+  the price`, against a limit the chain holds rather than the caller supplies.
 
   **Above threshold, held — at all three layers, watched at each.**
   - *The chain refuses it.* `Program error 6005: the spend needs an owner
@@ -950,25 +987,37 @@ one of them — `meta.skills` — was documented in three headers before it exis
   months, and marking a criterion unmet for a defect it does not mention is the
   same error as marking one met for a defect it does.
 
-  **One thing a reviewer will hit, stated here rather than found.** Both use-case
-  scripts cited above **exit 1 at this commit**, and the run ids are in the
-  Actions tab. Neither failure is a threshold failure and neither touches the
-  clauses above:
-  1. `02-services-marketplace.sh` fails its Agent Card control — it rewrites the
-     card's price to the literal `1` and requires verification to break, and the
-     card was re-signed at a price of `1` in the tip commit, so the "mutation" now
-     produces a byte-identical card that verifies. The control is vacuous, not the
-     signature broken.
-  2. Both scripts fail a *bookkeeping* assertion: the paying agent's period-9000
-     ledger reads `2` on chain while the prices `artifacts/a2a-task.tsv` records
-     for that period sum to `1` — a settlement landed that the manifest never
-     recorded. The ledger is still far inside its per-period ceiling; what is
-     wrong is the record, not the spend.
+  **Two defects this entry used to disclose, both closed, both recorded rather
+  than deleted.** Until recently both use-case scripts cited above exited 1, for
+  reasons that were neither threshold failures nor limits breached, and this
+  paragraph said so because an entry citing "(exit 0)" beside a script that exits
+  1 is the precise defect the top of this document exists to prevent. Both are
+  fixed, and each fix is checked against the chain rather than read off a diff:
 
-  Both are tracked as the CI criterion under Supportability, which is marked
-  UNMET there for exactly this. They are named here because an entry that cited
-  "(exit 0)" beside a script that exits 1 is the precise defect the top of this
-  document exists to prevent.
+  1. **A control that stopped controlling anything.**
+     `02-services-marketplace.sh` rewrote the card's `x-logos.pricePerTask` to the
+     literal `1` and required verification to break; the card had been re-signed
+     *at* a price of `1`, so the "mutation" produced a byte-identical card that
+     verified, and the script correctly reported the control as meaningless. The
+     mutation is now derived from the card's own price rather than written as a
+     literal — `card['x-logos']['pricePerTask'] = int(card['x-logos']['pricePerTask']) + 1`
+     — so it cannot collide with the value it mutates whatever that value becomes.
+     The script prints `control: rewriting the price breaks the signature`, and CI
+     greps for exactly that line, so a control that goes vacuous again fails the
+     job rather than passing it quietly.
+  2. **A settlement the chain had and the manifest did not.** The paying agent's
+     period-9000 ledger read `2` on chain while the prices
+     `artifacts/a2a-task.tsv` recorded for that period summed to `1`. The missing
+     rows are recorded. The manifest now carries four price-`1` settlements for
+     that agent in period 9000, and `getAccount` on its policy account
+     `6FscNXjN…` decodes `spent = 4` for `window_start = 9000` — the two figures
+     agree, and `verify-deployment.sh` prints the chain's side of it as
+     `window 9000 spent 4`. `02` walks the four in order and reports the ledger
+     reading 1, then 2, then 3, then 4, each `local record … agrees with the
+     transaction`.
+
+  Both scripts exit 0 at this commit, run for this pass against
+  `https://testnet.lez.logos.co`, and `02` is the job CI runs.
 
 - [x] **MET — All default skills implemented and documented.**
   All twenty-one are implemented **and registered**, which are different claims:
@@ -1015,7 +1064,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   entries, each with a parameter schema, `invoke()` dispatching to every one, and
   `meta.skills` listing all 28 — including itself — over the boundary.
   Documented in [`docs/skills.md`](docs/skills.md), and the count is gated:
-  `./scripts/check-docs.py` (exit 0) reports `checked 29 skill-count mention(s)
+  `./scripts/check-docs.py` (exit 0) reports `checked 40 skill-count mention(s)
   against the 28 the module registers`, and `examples/agent-console/run.sh`
   asserts `docs/skills.md §7 lists exactly the 28 skills the module registers`.
 
@@ -1051,7 +1100,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
   Two caveats that belong here rather than in the verdict. The repository performs
   **no JSON-Schema validation** in CI or in any script — the validation above is a
-  reviewer's, and a card declaring `protocolVersion: "9.9.9"` would pass every
+  reader's, and a card declaring `protocolVersion: "9.9.9"` would pass every
   check the repo itself has. And the 9×9 transition matrix is **the binding's
   own**: A2A v0.3.0 publishes no transition table, `docs/a2a-binding.md` §5.2 says
   so, and only 13 of the 81 cells are asserted anywhere.
@@ -1204,7 +1253,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   and a module that reads "I do not know" as "no limit" pays a task nobody
   configured it for.
 
-  **What settlement 9 is, since a reviewer will find it on chain between these
+  **What settlement 9 is, since a reader will find it on chain between these
   two.** It is the first attempt at the run above: the money moved, the peer's
   updates moved the buyer's task to `completed`, and the harness reported
   failure four lines past the payment — because the assertion counted updates
@@ -1306,7 +1355,7 @@ Settlement 12: the sequencer's bytes hash to `071d25d7193fd3c3b6380c4e28b5de1ec1
 Settlement 13: the sequencer's bytes hash to `54f851825f171cf62f6b4723f7133687f3d9dff7e138417374cc7960e2f47115`, which is the hash cited, and those bytes were found inside block 10102 and in neither block 10101 nor 10103. The transaction touches 2 accounts.
   The envelope it charged, `7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
 
-**2 of the 13 settlements above predate the program this repository ships.** They are kept because they are on chain and a reviewer will find them, but the criterion they support is only supported by the 11 made under the current deployment.
+**2 of the 13 settlements above predate the program this repository ships.** They are kept because they are on chain and a reader will find them, but the criterion they support is only supported by the 11 made under the current deployment.
 
 What the chain cannot show, stated rather than implied: the payer is a shielded account, so only the credit side of each settlement is publicly readable. `getAccount` answers with a fully-populated default account — zero balance, zero nonce, zero owner — for a shielded address exactly as it does for one that has never existed, so it is not an existence check and no debit is quoted here. The debit is constrained anyway: LEZ rule 8 requires total balance to be preserved across every program in a transaction, so a transaction that credited 25 LEZ debited 25 LEZ.
 
@@ -1338,19 +1387,29 @@ The explorer indexes roughly an hour and three quarters behind the sequencer, so
   ```
   ./scripts/use-cases/02-services-marketplace.sh    # exit 0 — agent services /
                                                     #   paid skill marketplace
-    OK  6 settlement(s), each one decoded from the chain's own copy
-    OK  it moved 5: payee and ledger both advanced by the advertised price
+    OK  13 settlement(s), each one decoded from the chain's own copy
+    OK  it moved 1: payee and ledger both advanced by the advertised price
+    OK  control: rewriting the price breaks the signature
     OK  control: a transaction hash that cannot exist returns null
 
   NOTARY_VERIFY_ONLY=1 ./scripts/use-cases/04-privacy-notary.sh    # exit 0
-    OK  1 notarisation(s), each verified from the chain against the document's own key
-    OK  control: a document nobody notarised derives a key that appears nowhere
+    OK  2 notarisation(s), each verified from the chain against the document's own key
+    OK  control: the same search finds a recorded key and not the un-notarised one
 
   ALERTER_VERIFY_ONLY=1 ./scripts/use-cases/05-event-alerter.sh    # exit 0
-    OK  1 alert(s), each re-verified from the chain
+    OK  3 alert(s), each re-verified from the chain
     OK  control A: it reads as the default account, so the detector does not fire
     OK  control B: a transaction hash that cannot exist returns null
   ```
+
+  Every count above is the banner the script printed on this pass, not a figure
+  carried forward: they read 6, 1 and 1 here while the manifests held 13, 2 and 3.
+  **These three numbers grow whenever a use case is run again**, so the invariant
+  rather than the figure is what CI asserts: each job compares the banner against
+  the manifest's own row count, counted by column-aware `awk` rather than by
+  `wc -l`, so a script that verifies fewer rows than exist cannot report green.
+  If the numbers above are lower than the manifests when you read this, the
+  scripts have been run since — re-run them and they will agree.
 
   A fourth — the **personal file vault** — runs end to end against a real Logos
   Storage node and a real Logos Messaging topic (`./scripts/use-cases/01-file-vault.sh`,
@@ -1438,11 +1497,11 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   [`docs/limitations.md`](docs/limitations.md), which is where anything that does
   not work is written down first, and the A2A transport binding spec
   [`docs/a2a-binding.md`](docs/a2a-binding.md). Gated rather than asserted:
-  `./scripts/check-docs.py` (exit 0) reports `checked 334 paths, 142 link targets,
-  7 line citations, 69 symbol citations … across 13 documents / every path, link
+  `./scripts/check-docs.py` (exit 0) reports `checked 485 paths, 184 link targets,
+  7 line citations, 71 symbol citations … across 13 documents / every path, link
   target, line citation and symbol citation resolves`.
 
-  One caveat a reviewer will see before they read any of it: the repository is
+  One caveat a reader will see before they read any of it: the repository is
   dual MIT/Apache-2.0 and both full texts are present, but **GitHub's own licence
   detector reports "Other"** — `gh api repos/edenbd1/lp-0008-autonomous-agent-module
   --jq .license` returns `{"key":"other","spdx_id":"NOASSERTION"}` — because the
@@ -1526,9 +1585,14 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   ```
   $ osascript -e 'tell application "System Events" to tell process "LogosBasecamp.bin"
                   to tell window 1 to get name of every button'
-  LP-0008 Agent, lp-0002-multisig, lp-0003-airdrop, Applications,
-  Package Manager, Settings
+  LP-0008 Agent, …, Applications, Package Manager, Settings
   ```
+
+  The elision is two further tiles for unrelated packages that happen to be
+  installed in the same Basecamp on the machine this was read from; they are
+  nothing to do with this module and are cut rather than reproduced. What the
+  assertion rests on is the **first** entry, which is `app/metadata.json`'s own
+  `display_name`.
 
   Before `app/` existed the same command returned that list without its first
   entry, and `grep -ci agent` over Basecamp's whole output returned 0. It is still
@@ -1560,7 +1624,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   Core's own event/method transport, **not** on Logos Messaging — that is the
   Functionality criterion above, and it is answered there, outside Basecamp.
   Basecamp 0.2.2's Package Manager installs from a configured repository only, so
-  both packages are installed by hand, by a reviewer as much as by us. And both
+  both packages are installed by hand, by a reader as much as by us. And both
   carry only a `darwin-arm64` variant.
 
 ### Reliability
@@ -1668,7 +1732,8 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
 ### Supportability
 
 - [x] **MET — The agent module is deployed and tested on LEZ devnet/testnet.**
-  Program, three anchors and six settlements all live on the public testnet, each
+  Program, three anchored policies and eleven settlements under the shipped
+  program, all live on the public testnet, each
   re-verified for this document with a null-returning control:
   `./scripts/verify-deployment.sh` (exit 0),
   `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md` (exit 0), and
@@ -1683,9 +1748,29 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   run, which is worse than red because nobody looks at it again. If this cannot
   run, it fails.
 
-  **Green on `main`:**
-  [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823),
-  `success`, 3 h 05 m, at the commit this document describes. Fourteen steps ran
+  **Green on `main`, and the citation needs a caveat rather than a badge.** The
+  two completed green runs are
+  [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823)
+  (`success`, 3 h 05 m, by dispatch) and
+  [31929846814](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31929846814)
+  (`success`, 2 h 16 m, by schedule). Both ran on `main`; **neither ran on a
+  commit that still exists.** This branch's history was rewritten, and
+  `git merge-base --is-ancestor` returns non-zero for both of the SHAs those runs
+  record — `d65a95a` and `91154ef`. They are evidence that this workflow passes
+  against a real sequencer, and they are *not* evidence about the tree you
+  cloned. This document said "at the commit this document describes"; that was
+  the third time a hash written into a rebased branch stopped naming anything,
+  which is the reason the top of this file pins nothing.
+
+  A fresh run on the current line of history —
+  [31950647965](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31950647965),
+  dispatched on `main` at `20a4d7c`, which **is** an ancestor of `HEAD` — was
+  still `in_progress` when this paragraph was written, well inside the 2–3 hours
+  the two completed runs took. **No green is asserted for it here, because none
+  has been seen.** Ask, rather than reading this line:
+  `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
+
+  Of the runs that did finish, fourteen steps ran
   and one skipped — `Sequencer log on failure`, which is `if: failure()`, so it
   skips exactly when the job succeeds and asserts nothing.
 
@@ -1701,53 +1786,67 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   transaction at block-build time rather than returning a reason — so it called a
   correct refusal a broken test.
 
-  Do not check the badge; run
-  `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
+- [x] **MET — CI must be green on the default branch.**
+  `.github/workflows/ci.yml` defines **eight** jobs, counted in the file rather
+  than remembered: `Policy primitive and its adversarial tests`, `The committed
+  program matches its recorded ImageID`, `The skills behave, against fake ports`,
+  `The shipped .lgx was built from the committed source`, `A real Storage node
+  takes a file and returns its address`, `Logos Core loads and configures the
+  shipped module, headless, on Linux`, `The same command, on a machine with no
+  compiler at all`, and `The illustrative use cases verify against the public
+  testnet`. **All eight are green on `main`**, and that was read out of the runs
+  rather than off a badge: `gh run view <id> --json jobs` on each of the last four
+  completed, uncancelled runs on `main` returns eight jobs and eight `success`
+  conclusions, with no skipped job among them — an unbroken green streak, not one
+  lucky run.
 
-- [ ] **UNMET `[NOT BUILT]` — CI must be green on the default branch.**
-  **It is red at the tip of `main`.** Five of the six `CI` jobs pass — `Policy
-  primitive and its adversarial tests`, `The committed program matches its
-  recorded ImageID`, `The skills behave, against fake ports`, `The shipped .lgx
-  was built from the committed source`, `A real Storage node takes a file and
-  returns its address`. The sixth, `The illustrative use cases verify against the
-  public testnet`, fails at `Use case 2 — every settlement decoded from the
-  chain's own copy`, and it fails twice over:
+  **This branch takes pushes continuously, so the run at whatever commit is tip
+  when you read this may still be in flight.** That is not a caveat about CI, it
+  is what a green streak on a moving branch means, and it is why the command
+  below is the answer and this sentence is not. A `cancelled` run appears in the
+  list beside the green ones, and it is not a failure either: `ci.yml` sets
+  `concurrency: cancel-in-progress: true`, so a push that arrives while the
+  previous run is going cancels it by design. Reading a `cancelled` row as a red
+  one is the mistake this note exists to prevent.
 
-  1. **A control that stopped controlling anything.** The step rewrites the
-     committed Agent Card's `x-logos.pricePerTask` to the literal `1` and requires
-     the signature to break. The tip commit re-signed that card *at* a price of
-     `1`, so the mutated card is byte-identical to the signed one and verifies —
-     and the script correctly reports `control: a card with the price rewritten
-     still verified — the check above is meaningless`. The signature is sound; the
-     control is not. It needs a mutation that is not the card's own value.
-  2. **A settlement the chain has and the manifest does not.** The paying agent's
-     ledger reads `2` for period 9000 while the prices
-     `artifacts/a2a-task.tsv` records for that period sum to `1`, so both
-     `02-services-marketplace.sh` and `03-spending-threshold.sh` exit 1 on
-     `the ledger reads 2 after the first settlement of period 9000, for a price of
-     1`. The most likely history is a take that landed during filming and was
-     never recorded. Nothing here exceeds a limit — the record is short, not the
-     ceiling breached.
-
-  Both are small and both are ours. Neither is a reason to soften the box: this
-  criterion is three words long and one of them is "green". Do not quote a run id
-  from this paragraph — "latest" moves, and the id written here was already two
-  runs stale by the time anyone read it. Ask instead:
+  No run id is quoted as *the* answer, because "latest" moves — the version of
+  this paragraph that quoted one recorded it as already two runs stale by the
+  time it was read — and because this branch's
+  history has been rewritten, so a run id also carries a commit SHA that may no
+  longer exist. Ask:
   `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.
 
-  **This has been red before, and for real reasons** — a missing `<cstdint>`
+  **This box was empty until this pass, and it was empty for two real defects
+  rather than for flakiness.** Both are recorded rather than deleted, because a
+  criterion that flips to MET without saying what changed is indistinguishable
+  from one that was softened.
+
+  1. **A control that had stopped controlling anything.** `Use case 2` rewrote the
+     committed Agent Card's `x-logos.pricePerTask` to the literal `1` and required
+     the signature to break; the card had been re-signed *at* a price of `1`, so
+     the mutated card was byte-identical to the signed one and verified. The
+     script said so itself — `control: a card with the price rewritten still
+     verified — the check above is meaningless` — which is the control working on
+     its own behalf. The mutation is now `int(...) + 1` of the card's own price,
+     so it cannot collide with the value it mutates, and the step greps for
+     `control: rewriting the price breaks the signature` so a control that goes
+     vacuous again fails the job.
+  2. **A settlement the chain had and the manifest did not.** The paying agent's
+     ledger read `2` for period 9000 while the prices `artifacts/a2a-task.tsv`
+     recorded for that period summed to `1`, and both
+     `02-services-marketplace.sh` and `03-spending-threshold.sh` exited 1 on it.
+     The manifest now records four price-`1` settlements for that agent in period
+     9000; the chain's policy account for it decodes `spent = 4` at
+     `window_start = 9000`; the two agree, and both scripts exit 0. Nothing here
+     ever exceeded a limit — the record was short, not the ceiling breached.
+
+  **It has been red before that, and for real reasons** — a missing `<cstdint>`
   killed six C++ suites at the *first* compile step while the summary said only
   "one job failed"; the `use-cases` job could not build `spel` against the pinned
   LEZ revision; and the packaging job's own negative control, a package whose
-  binary was swapped, failed. Each was a gate catching something, and each was
-  fixed within a few commits. The two failures above are the same kind of thing
-  and are expected to go the same way; until they have, the box is empty.
-
-  The separate `e2e vs local sequencer` workflow, by contrast, **is** green on
-  `main` — runs 31916748823 (dispatch) and 31929846814 (schedule) both completed
-  successfully — which is the criterion below, marked MET there. So the Actions
-  tab currently shows the reverse of the arrangement this paragraph used to
-  describe: the long e2e is green and `CI` is red.
+  binary was swapped, failed. Each was a gate catching something. A green run is
+  a statement about the commit it ran on and not a property of the repository,
+  which is why the command is printed above and no badge is.
 
 - [x] **MET — A README documents end-to-end usage: deployment steps, agent
   configuration, and step-by-step instructions for deploying and interacting with
@@ -1765,7 +1864,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   covers tests and CI, and §11 says what does not work.
 
   Every path and link in it resolves, mechanically: `./scripts/check-docs.py`
-  (exit 0) checks 392 paths and 161 link targets across 13 documents, so no
+  (exit 0) checks 485 paths and 184 link targets across 13 documents, so no
   command in the README names a file that is not there.
 
   The fourth clause — the Logos app owner channel — is what this entry failed on
@@ -1782,7 +1881,11 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   outside it — each refusal identified by its documented error code rather than by
   "some error happened". Run
   [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823)
-  is that script executing on `main`, green.
+  is that script executing on `main`, green — with the caveat the criterion above
+  states in full: it ran on `d65a95a`, which this branch's rewritten history no
+  longer contains, and a run on the current line of history
+  ([31950647965](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31950647965),
+  at `20a4d7c`) was still in flight when this was written.
 
   `./scripts/demo.sh` is the other one, and answers a different question: it runs
   from a clean clone with only a Rust toolchain — no funded account, no keys, no
@@ -1795,14 +1898,30 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   exists in this repository or anywhere it links to**, and
   [Supporting Materials](#supporting-materials) still carries a placeholder URL.
   Checked by looking: there is no `.mp4`, `.mov` or `.webm` under any path here.
-  Blocker 1, and the only unchecked box with irreducible work in it.
+  Blocker 1, and now the **only** unchecked box on this list.
 
-**Tally: 21 MET, 2 UNMET, of the 23 criteria the prize lists** — Functionality
+**Tally: 22 MET, 1 UNMET, of the 23 criteria the prize lists** — Functionality
 11 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-4 of 6. The parts sum to the whole: 11 + 2 + 3 + 1 + 4 = 21, and 0 + 2 = 2.
+5 of 6. The parts sum to the whole: 11 + 2 + 3 + 1 + 5 = 22, and the single UNMET
+is the video, in Supportability: 0 + 0 + 0 + 0 + 1 = 1.
 
-Three boxes moved this pass, and none of them moved because a sentence was
-re-read. All three were built and run:
+That is derived by counting the boxes in the five sections above, not carried
+forward from the last pass. The line has twice disagreed with itself here — see
+the note after the table below — so it is worth stating the arithmetic rather
+than the answer.
+
+One box moved this pass, and it did not move because a sentence was re-read:
+
+- **CI green on the default branch → MET.** Two defects were fixed and both
+  fixes are checked against the public chain, not against a diff: the Agent Card
+  negative control derives its mutation from the card's own price instead of
+  writing a literal, and the four missing period-9000 settlements are recorded so
+  that `artifacts/a2a-task.tsv` and the on-chain ledger both read 4. The workflow
+  has eight jobs, not the six this document credited it with, and all eight are
+  green.
+
+Three boxes moved on the pass before it, and none of them moved because a
+sentence was re-read. All three were built and run:
 
 - **Module loads alongside wallet, storage, messaging → MET.** Built and run:
   `logos-storage-module`, `logos-delivery-module` and `logos-wallet-module`
@@ -1838,17 +1957,22 @@ re-read. All three were built and run:
   "the same build-once-per-platform job that closed the variants, and the same
   three containers" — was right, and it was one afternoon.
 
-### The two unchecked boxes, by cause
+### The one unchecked box, by cause
 
-A reviewer should be able to read this table instead of the prose above and get
+A reader should be able to read this table instead of the prose above and get
 the same answer about what is missing and whose it is.
 
 | Criterion | Cause | What closing it takes |
 |---|---|---|
-| CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
 | Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
 
-**Both are entirely ours, and the last `[UPSTREAM]` label on this list is
+The row above it read `CI green on the default branch | [NOT BUILT] | A control
+that mutates the card's price to something *other* than its own value, and one
+missing manifest row.` Both of those were done — the control derives its mutation
+from the card's own price, and the manifest and the chain now agree at 4 for
+period 9000 — so the row is gone rather than reworded.
+
+**It is entirely ours, and the last `[UPSTREAM]` label on this list is
 gone.** Nothing here is refused by the stack. Two earlier passes said otherwise;
 both corrections were recorded rather than made silently, and both entries they
 defended have since been built, which is the argument for recording them. The
@@ -1862,15 +1986,20 @@ how an unbuilt thing stops being anyone's job, and the cost of leaving one
 standing is measurable: twice now it was a criterion.
 
 
-The breakdown line has twice disagreed with itself here — "Functionality 6 of 11"
-under a header saying 14 over a section holding 5, and "Supportability 3 of 6"
-over a section holding 5 met. Both are noted rather than quietly corrected,
-because a tally that disagrees with itself is the same class of defect as a
-document that names a superseded program, and this file has had both.
+The breakdown line has three times disagreed with itself here — "Functionality 6
+of 11" under a header saying 14 over a section holding 5; "Supportability 3 of 6"
+over a section holding 5 met; and, most recently, a summary of "21 MET, 2 UNMET"
+with "Supportability 4 of 6" over a section in which the CI box was empty for
+defects the tree had already fixed. All three are noted rather than quietly
+corrected, because a tally that disagrees with itself is the same class of defect
+as a document that names a superseded program, and this file has had both. The
+current figures were obtained by counting `- [x]` and `- [ ]` in each of the five
+sections above; if that count and this sentence ever disagree, the boxes are the
+authority.
 
-The commit this tally describes is the one recorded at the top of this
-document, and it is recorded there only — a count anchored to a commit id in
-two places is two places to forget.
+This tally describes the tree you cloned rather than a commit id, for the reason
+given at the top of this document — a count anchored to a hash in a branch that
+gets rebased is wrong by construction.
 
 ## FURPS Self-Assessment
 
@@ -1920,8 +2049,8 @@ policy to the account presenting it — a funded account could present any ancho
 policy, including one anchored for a different agent with a larger envelope — and
 the per-period ceiling used to be advisory, checked against a number the caller
 passed in. Both are fixed, redeployed and re-anchored, and the refusals are
-asserted against the *deployed binary* rather than a rebuild, and a third settlement
-has since landed under the fixed program with the period total written on chain.
+asserted against the *deployed binary* rather than a rebuild, and eleven settlements
+have since landed under the fixed program with the period total written on chain.
 **Storage skills have never touched a live node** from inside the module — the
 file-vault use case drives a real Logos Storage node through a purpose-built C
 driver, which proves the node ABI and not the skill. (The messaging skills used
@@ -1986,7 +2115,7 @@ of green checks is not the measure; the negative control beside each one is.
 
 No LEZ execution meter exists to measure on v0.2.4, so the document measures the
 budgets that do exist rather than inventing a CU number. One qualification, because
-a reviewer grepping the pinned tree will find it: `mantle::gas` **does** exist there,
+a reader grepping the pinned tree will find it: `mantle::gas` **does** exist there,
 as the bedrock L1 publish fee. It is not a compute meter for LEZ execution, and no
 figure here is derived from it. A settlement's size on the wire is read back
 from the sequencer rather than estimated, and is printed in the generated settlement
@@ -1998,26 +2127,41 @@ is one-shot per signer.
 
 ### Supportability
 
-The `CI` workflow runs six jobs — the policy crate and its adversarial tests, the
-committed program against its recorded ImageID, the C++ suites against fake ports,
-the shipped `.lgx` against the source committed beside it, a real Storage node, and
-the illustrative use cases against the public testnet. A seventh workflow runs the
+The `CI` workflow runs **eight** jobs — the policy crate and its adversarial tests,
+the committed program against its recorded ImageID, the C++ suites against fake
+ports, the shipped `.lgx` against the source committed beside it, a real Storage
+node, Logos Core loading and configuring the shipped module headless on Linux, the
+same command in a container with no compiler at all, and the illustrative use cases
+against the public testnet. This paragraph said **six** until this pass, while
+`ci.yml` held eight — the whole hazard of a count written in prose beside a file
+that grows, and the reason the eight are named here rather than counted. A single
+further job, the only one in `.github/workflows/e2e-local-sequencer.yml`, runs the
 end-to-end lifecycle against a real standalone sequencer at `RISC0_DEV_MODE=0` with
 no skip path. The CI file documents, in comments, exactly which suites do **not**
 run there and why — Qt and an installed Basecamp for the load tests, a Nim and
 `librln` build for the node drives — because a suite silently absent from CI is
 indistinguishable from one that was never written.
 
-**Do not read a badge here; run the command in blocker 2's row.** CI has been red
-on `main` three times in the recent past, and each failure is more useful than the
-green either side of it. A missing `<cstdint>` killed the skills job at its *first*
-compile step, so six suites did not run while the summary said only that one job
-had failed. The use-case job could not build `spel` against the pinned LEZ
-revision. And a coverage floor added by one piece of work began reading a line of
-output added by another — it selected the first line starting with `checked ` and
-found a skill count where it expected a path count, failing a healthy run. That
-last one is this repository's own defect class pointed at itself: two guards, each
-correct, one parsing the other. A job that fails early and a job that passes having
+**Do not read a badge here; run
+`gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.**
+All eight jobs are green on `main` as this is written, and that is a statement
+about the commits they ran on rather than a property of the repository. CI has
+been red on `main` repeatedly in the recent past — `gh run list --branch main
+--limit 20` prints the failures rather than this document counting them — and each
+failure is more useful
+than the green either side of it. Four distinct causes are worth naming, because
+each is a class rather than an accident. A missing `<cstdint>` killed the skills job at
+its *first* compile step, so six suites did not run while the summary said only
+that one job had failed. The use-case job could not build `spel` against the
+pinned LEZ revision. A coverage floor added by one piece of work began reading a
+line of output added by another — it selected the first line starting with
+`checked ` and found a skill count where it expected a path count, failing a
+healthy run. And the Agent Card negative control went vacuous when the card was
+re-signed at the price the control rewrote it to, which the control itself
+reported. That third one is this repository's own defect class pointed at itself:
+two guards, each correct, one parsing the other; the fourth is the same class
+again, a control whose mutation could collide with the value it mutates. A job
+that fails early and a job that passes having
 tested nothing look similar from the outside, which is why the workflow asserts on
 the `SKIPPED` banner as well as on exit codes. Debuggability is otherwise deliberate —
 every failure path returns JSON naming the skill and the half that failed, and
@@ -2054,21 +2198,27 @@ failed rather than blaming the wrong one.
   [deployment](docs/DEPLOYMENT.md) · [Logos app integration](docs/basecamp.md) ·
   [CU accounting](docs/benchmarks/cu-budget.md) ·
   [**limitations**](docs/limitations.md) · [stack recon](docs/recon.md)
-- **CI:** [all runs](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions)
-  · last green E2E vs a real sequencer with `RISC0_DEV_MODE=0`:
-  [31867735056](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31867735056)
-  · latest CI run on the published branch, **green**:
-  [31883389383](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31883389383)
-  · the red run before it, whose `<cstdint>` compile failure silently took six
-  suites with it:
-  [31882516164](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31882516164)
+- **CI:** [all runs](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions).
+  The `CI` workflow has eight jobs and all eight are green across the last four
+  completed, uncancelled runs on `main`. **No run id is given as the answer**, and that is deliberate
+  twice over: "latest" moves, and this branch's history has been rewritten, so
+  every id previously printed here — `31867735056`, `31883389383`, `31882516164` —
+  now names a commit `git cat-file -e` cannot find in the tree you cloned. Ask
+  instead:
+  `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`
+  and
+  `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --workflow e2e-local-sequencer.yml --branch main --limit 1`.
+  The most recent completed green E2E against a real sequencer with
+  `RISC0_DEV_MODE=0` is
+  [31929846814](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31929846814),
+  and it carries the same caveat: it ran on `91154ef`, which the rewrite removed.
 - **Reproduce from a clean clone:** `./scripts/demo.sh` (no keys, no funds, no
   sequencer) · `./scripts/deploy-agents.sh` · `./scripts/a2a-task.sh` ·
   `./scripts/e2e-local-sequencer.sh`
 
 Read [`docs/limitations.md`](docs/limitations.md) before the rest. It is written to
 say what does not work before anyone has to discover it. The defect that most
-affects a reviewer's reading of this submission is that the owner cannot approve
+affects a reader's reading of this submission is that the owner cannot approve
 a spend after anchoring a policy. It also carries the retraction of a limitation
 this submission claimed for most of its life — that a shielded agent could not be
 paid at its shielded account — which turned out to be a missing flag in a tool

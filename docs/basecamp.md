@@ -1406,9 +1406,13 @@ makes the tile's own label an assertion rather than a description:
 ```sh
 osascript -e 'tell application "System Events" to tell process "LogosBasecamp.bin" \
   to tell window "Logos Basecamp" to get name of every button'
-#   LP-0008 Agent, lp-0002-multisig, lp-0003-airdrop, Applications,
-#   Package Manager, Settings
+#   LP-0008 Agent, …, Applications, Package Manager, Settings
 ```
+
+The elision is two further tiles, for unrelated packages that happen to be
+installed in the same Basecamp on the machine this was read from. They are
+nothing to do with this module, so they are cut rather than reproduced — but
+they are why this reads as six buttons and not four.
 
 Before `app/` existed the same command returned that list without its first
 entry. That is the criterion's "accessible from the Logos app", read out of the

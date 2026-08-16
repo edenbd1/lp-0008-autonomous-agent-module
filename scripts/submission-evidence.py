@@ -144,8 +144,8 @@ B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 BEGIN = "<!-- BEGIN GENERATED %s -- scripts/submission-evidence.py; do not edit by hand -->"
 END = "<!-- END GENERATED %s -->"
 
-# Things a reviewer has closed a submission over. Checked against the rendered
-# output, not against intentions.
+# A submission document that ships any of these is describing work it has not
+# done. Checked against the rendered output, not against intentions.
 FORBIDDEN = re.compile(
     r"(?i)\bTBD\b|\bTODO\b|\bXXX\b|<<<|\bplaceholder\b|\bN/?A\b|\bcoming soon\b")
 
@@ -942,7 +942,7 @@ def section_settlements(chain, root, agents, tasks, ident):
                   if r["under"] is not None and r["under"] != shipped)
     if orphans:
         d("**%d of the %d settlements above predate the program this repository "
-          "ships.** They are kept because they are on chain and a reviewer will "
+          "ships.** They are kept because they are on chain and a reader will "
           "find them, but the criterion they support is only supported by the "
           "%d made under the current deployment."
           % (orphans, len(rows), len(rows) - orphans))
