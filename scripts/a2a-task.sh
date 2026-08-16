@@ -83,8 +83,14 @@ field() { # category header-name -> value on stdout
 # and a transfer that fails. All three agents are deployed and anchored either
 # way; which two of them transact is a fact about who holds LEZ, not about the
 # design.
-CLIENT_CAT=messaging           # pays, from its own shielded account
-SERVER_CAT=storage             # advertises a skill and gets paid
+# Overridable, because the comment above is right: which two of them transact is
+# a fact about who holds LEZ, not about the design -- and a shielded account that
+# has spent down to its last note cannot sign again, so "who can pay today" moves
+# without anything about this script changing.
+CLIENT_CAT="${A2A_CLIENT_CAT:-messaging}"   # pays, from its own shielded account
+SERVER_CAT="${A2A_SERVER_CAT:-storage}"     # advertises a skill and gets paid
+[ "$CLIENT_CAT" != "$SERVER_CAT" ] \
+  || { echo "the payer and the payee cannot be the same agent ($CLIENT_CAT)" >&2; exit 1; }
 
 CLIENT_ID=$(field $CLIENT_CAT agent_id)          || exit 1
 CLIENT_POLICY=$(field $CLIENT_CAT policy_account) || exit 1
