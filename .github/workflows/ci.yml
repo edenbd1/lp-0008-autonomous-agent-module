@@ -1328,7 +1328,16 @@ jobs:
           if n < 15:
               sys.exit('the inventory definition matched %d files: it is not seeing this tree' % n)
           print(n)")
-          got=$(sed -n 's/.*commit: \([0-9][0-9]*\) build input(s) recorded.*/\1/p' package.out)
+          # ANCHORED ON "the shipped package", not on "build input(s)". The
+          # checker grew a third banner -- the owner console -- which also says
+          # "N build input(s) recorded", so this sed started returning two
+          # numbers, `[ "31\n6" -eq 31 ]` said "integer expression expected",
+          # and a job whose subject had passed cleanly went red on its own
+          # parser. A pattern that matched exactly once is a pattern that will
+          # match twice the day something correct is added beside it.
+          got=$(sed -n 's/^OK the shipped package .*commit: \([0-9][0-9]*\) build input(s) recorded.*/\1/p' package.out)
+          [ "$(printf '%s\n' "$got" | grep -c .)" = 1 ] \
+            || { echo "expected exactly one module-package banner, got: $got"; exit 1; }
           echo "build inputs on disk=$on_disk  checked=${got:-none}"
           [ -n "$got" ] || { echo "it exited 0 without saying how many it checked"; exit 1; }
           [ "$got" -eq "$on_disk" ] \
@@ -1337,7 +1346,7 @@ jobs:
           # And the second layer really read the binary. 654 literals today; a
           # floor rather than an equality, because literals come and go with
           # ordinary edits and only "essentially none" is a defect.
-          lits=$(sed -n 's/.*unchanged, \([0-9][0-9]*\) literal(s) found.*/\1/p' package.out)
+          lits=$(sed -n 's/^OK the shipped package .*unchanged, \([0-9][0-9]*\) literal(s) found.*/\1/p' package.out)
           echo "literals cross-checked against the shipped binary=${lits:-none}"
           [ -n "$lits" ] && [ "$lits" -ge 400 ] \
             || { echo "the binary was barely read: ${lits:-0} literals"; exit 1; }
@@ -1699,7 +1708,11 @@ jobs:
           # And that the second layer really read the binaries. 111 literals
           # today; a floor rather than an equality, because literals come and go
           # with ordinary edits and only "essentially none" is a defect.
-          lits=$(sed -n 's/.*and \([0-9][0-9]*\) literal(s) found in each of them.*/\1/p' console.out)
+          # Anchored like its neighbours. This phrasing is the console's alone
+          # today, so it matches once -- but "matches once today" is exactly
+          # what the module job's pattern was, right up until a third banner
+          # was added beside it and the job went red on its own parser.
+          lits=$(sed -n 's/^OK the shipped owner console.*and \([0-9][0-9]*\) literal(s) found in each of them.*/\1/p' console.out)
           echo "console literals cross-checked against each shipped binary=${lits:-none}"
           [ -n "$lits" ] && [ "$lits" -ge 60 ] \
             || { echo "the consoles were barely read: ${lits:-0} literals"; exit 1; }
