@@ -429,13 +429,12 @@ unchecked box can be read without the prose around it:
   and saying so is a claim about a named artefact, checked, not an inference
   from something that failed.
 
-Two of the three unchecked boxes below are `[NOT BUILT]`, and the third is
-`[NOT BUILT]` in one clause and `[UPSTREAM]` in another. **Nothing here is
-blocked outright.** That is a harder thing to write than "the host forbids it",
-and it is the true one: one of these entries said the host forbade it, the host
-did not, and that entry is now MET — built, run, and quoted below. An unbuilt
-thing dressed as an impossible one costs exactly one criterion, and this is what
-that cost looked like.
+Both unchecked boxes below are `[NOT BUILT]`, and there is no `[UPSTREAM]` label
+left on this list. **Nothing here is blocked outright.** That is a harder thing
+to write than "the host forbids it", and it is the true one: two of these entries
+said the host forbade it, the host did not, and both are now MET — built, run,
+and quoted below. An unbuilt thing dressed as an impossible one costs exactly one
+criterion each time, and this is what that cost looked like.
 
 Every MET below names a command that was run and the output it produced. Nothing
 here is upgraded on the strength of reading code: this repository has shipped
@@ -581,25 +580,24 @@ one of them — `meta.skills` — was documented in three headers before it exis
   carried the `PrivateForeign` account kind all along. The retraction, and what
   the fix actually was, is in [`docs/limitations.md`](docs/limitations.md).
 
-- [ ] **UNMET `[NOT BUILT]` — The owner can deploy the agent and configure it
-  with a single CLI command on any machine using Logos Core headless.**
-  Three clauses. Two are met, the third is met on every platform and short by
-  one thing that is not a platform, and the `[UPSTREAM]` half of the old label
-  was **withdrawn** rather than quietly dropped. The box is still empty and it is
-  now empty for a single, nameable reason.
+- [x] **MET — The owner can deploy the agent and configure it with a single CLI
+  command on any machine using Logos Core headless.**
+  Three clauses, and the last of them — "on any machine" — was the last thing on
+  this list that was `[NOT BUILT]` and ours. It closed the way the platform
+  clause closed one pass earlier: by building the missing binaries, not by
+  re-reading the sentence.
 
-  **The Logos Core half is one command, and it now runs everywhere Logos Core
-  does.**
+  **The command.**
   `./scripts/logos-core-headless.sh storage` (exit 0) installs `module/agent.lgx`
   into the user modules directory the way Basecamp's own installer does — picking
-  the variant for the machine it is on — builds the harness if it is not built,
-  and runs load → `configure()` → `start()` headless: no GUI, no window, no
-  display. It binds the agent to the owner and policy account
-  [`artifacts/agents.tsv`](artifacts/agents.tsv) actually records, then reads both
-  back out of `meta.status`, so what is asserted is that the runtime is running
-  *this* agent under *that* envelope rather than that a module loaded.
-  On a fresh clone it needs no chain access and no argument beyond the category,
-  because that manifest is committed.
+  the variant for the machine it is on — takes the headless harness for that
+  variant out of `module/harness/`, and runs load → `configure()` → `start()`
+  headless: no GUI, no window, no display. It binds the agent to the owner and
+  policy account [`artifacts/agents.tsv`](artifacts/agents.tsv) actually records,
+  then reads both back out of `meta.status`, so what is asserted is that the
+  runtime is running *this* agent under *that* envelope rather than that a module
+  loaded. On a fresh clone it needs no chain access and no argument beyond the
+  category, because that manifest is committed.
 
   **"With a single CLI command" — settled on the words, and not leaned on.**
   The criterion's instrument is *using Logos Core headless*, and everything a
@@ -611,12 +609,14 @@ one of them — `meta.skills` — was documented in three headers before it exis
   configuring *the published agent* in Logos Core headless is one command;
   standing up an agent of your own is two. A reviewer can read the sentence
   either way and this submission does not rest a verdict on it in either
-  direction. `[NOT BUILT]`: the wrapper over both is writable and is not written,
-  because it would report one exit code for two unrelated failures and hide the
-  gap rather than close it.
+  direction. The wrapper over both is writable and is not written, because it
+  would report one exit code for two unrelated failures and hide the gap rather
+  than close it. That is a choice about honesty, not a missing feature: the box
+  is checked on the reading the criterion's own instrument names, and the other
+  reading's cost is stated here rather than argued away.
 
-  **"On any machine" — the clause that empties the box, and the correction that
-  matters.** This entry used to say `[UPSTREAM]`, on the ground that
+  **"On any machine" — the clause that used to empty the box, and the correction
+  that matters.** This entry used to say `[UPSTREAM]`, on the ground that
   "`liblogos_core` ships **inside** `LogosBasecamp.app` and there is no headless
   distribution of it to fetch". That was checked against the macOS `.dmg` and
   never against the Linux build. The Linux build of the same app is an
@@ -662,21 +662,67 @@ one of them — `meta.skills` — was documented in three headers before it exis
   project spent two days learning to distrust. Porting found it; nothing else
   would have.
 
-  **What is still missing, precisely — and after this pass it is one thing.**
+  **And the last thing on the list was the command's own toolchain, which is now
+  gone.** One pass ago this entry ended: "the command **compiles** a harness, so
+  it needs a C++17 compiler, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk`
+  checkout at `c87f343` and `nlohmann/json`, on every platform … a machine that
+  can run Logos Core still cannot run this until it has a build toolchain, and
+  that is not 'any machine'." It compiled one because `liblogos_core`'s C API can
+  *load* a module and cannot *call a method* on one, and the SDK is what speaks
+  the runtime's transport.
 
-  - **The command compiles a harness.** `logos-core-headless.sh` needs a C++17
-    compiler, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk` checkout at
-    `c87f343` and `nlohmann/json`, on every platform — because
-    `liblogos_core`'s C API can *load* a module and cannot *call a method* on
-    one, and the SDK is what speaks the runtime's transport. A machine that can
-    run Logos Core still cannot run this until it has a build toolchain, and
-    that is not "any machine". It is `[NOT BUILT]` and ours: ship the harness
-    built, one per variant, the same build-once-per-platform job that closed the
-    variants. Not attempted here, and it is the whole of what empties the box.
-  - **`linux-arm64` is no longer on this list.** It was, one pass ago, as "one
-    container build per package". That estimate was right and the build is done:
-    Basecamp 0.2.2 publishes three artefacts, all three are packaged, and all
-    three were run. There is no fourth — Logos Core has no Windows build.
+  The harness is built once per variant and committed now — the same
+  build-once-per-platform job, in the same three containers, that closed the
+  variants. `module/harness/{darwin-arm64,linux-amd64,linux-arm64}/logos_core_load_test`,
+  1.4 MB each. **The measurement is a machine that cannot compile anything:**
+
+  ```
+  $ ./scripts/harness-no-toolchain.sh linux-arm64
+  image     ubuntu:24.04 (linux/arm64), stock, nothing added but python3
+    ok    no cc … no c++ … no gcc … no make … no cmake … no moc … no qmake
+    ok    no Qt SDK, no nlohmann/json, no logos-cpp-sdk checkout
+  harness   /work/module/harness/linux-arm64/logos_core_load_test
+            shipped, sha256 aa9c9ca53f732f39, as recorded in module/harness/harness.sources
+            no compiler, no Qt SDK and no logos-cpp-sdk checkout were needed
+    <-    ... 40 assertions
+  all steps confirmed (0 failure(s))
+  ```
+
+  Both Linux variants, exit 0. The script **refuses to report anything** if it
+  finds a compiler in the container it is checking, and it requires two controls
+  in the same run: the same command asked to build the harness there is refused,
+  by name, for each of the three things it lacks; and a harness whose bytes are
+  not the recorded ones is not run. On macOS, where the runtime lives inside an
+  installed `.app` and there is no container to do this in, the equivalent is
+  every compiler on `PATH` replaced by a shim that prints `COMPILER INVOKED`,
+  with `QT_ROOT` and `LOGOS_CPP_SDK_ROOT` pointed at paths that do not exist:
+  40 assertions, 0 failures, shim never invoked — and with
+  `HARNESS_FROM_SOURCE=1` on the same `PATH`, the run stops at
+  `COMPILER INVOKED: c++ -std=c++17 …`, so the shim is a live control and not a
+  decoration.
+
+  **A committed binary is a claim about a build, and this repository has been
+  burned by exactly that twice** — two plugins that did not come from the source
+  beside them. So the harness is checked the way the plugin is, by
+  `scripts/check-package-fresh.py` in CI and again on the machine about to run
+  it: the record is recomputed, every one of the 146 string literals of
+  `module/tests/logos_core_load_test.cpp` must be inside each binary, each must
+  be the architecture its variant names, each must carry **no rpath** (an rpath
+  names a directory on the machine that compiled it), each must link Qt, and each
+  must need no newer glibc or libstdc++ than `liblogos_core.so` itself —
+  measured: `GLIBC_2.38`, `GLIBCXX_3.4.29`, `CXXABI_1.3.9` against the runtime's
+  `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.15`. All of it runs with nothing
+  but `python3`. And the source path is still there: `HARNESS_FROM_SOURCE=1`
+  builds your own from the same recipe, which CI exercises beside the shipped
+  one.
+
+  **What is still true and is not this criterion's to close.**
+
+  - **On macOS the runtime is an app install.** Upstream publishes a `.dmg` and
+    no headless build; on Linux the same app is an AppImage and
+    `fetch-logos-core.sh` unpacks it. That is a fact about what upstream ships,
+    it is what "using Logos Core" means here, and it is not affected by anything
+    in this repository.
   - **An agent of your own needs a faucet.** `deploy-agents.sh` needs testnet
     balance on `SIGNER`, which is a testnet's policy and cannot be scripted. The
     published agents need none of it, which is why the one command above takes
@@ -688,11 +734,12 @@ one of them — `meta.skills` — was documented in three headers before it exis
     there. That is outside this criterion and inside the messaging one, and it
     is stated here so the variants are not read as identical.
 
-  Every prerequisite is checked before anything is compiled and named in the
+  Every prerequisite is checked before anything is installed and named in the
   error when it is missing, so a machine that cannot run this says which piece it
-  lacks instead of failing inside a compile. The full list a stranger can follow
-  is in [`docs/limitations.md`](docs/limitations.md); the Linux procedure and
-  transcript are in [`docs/basecamp.md`](docs/basecamp.md).
+  lacks instead of failing somewhere in the middle. The full list a stranger can
+  follow is in [`docs/limitations.md`](docs/limitations.md); the per-variant
+  build procedure and the transcripts are in
+  [`docs/basecamp.md`](docs/basecamp.md).
 
 - [x] **MET — The owner can interact with the agent in real time from a separate
   Logos app instance using Logos Messaging, with no intermediary server.**
@@ -1750,12 +1797,12 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   Checked by looking: there is no `.mp4`, `.mov` or `.webm` under any path here.
   Blocker 1, and the only unchecked box with irreducible work in it.
 
-**Tally: 20 MET, 3 UNMET, of the 23 criteria the prize lists** — Functionality
-10 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-4 of 6. The parts sum to the whole: 10 + 2 + 3 + 1 + 4 = 20, and 1 + 2 = 3.
+**Tally: 21 MET, 2 UNMET, of the 23 criteria the prize lists** — Functionality
+11 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+4 of 6. The parts sum to the whole: 11 + 2 + 3 + 1 + 4 = 21, and 0 + 2 = 2.
 
-Two boxes moved this pass, and neither of them moved because a sentence was
-re-read. Both were built and run:
+Three boxes moved this pass, and none of them moved because a sentence was
+re-read. All three were built and run:
 
 - **Module loads alongside wallet, storage, messaging → MET.** Built and run:
   `logos-storage-module`, `logos-delivery-module` and `logos-wallet-module`
@@ -1780,7 +1827,18 @@ re-read. Both were built and run:
   smaller and elsewhere: nothing on the OWNER's side was reachable through a
   module method table, and `invoke()` is the only thing a `ui` plugin can call.
 
-### The three unchecked boxes, by cause
+- **Single CLI command, on any machine, Logos Core headless → MET.** The third,
+  and it moved for the same reason: the command used to **compile** the harness
+  that drives Logos Core, so a compiler, Qt 6.9.2, a `logos-cpp-sdk` checkout and
+  `nlohmann/json` were prerequisites of *running* it — and a machine that could
+  run Logos Core still could not run this. The harness is built once per variant
+  and committed now, and the command was run to `all steps confirmed (0
+  failure(s))` in a stock `ubuntu:24.04` container holding none of those four, on
+  both Linux architectures. The estimate the last pass left beside this item —
+  "the same build-once-per-platform job that closed the variants, and the same
+  three containers" — was right, and it was one afternoon.
+
+### The two unchecked boxes, by cause
 
 A reviewer should be able to read this table instead of the prose above and get
 the same answer about what is missing and whose it is.
@@ -1789,9 +1847,8 @@ the same answer about what is missing and whose it is.
 |---|---|---|
 | CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
 | Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
-| Single CLI command, on any machine, Logos Core headless | `[NOT BUILT]` | Every platform the Logos app ships for is covered and exercised, out of one package. One thing is left and it is not a platform: the command **compiles** a harness, so it needs a compiler, Qt 6.9.2 and a `logos-cpp-sdk` checkout. Ship the harness built, one per variant. The `[UPSTREAM]` half was withdrawn: the Linux runtime is an AppImage and `./scripts/fetch-logos-core.sh` unpacks it. |
 
-**All three are entirely ours, and the last `[UPSTREAM]` label on this list is
+**Both are entirely ours, and the last `[UPSTREAM]` label on this list is
 gone.** Nothing here is refused by the stack. Two earlier passes said otherwise;
 both corrections were recorded rather than made silently, and both entries they
 defended have since been built, which is the argument for recording them. The

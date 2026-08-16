@@ -19,8 +19,11 @@
 #   1. installs `module/agent.lgx` into the user modules directory Logos Core
 #      reads, flattening the variant for this platform the way Basecamp's own
 #      installer does (dropping the archive in does nothing);
-#   2. builds the headless harness if it is not already built, from
-#      `module/tests/logos_core_load_test.cpp`;
+#   2. takes the harness for this platform out of `module/harness/<variant>/`,
+#      built and committed the way the plugin is, after checking it against the
+#      record in `module/harness/harness.sources` — or compiles it from
+#      `module/tests/logos_core_load_test.cpp` when there is none for this
+#      variant, or when HARNESS_FROM_SOURCE=1 asks for that;
 #   3. runs it: `logos_core_init` → `logos_core_add_modules_dir` (embedded and
 #      user) → `set_persistence_base_path` → `set_access_policy` →
 #      `logos_core_start` → `logos_core_load_module`, then `configure()` and
@@ -36,17 +39,37 @@
 #
 # WHERE IT RUNS
 #
-# macOS arm64 and x86-64 Linux, out of the same `module/agent.lgx` — it installs
-# the variant for the machine it is on, and refuses rather than installing
-# another platform's binary into a directory that would then look complete.
+# Every platform the Logos app is published for — macOS arm64, x86-64 Linux and
+# aarch64 Linux — out of the same `module/agent.lgx` and the same
+# `module/harness`. It installs the variant for the machine it is on, and
+# refuses rather than installing another platform's binary into a directory that
+# would then look complete.
 #
 # WHAT IT DOES NOT DO, AND WILL NOT PRETEND TO
 #
-# It is one command on a PREPARED machine: a Logos Core runtime, Qt 6.9.2 and a
-# logos-cpp-sdk checkout. Every one of those is checked below and named in the
-# error when it is missing, so a machine that cannot run this says which piece
-# it lacks instead of failing somewhere inside a compile. docs/limitations.md
-# carries the same list as prose.
+# It needs a Logos Core runtime, and on macOS that means an installed
+# LogosBasecamp.app; on Linux `scripts/fetch-logos-core.sh` unpacks the
+# published AppImage in one checksum-pinned command. Every prerequisite is
+# checked below and named in the error when it is missing, so a machine that
+# cannot run this says which piece it lacks instead of failing somewhere inside
+# a compile. docs/limitations.md carries the same list as prose.
+#
+# What it no longer needs is a BUILD TOOLCHAIN. It used to compile the harness
+# on every machine, so a C++17 compiler, Qt 6.9.2 with qtremoteobjects, a
+# logos-cpp-sdk checkout and nlohmann/json were prerequisites of *running* it —
+# and "a machine that can run Logos Core still cannot run this" is not "any
+# machine". The harness is now built once per variant, committed under
+# `module/harness/`, and checked against its source the way the plugin is
+# (`scripts/check-package-fresh.py`). The four toolchain prerequisites are
+# needed only by whoever rebuilds it:
+#
+#     ./scripts/logos-core-headless.sh --build-harness   # build and record it
+#     HARNESS_FROM_SOURCE=1 ./scripts/logos-core-headless.sh storage
+#
+# The shipped harness resolves Qt from the Logos app's own bundled 6.9.2 —
+# `$APP/usr/lib` on Linux, `$APP/Contents/Frameworks` on macOS — rather than
+# from a Qt SDK that a machine without a toolchain does not have. That is the
+# same Qt `logos_host` loads the plugin under, so it cannot skew from it.
 #
 # This comment used to say the runtime half "cannot be one command on a bare
 # machine: liblogos_core ships inside the app and there is no headless
@@ -77,10 +100,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 ALONGSIDE=0
+BUILD_HARNESS=0
 args=()
 for a in "$@"; do
   case "$a" in
     --alongside) ALONGSIDE=1 ;;
+    --build-harness) BUILD_HARNESS=1 ;;
     *) args+=("$a") ;;
   esac
 done
@@ -90,7 +115,7 @@ CATEGORY="${1:-${AGENT_CATEGORY:-storage}}"
 MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
 LGX="${LGX:-module/agent.lgx}"
 MODULE_NAME="${MODULE_NAME:-agent}"
-BUILD="${HEADLESS_BUILD_DIR:-build-headless}"
+BUILD=""   # build-headless/<variant>; set once the variant is known, below
 COMPANIONS_DIR="${COMPANIONS_DIR:-$ROOT/build-companions}"
 # The modules the criterion names, by the name each one calls itself in its own
 # metadata.json. Spelled out rather than globbed: a package that failed to build
@@ -114,14 +139,25 @@ case "$(uname -s)" in
             -I"$QT_ROOT/lib/QtCore.framework/Headers"
             -I"$QT_ROOT/lib/QtRemoteObjects.framework/Headers"
             -I"$QT_ROOT/lib/QtNetwork.framework/Headers")
-    QT_LINK=(-framework QtCore -framework QtRemoteObjects -framework QtNetwork
-             -Wl,-rpath,"$QT_ROOT/lib")
-    CORE_RPATH=(-Wl,-undefined,dynamic_lookup -Wl,-rpath,"$APP/Contents/Frameworks")
+    QT_LINK=(-framework QtCore -framework QtRemoteObjects -framework QtNetwork)
+    CORE_LINK=(-Wl,-undefined,dynamic_lookup)
+    # Only for a harness built HERE, for here. The shipped one is linked with
+    # neither of these: an LC_RPATH naming the build machine's Qt is a path that
+    # exists on one computer, and scripts/check-package-fresh.py refuses a
+    # shipped harness that carries one.
+    LOCAL_RPATH=(-Wl,-rpath,"$QT_ROOT/lib" -Wl,-rpath,"$APP/Contents/Frameworks")
     EXTRA_INC="${EXTRA_INCLUDE_DIR:-/opt/homebrew/include}"
     DEFAULT_VARIANT="darwin-arm64"
     # Nothing to prepend: `-rpath QT_ROOT/lib` is linked into the harness ahead of
     # the app's Frameworks directory, so one Qt serves both.
     RUN_LD_PATH=""
+    # The shipped harness has no rpath at all, so this is how it finds Qt — the
+    # app's own frameworks, which is the Qt `logos_host` loads the plugin under.
+    # dyld resolves an `@rpath/QtCore.framework/...` install name out of
+    # DYLD_FRAMEWORK_PATH, and this process is not a restricted one, so the
+    # variable is not stripped.
+    RUN_FRAMEWORK_PATH="$APP/Contents/Frameworks"
+    QT_RUNTIME_CHECK="$APP/Contents/Frameworks/QtRemoteObjects.framework"
     ;;
   Linux)
     # The Linux Logos app is an AppImage, and an unpacked AppImage and an
@@ -147,8 +183,7 @@ case "$(uname -s)" in
     QT_ROOT="${QT_ROOT:-$HOME/logos/Qt/6.9.2/$QT_ARCH_DIR}"
     QT_INC=(-I"$QT_ROOT/include" -I"$QT_ROOT/include/QtCore"
             -I"$QT_ROOT/include/QtRemoteObjects" -I"$QT_ROOT/include/QtNetwork")
-    QT_LINK=(-L"$QT_ROOT/lib" -lQt6Core -lQt6RemoteObjects -lQt6Network
-             -Wl,-rpath,"$QT_ROOT/lib")
+    QT_LINK=(-L"$QT_ROOT/lib" -lQt6Core -lQt6RemoteObjects -lQt6Network)
     # The harness LINKS the runtime here, where macOS only defers to it.
     # `-undefined dynamic_lookup` is a Mach-O feature and has no ELF equivalent
     # for an executable: `--allow-shlib-undefined` governs undefined symbols in
@@ -158,9 +193,11 @@ case "$(uname -s)" in
     # This does not change what is being tested: the runtime is still opened by
     # path at run time, and `token_manager.cpp` is still not compiled in — a
     # second copy of that singleton is the failure the note below describes.
-    CORE_RPATH=(-Wl,--allow-shlib-undefined
-                -L"$(dirname "$CORE_LIB")" -llogos_core
-                -Wl,-rpath,"$(dirname "$CORE_LIB")")
+    CORE_LINK=(-Wl,--allow-shlib-undefined
+               -L"$(dirname "$CORE_LIB")" -llogos_core)
+    # Only for a harness built HERE, for here — see the macOS note above. Both
+    # of these name directories on the machine that ran the compiler.
+    LOCAL_RPATH=(-Wl,-rpath,"$QT_ROOT/lib" -Wl,-rpath,"$(dirname "$CORE_LIB")")
     EXTRA_INC="${EXTRA_INCLUDE_DIR:-/usr/include}"
     # Qt from QT_ROOT first, then the app's own directory for everything else it
     # bundles (boost, spdlog, its own OpenSSL). A dependency is resolved from
@@ -170,11 +207,16 @@ case "$(uname -s)" in
     # This is the same ordering macOS gets for free: there, `-rpath QT_ROOT/lib`
     # is linked into the harness ahead of the app's Frameworks directory.
     RUN_LD_PATH="$QT_ROOT/lib:$APP/usr/lib"
+    # The shipped harness has no RUNPATH, and no Qt SDK is on the machine to put
+    # in one. It runs against the app's own Qt 6.9.2 — the same libraries
+    # `logos_host` loads the plugin under, which is the one Qt that cannot skew
+    # from the runtime. liblogos_core.so is in the same directory.
+    RUN_LD_PATH_SHIPPED="$APP/usr/lib"
+    QT_RUNTIME_CHECK="$APP/usr/lib/libQt6RemoteObjects.so.6"
     ;;
   *) die "unsupported platform: $(uname -s)" ;;
 esac
 SDK="${LOGOS_CPP_SDK_ROOT:-$HOME/logos/src/logos-cpp-sdk}"
-PERSISTENCE="${LOGOS_PERSISTENCE_DIR:-$BUILD/persistence}"
 
 # `--alongside` installs four modules rather than one, and it does that into a
 # directory of its own unless told otherwise. Not because the real one would not
@@ -187,12 +229,70 @@ if [ "$ALONGSIDE" -eq 1 ] && [ -z "${LOGOS_MODULES_DIR:-}" ]; then
   USER_MODULES="$COMPANIONS_DIR/modules"
 fi
 
+# ── which harness runs, decided before anything is checked ────────────────
+#
+# The harness is a real program: it drives `liblogos_core`'s C API and then
+# calls the loaded module across the runtime's own transport through
+# logos-cpp-sdk, because that C API can *load* a module and cannot *call a
+# method* on one. It used to be COMPILED on every run, which made a C++17
+# compiler, Qt 6.9.2 with qtremoteobjects, a logos-cpp-sdk checkout and
+# nlohmann/json prerequisites of *running this command at all* — so a machine
+# that could run Logos Core still could not run this until it had a build
+# toolchain.
+#
+# It is therefore built once per variant and committed, exactly as the plugin
+# is: `module/harness/<variant>/logos_core_load_test`, with
+# `module/harness/harness.sources` recording what each one was built from and
+# `scripts/check-package-fresh.py` checking the shipped bytes against the
+# committed source. This block decides which harness runs, and the prerequisite
+# list below follows from that decision instead of being the same list every
+# time.
+#
+# The variant is settled here rather than at install time because the harness is
+# per-variant too, and because a machine this package has no variant for should
+# say so before it checks for a Qt it does not need.
+VARIANT="${LGX_VARIANT:-$DEFAULT_VARIANT}"
+
+# Per variant, because the three variants are built out of ONE checkout shared
+# into three containers — that is how they are built, and it is what
+# docs/basecamp.md tells the next person to do. With a single build directory
+# the Mach-O `.o` files from the macOS build are newer than the SDK sources the
+# Linux build reads, so the Linux run skips compiling them and hands Mach-O
+# objects to `ld`; and a harness built on macOS is "up to date" for a Linux run,
+# which then dies of `Exec format error` several steps into a deployment.
+BUILD="${HEADLESS_BUILD_DIR:-build-headless/$VARIANT}"
+PERSISTENCE="${LOGOS_PERSISTENCE_DIR:-$BUILD/persistence}"
+HARNESS_DIR="$ROOT/module/harness"
+HARNESS_RECORD="$HARNESS_DIR/harness.sources"
+SHIPPED_HARNESS="$HARNESS_DIR/$VARIANT/logos_core_load_test"
+SRC=module/tests/logos_core_load_test.cpp
+
+if [ -n "${HARNESS_BIN:-}" ]; then
+  HARNESS="$HARNESS_BIN"; HARNESS_MODE=given
+elif [ "$BUILD_HARNESS" -eq 1 ]; then
+  HARNESS="$SHIPPED_HARNESS"; HARNESS_MODE=build
+elif [ "${HARNESS_FROM_SOURCE:-0}" = 1 ]; then
+  HARNESS="$BUILD/logos_core_load_test"; HARNESS_MODE=source
+elif [ -x "$SHIPPED_HARNESS" ]; then
+  HARNESS="$SHIPPED_HARNESS"; HARNESS_MODE=shipped
+else
+  HARNESS="$BUILD/logos_core_load_test"; HARNESS_MODE=source
+fi
+
 # ── the prerequisites, each named individually ────────────────────────────
 missing=0
 need() { # path description how-to-get-it
   if [ ! -e "$1" ]; then
     echo "missing: $2" >&2
     echo "         expected at $1" >&2
+    echo "         $3" >&2
+    missing=$((missing + 1))
+  fi
+}
+need_cmd() { # command description how-to-get-it
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing: $2" >&2
+    echo "         no '$1' on PATH" >&2
     echo "         $3" >&2
     missing=$((missing + 1))
   fi
@@ -207,17 +307,127 @@ need "$HOST_BIN"  "logos_host (runs core modules in their own process)" \
      "set LOGOS_HOST_PATH. Without it the runtime logs 'logos_host not found' and the load fails."
 need "$EMBEDDED_DIR" "the app's embedded modules directory" \
      "set LOGOS_EMBEDDED_MODULES."
-need "$QT_ROOT"   "Qt 6.9.2" \
-     "aqtinstall: python3 -m aqt install-qt <host> desktop 6.9.2 <arch> -m qtremoteobjects — see docs/basecamp.md. Set QT_ROOT."
-need "$SDK/cpp/logos_api.cpp" "logos-cpp-sdk checkout" \
-     "clone https://github.com/logos-co/logos-cpp-sdk and set LOGOS_CPP_SDK_ROOT."
 need "$LGX"       "the packaged module" \
      "module/agent.lgx is committed; run module/package-basecamp.sh to rebuild it."
+
+# The toolchain is a prerequisite of BUILDING the harness and of nothing else.
+# Checked only in the modes that build one, so that a machine which merely runs
+# the shipped binary is not told it needs a compiler it will never invoke.
+if [ "$HARNESS_MODE" = source ] || [ "$HARNESS_MODE" = build ]; then
+  # Why this machine is being asked for a compiler at all, which is not the same
+  # sentence in the three cases that get here: it asked to build one, there is
+  # no committed harness for this variant, or there is one and it was declined.
+  if [ -x "$SHIPPED_HARNESS" ]; then
+    WHY_BUILD="module/harness/$VARIANT/logos_core_load_test is committed and needs no toolchain; unset HARNESS_FROM_SOURCE to use it."
+  else
+    WHY_BUILD="there is no committed harness for '$VARIANT' — module/harness holds $(ls "$HARNESS_DIR" 2>/dev/null | grep -v harness.sources | tr '\n' ' ')— so this variant can only be built here."
+  fi
+  need_cmd c++    "a C++17 compiler" \
+       "install one (build-essential, or Xcode command line tools). $WHY_BUILD"
+  need "$QT_ROOT" "Qt 6.9.2" \
+       "aqtinstall: python3 -m aqt install-qt <host> desktop 6.9.2 <arch> -m qtremoteobjects — see docs/basecamp.md. Set QT_ROOT."
+  need "$SDK/cpp/logos_api.cpp" "logos-cpp-sdk checkout" \
+       "clone https://github.com/logos-co/logos-cpp-sdk and set LOGOS_CPP_SDK_ROOT."
+else
+  # What the shipped harness needs instead, and it is not a toolchain: the Qt
+  # the Logos app itself bundles. Named here rather than left to the dynamic
+  # loader, whose message for a missing one is `error while loading shared
+  # libraries` with no mention of Logos at all.
+  need "$QT_RUNTIME_CHECK" "the Logos app's own Qt 6.9.2 libraries" \
+       "the shipped harness resolves Qt from the runtime you already have, so this is part of the Logos Core install above rather than a separate download. On Linux ./scripts/fetch-logos-core.sh unpacks it with the rest of the AppImage."
+  need "$HARNESS_RECORD" "module/harness/harness.sources" \
+       "it is committed beside the harness binaries and says which source each was built from; without it the shipped binary cannot be checked and is not run."
+fi
+
 [ "$missing" -eq 0 ] || die "
-$missing prerequisite(s) missing. This command is one command on a prepared
-machine; docs/limitations.md lists what 'prepared' means, and which of these can
-be fetched (on Linux, the runtime: ./scripts/fetch-logos-core.sh) and which
-cannot."
+$missing prerequisite(s) missing. docs/limitations.md lists what this command
+needs, and which of these can be fetched (on Linux, the runtime:
+./scripts/fetch-logos-core.sh) and which cannot. Building the harness rather
+than using the committed one additionally needs a toolchain; that is what
+HARNESS_FROM_SOURCE=1 and --build-harness ask for."
+
+# ── the harness: one recipe, two destinations ─────────────────────────────
+#
+# A plain compile, not a CMake target, so it cannot silently stop being built.
+# `token_manager.cpp` is deliberately NOT among the SDK translation units: it
+# holds a singleton, and compiling a second copy into this executable makes it
+# win the symbol, start empty, and reject every call to the module with "auth
+# token not recognized" — which reads like a permissions problem and is not.
+#
+# The only difference between the harness built here for the machine it is on
+# and the one committed for every variant is the rpaths: the shipped binary
+# carries none, because every rpath this script can offer names a directory on
+# the machine that ran the compiler — `$QT_ROOT/lib`, or wherever this operator
+# happened to unpack the AppImage. It finds Qt and the runtime through the
+# environment the run step sets instead, out of the Logos app itself.
+# `check-package-fresh.py` refuses a shipped harness that carries an rpath, so
+# this is asserted rather than intended.
+#
+# One recipe, because a second one for the shipped binary is a second one to
+# drift: what a reviewer builds from source and what this repository ships are
+# then no longer the same program, and the "you can rebuild it yourself" answer
+# stops meaning anything.
+compile_harness() { # output-path with-local-rpaths(0|1)
+  local out="$1" want_rpaths="$2" rpaths=()
+  local MOC="$QT_ROOT/libexec/moc"
+  [ -x "$MOC" ] || die "no moc at $MOC (an incomplete Qt install: see docs/basecamp.md)"
+  mkdir -p "$BUILD/sdkobj" "$(dirname "$out")" || die "could not create $(dirname "$out")"
+  (
+    cd "$BUILD/sdkobj" || exit 1
+    for h in logos_api logos_api_client logos_api_consumer logos_api_provider \
+             module_proxy qt_provider_object; do
+      "$MOC" "$SDK/cpp/$h.h" -o "moc_$h.cpp" -I"$SDK/cpp" -I"$SDK/core" || exit 1
+    done
+    # module_proxy.cpp and qt_provider_object.cpp #include their own moc output,
+    # so `-I.` finds it and their moc_*.cpp is not a translation unit of its own
+    # — compiling it as one is a duplicate-symbol link error.
+    for f in "$SDK/cpp/logos_api.cpp" "$SDK/cpp/logos_api_client.cpp" \
+             "$SDK/cpp/logos_api_consumer.cpp" "$SDK/cpp/logos_api_provider.cpp" \
+             "$SDK/cpp/module_proxy.cpp" "$SDK/cpp/logos_provider_object.cpp" \
+             "$SDK/cpp/qt_provider_object.cpp" "$SDK/cpp/logos_types.cpp" \
+             moc_logos_api.cpp moc_logos_api_client.cpp \
+             moc_logos_api_consumer.cpp moc_logos_api_provider.cpp; do
+      o="$(basename "${f%.cpp}").o"
+      [ -f "$o" ] && [ "$o" -nt "$f" ] && continue
+      c++ -std=c++17 -c -I. -I"$SDK/cpp" -I"$SDK/core" -I"$EXTRA_INC" \
+          "${QT_INC[@]}" "$f" -o "$o" || exit 1
+    done
+  ) || die "the SDK translation units did not build"
+
+  [ "$want_rpaths" -eq 1 ] && rpaths=("${LOCAL_RPATH[@]}")
+  c++ -std=c++17 -o "$out" "$SRC" "$BUILD"/sdkobj/*.o \
+      -I"$SDK/cpp" -I"$SDK/core" -I"$EXTRA_INC" "${QT_INC[@]}" \
+      "${QT_LINK[@]}" "${CORE_LINK[@]}" ${rpaths[@]+"${rpaths[@]}"} \
+    || die "the harness did not build"
+}
+
+# ── --build-harness: build the committed one, for this variant, and stop ──
+#
+# One variant per machine, the way the plugin is packaged one variant per
+# machine: this is what runs in each of the three containers docs/basecamp.md
+# names. It writes module/harness/harness.sources, which records what the
+# binary was built from — the same provenance record module/agent.lgx.sources
+# is, checked by the same script.
+if [ "$BUILD_HARNESS" -eq 1 ]; then
+  echo "build     $SHIPPED_HARNESS"
+  echo "          variant $VARIANT, no rpath, Qt resolved from the app at run time"
+  rm -f "$SHIPPED_HARNESS"
+  compile_harness "$SHIPPED_HARNESS" 0
+  echo "          built"
+  echo
+  QT_VERSIONS="$("$QT_ROOT/libexec/moc" --version 2>/dev/null | head -n1)" \
+  COMPILER="$(c++ --version 2>/dev/null | head -n1)" \
+  SDK_REVISION="$(git -C "$SDK" rev-parse HEAD 2>/dev/null)" \
+  BUILT_ON="$(uname -srm)" \
+  LOGOS_CPP_SDK_ROOT="$SDK" \
+    python3 "$ROOT/scripts/write-harness-record.py" "$VARIANT" "$SHIPPED_HARNESS" \
+    || die "the harness was built and the record was not written; the binary is
+not usable until it is, because the run step checks the binary against it."
+  echo
+  echo "Now check it the way CI does, from the source in this commit:"
+  echo "  ./scripts/check-package-fresh.py"
+  exit 0
+fi
 
 # ── the agent this run configures ─────────────────────────────────────────
 #
@@ -356,50 +566,67 @@ them, or the run below would be proving something else."
 fi
 echo
 
-# ── 2. build the harness, if it is not already built ──────────────────────
+# ── 2. the harness for this variant ───────────────────────────────────────
 #
-# A plain compile, not a CMake target, so it cannot silently stop being built.
-# `token_manager.cpp` is deliberately NOT among the SDK translation units: it
-# holds a singleton, and compiling a second copy into this executable makes it
-# win the symbol, start empty, and reject every call to the module with "auth
-# token not recognized" — which reads like a permissions problem and is not.
-HARNESS="$BUILD/logos_core_load_test"
-SRC=module/tests/logos_core_load_test.cpp
-mkdir -p "$BUILD/sdkobj"
-if [ ! -x "$HARNESS" ] || [ "$SRC" -nt "$HARNESS" ]; then
-  echo "build     $HARNESS"
-  MOC="$QT_ROOT/libexec/moc"
-  [ -x "$MOC" ] || die "no moc at $MOC (an incomplete Qt install: see docs/basecamp.md)"
-  (
-    cd "$BUILD/sdkobj" || exit 1
-    for h in logos_api logos_api_client logos_api_consumer logos_api_provider \
-             module_proxy qt_provider_object; do
-      "$MOC" "$SDK/cpp/$h.h" -o "moc_$h.cpp" -I"$SDK/cpp" -I"$SDK/core" || exit 1
-    done
-    # module_proxy.cpp and qt_provider_object.cpp #include their own moc output,
-    # so `-I.` finds it and their moc_*.cpp is not a translation unit of its own
-    # — compiling it as one is a duplicate-symbol link error.
-    for f in "$SDK/cpp/logos_api.cpp" "$SDK/cpp/logos_api_client.cpp" \
-             "$SDK/cpp/logos_api_consumer.cpp" "$SDK/cpp/logos_api_provider.cpp" \
-             "$SDK/cpp/module_proxy.cpp" "$SDK/cpp/logos_provider_object.cpp" \
-             "$SDK/cpp/qt_provider_object.cpp" "$SDK/cpp/logos_types.cpp" \
-             moc_logos_api.cpp moc_logos_api_client.cpp \
-             moc_logos_api_consumer.cpp moc_logos_api_provider.cpp; do
-      o="$(basename "${f%.cpp}").o"
-      [ -f "$o" ] && [ "$o" -nt "$f" ] && continue
-      c++ -std=c++17 -c -I. -I"$SDK/cpp" -I"$SDK/core" -I"$EXTRA_INC" \
-          "${QT_INC[@]}" "$f" -o "$o" || exit 1
-    done
-  ) || die "the SDK translation units did not build"
+# Shipped by default: `module/harness/<variant>/logos_core_load_test`, built
+# once per variant and committed, so this step needs no compiler, no Qt SDK, no
+# logos-cpp-sdk checkout and no nlohmann/json. What it does need is the record
+# beside it, because a binary in a repository says nothing about where it came
+# from — the same reason `module/agent.lgx.sources` exists.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
 
-  c++ -std=c++17 -o "$HARNESS" "$SRC" "$BUILD"/sdkobj/*.o \
-      -I"$SDK/cpp" -I"$SDK/core" -I"$EXTRA_INC" "${QT_INC[@]}" \
-      "${QT_LINK[@]}" "${CORE_RPATH[@]}" \
-    || die "the harness did not build"
-  echo "          built"
-else
-  echo "build     $HARNESS  (up to date)"
-fi
+case "$HARNESS_MODE" in
+  given)
+    [ -x "$HARNESS" ] || die "HARNESS_BIN=$HARNESS is not an executable file"
+    echo "harness   $HARNESS  (HARNESS_BIN, not checked against any record)"
+    ;;
+
+  shipped)
+    # The record is checked HERE and not only in CI, because the machine that
+    # runs this command is usually not the machine that runs CI, and a binary
+    # nobody checked is exactly what the .lgx defects taught this repository not
+    # to run. This is the cheap half — the bytes are the bytes that were
+    # recorded; `scripts/check-package-fresh.py` is the half that also reads the
+    # source those bytes came from.
+    want=$(python3 -c "
+import json,sys
+rec=json.load(open(sys.argv[1]))
+v=(rec.get('variants') or {}).get(sys.argv[2])
+print((v or {}).get('sha256') or '')" "$HARNESS_RECORD" "$VARIANT") \
+      || die "could not read $HARNESS_RECORD"
+    [ -n "$want" ] || die "
+$HARNESS_RECORD records no '$VARIANT' harness, and there is a binary at
+$SHIPPED_HARNESS.
+An unrecorded binary is not run: build it with ./scripts/logos-core-headless.sh
+--build-harness, which writes the record, or delete it and let this command
+compile one from source."
+    got=$(sha256_of "$HARNESS")
+    [ "$got" = "$want" ] || die "
+the shipped harness is not the binary the record was written for:
+  $SHIPPED_HARNESS
+  sha256 $got
+  record $want
+Refusing to run it. Either the file was modified after it was recorded, or the
+record was. ./scripts/check-package-fresh.py says which."
+    echo "harness   $SHIPPED_HARNESS"
+    echo "          shipped, sha256 ${got:0:16}, as recorded in module/harness/harness.sources"
+    echo "          no compiler, no Qt SDK and no logos-cpp-sdk checkout were needed"
+    ;;
+
+  source)
+    mkdir -p "$BUILD/sdkobj"
+    if [ ! -x "$HARNESS" ] || [ "$SRC" -nt "$HARNESS" ]; then
+      echo "build     $HARNESS  (from $SRC)"
+      compile_harness "$HARNESS" 1
+      echo "          built"
+    else
+      echo "build     $HARNESS  (up to date)"
+    fi
+    ;;
+esac
 echo
 
 # ── 3. run Logos Core headless ────────────────────────────────────────────
@@ -410,8 +637,20 @@ else
   echo "run       headless: init → add_modules_dir → start → load_module($MODULE_NAME) → configure → start"
 fi
 echo
-[ -z "$RUN_LD_PATH" ] \
-  || export LD_LIBRARY_PATH="$RUN_LD_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Where the harness finds Qt, and it differs by which harness this is. One built
+# here carries an rpath to the Qt it was compiled against; the shipped one
+# carries no rpath at all and takes the app's own Qt 6.9.2 — the same libraries
+# `logos_host` loads the plugin under, which is the one Qt in this picture that
+# cannot be a version other than the runtime's.
+if [ "$HARNESS_MODE" = shipped ]; then
+  [ -z "${RUN_LD_PATH_SHIPPED:-}" ] \
+    || export LD_LIBRARY_PATH="$RUN_LD_PATH_SHIPPED${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  [ -z "${RUN_FRAMEWORK_PATH:-}" ] \
+    || export DYLD_FRAMEWORK_PATH="$RUN_FRAMEWORK_PATH${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
+else
+  [ -z "$RUN_LD_PATH" ] \
+    || export LD_LIBRARY_PATH="$RUN_LD_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 LOGOS_HOST_PATH="$HOST_BIN" QT_PLUGIN_PATH="$QT_PLUGINS" QT_QPA_PLATFORM=offscreen \
   "$HARNESS" "$CORE_LIB" "$EMBEDDED_DIR" "$USER_MODULES" "$PERSISTENCE" \
              "$MODULE_NAME" "$OWNER" "$POLICY_HEX"

@@ -1,0 +1,178 @@
+{
+  "_comment": [
+    "Written by scripts/logos-core-headless.sh --build-harness; checked by",
+    "scripts/check-package-fresh.py in CI, and again by",
+    "scripts/logos-core-headless.sh before it runs the binary. Do not",
+    "hand-edit: the point of this file is that it is a by-product of a real",
+    "build, and an edited one is a claim about a build that did not happen.",
+    "",
+    "WHY THE HARNESS IS COMMITTED AT ALL. The deployment criterion asks for a",
+    "single CLI command 'on any machine using Logos Core headless'. The",
+    "command used to COMPILE this harness, which made a C++17 compiler, Qt",
+    "6.9.2 with qtremoteobjects, a logos-cpp-sdk checkout and nlohmann/json",
+    "prerequisites of running it -- so a machine that could run Logos Core",
+    "still could not run the command. It is built once per variant instead,",
+    "here, and rebuilt by whoever would rather not take a binary on trust:",
+    "",
+    "    ./scripts/logos-core-headless.sh --build-harness",
+    "    HARNESS_FROM_SOURCE=1 ./scripts/logos-core-headless.sh storage",
+    "",
+    "One machine builds one variant, so recording one MERGES it into whatever",
+    "is already here; a sibling is kept only if the bytes on disk are the bytes",
+    "it was recorded for and they still contain every string literal of the",
+    "source being recorded.",
+    "",
+    "sdk_units is provenance and not a check: the logos-cpp-sdk is not in this",
+    "repository, so a machine verifying the package cannot recompute it.",
+    "What IS checked, from the binary's own bytes and with no toolchain: the",
+    "sha256 below, the architecture the variant name claims, that there is no",
+    "rpath naming the machine that compiled it, that it links the runtime and",
+    "Qt, that it needs no newer glibc/libstdc++ than liblogos_core.so itself,",
+    "and that every string literal of the source is inside it."
+  ],
+  "built_from": {
+    "module/tests/logos_core_load_test.cpp": "662dd8d622a22971621b3ff76a66a0b703668e9b734802b0eb88b29cce4186a2"
+  },
+  "harness": "module/harness/<variant>/logos_core_load_test",
+  "variants": {
+    "darwin-arm64": {
+      "built_on": "Darwin 25.5.0 arm64",
+      "bytes": 1449384,
+      "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
+      "format": "Mach-O arm64",
+      "needed": [
+        "@rpath/QtCore.framework/Versions/A/QtCore",
+        "@rpath/QtRemoteObjects.framework/Versions/A/QtRemoteObjects",
+        "@rpath/QtNetwork.framework/Versions/A/QtNetwork",
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "qt": "moc 6.9.2",
+      "sdk_revision": "c87f3437e38616436df6e475570f9d25abf9b36f",
+      "sdk_units": {
+        "cpp/logos_api.cpp": "153f5f937571551e737050c49eb9ec82443413b812abb02fc5deda3c8d337658",
+        "cpp/logos_api_client.cpp": "2e79322fefce46d06a9a36da5789cf36fe98b7b55a062f69dcc8ff9ad7d403f3",
+        "cpp/logos_api_consumer.cpp": "a75b768718e364f2dcb8bd0dc3d26ab3637cfa7caafc66415b5e526cf3070c95",
+        "cpp/logos_api_provider.cpp": "ba4ed24125a4aae177dd30cb4473fdac89651ece9ac38c4960dc4ef2a6f517cc",
+        "cpp/logos_provider_object.cpp": "3c6ed32800d53b8be1ca2d923f4ccbf3cacc7cab57ec4107d69031a0c1d204ca",
+        "cpp/logos_types.cpp": "bd3d54ce258838c345b0ecffa9d9cf4d038c884e86c566861280745304e2621a",
+        "cpp/module_proxy.cpp": "9ce401f5154d78d60fddb785ebe0fa8125c6ffb9e1157bfdc4daacf1c58a0118",
+        "cpp/qt_provider_object.cpp": "0684e5dbc8d777a51b74ccb147a15f97b04b9cea6d3b175a040906d7d1f2dc8a"
+      },
+      "sha256": "2ff9a5659c08faa6c944d34b021197d543941f33859ba494f80e25ae11b764a9",
+      "version_needs": {}
+    },
+    "linux-amd64": {
+      "built_on": "Linux 6.10.14-linuxkit x86_64",
+      "bytes": 1386088,
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "format": "ELF x86-64",
+      "needed": [
+        "libQt6Core.so.6",
+        "liblogos_core.so",
+        "libstdc++.so.6",
+        "libgcc_s.so.1",
+        "libc.so.6"
+      ],
+      "qt": "moc 6.9.2",
+      "sdk_revision": "c87f3437e38616436df6e475570f9d25abf9b36f",
+      "sdk_units": {
+        "cpp/logos_api.cpp": "153f5f937571551e737050c49eb9ec82443413b812abb02fc5deda3c8d337658",
+        "cpp/logos_api_client.cpp": "2e79322fefce46d06a9a36da5789cf36fe98b7b55a062f69dcc8ff9ad7d403f3",
+        "cpp/logos_api_consumer.cpp": "a75b768718e364f2dcb8bd0dc3d26ab3637cfa7caafc66415b5e526cf3070c95",
+        "cpp/logos_api_provider.cpp": "ba4ed24125a4aae177dd30cb4473fdac89651ece9ac38c4960dc4ef2a6f517cc",
+        "cpp/logos_provider_object.cpp": "3c6ed32800d53b8be1ca2d923f4ccbf3cacc7cab57ec4107d69031a0c1d204ca",
+        "cpp/logos_types.cpp": "bd3d54ce258838c345b0ecffa9d9cf4d038c884e86c566861280745304e2621a",
+        "cpp/module_proxy.cpp": "9ce401f5154d78d60fddb785ebe0fa8125c6ffb9e1157bfdc4daacf1c58a0118",
+        "cpp/qt_provider_object.cpp": "0684e5dbc8d777a51b74ccb147a15f97b04b9cea6d3b175a040906d7d1f2dc8a"
+      },
+      "sha256": "4bb3f04907c901bd0bd4ef38717767d9bb05a2e8538e0498e70a8ee4a3d1742d",
+      "version_needs": {
+        "libQt6Core.so.6": [
+          "Qt_6",
+          "Qt_6.9"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.32",
+          "GLIBC_2.34",
+          "GLIBC_2.38",
+          "GLIBC_2.4"
+        ],
+        "libgcc_s.so.1": [
+          "GCC_3.0"
+        ],
+        "libstdc++.so.6": [
+          "CXXABI_1.3",
+          "CXXABI_1.3.5",
+          "CXXABI_1.3.8",
+          "CXXABI_1.3.9",
+          "GLIBCXX_3.4",
+          "GLIBCXX_3.4.14",
+          "GLIBCXX_3.4.19",
+          "GLIBCXX_3.4.21",
+          "GLIBCXX_3.4.26",
+          "GLIBCXX_3.4.29"
+        ]
+      }
+    },
+    "linux-arm64": {
+      "built_on": "Linux 6.10.14-linuxkit aarch64",
+      "bytes": 1472392,
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "format": "ELF aarch64",
+      "needed": [
+        "libQt6Core.so.6",
+        "liblogos_core.so",
+        "libstdc++.so.6",
+        "libgcc_s.so.1",
+        "libc.so.6",
+        "ld-linux-aarch64.so.1"
+      ],
+      "qt": "moc 6.9.2",
+      "sdk_revision": "c87f3437e38616436df6e475570f9d25abf9b36f",
+      "sdk_units": {
+        "cpp/logos_api.cpp": "153f5f937571551e737050c49eb9ec82443413b812abb02fc5deda3c8d337658",
+        "cpp/logos_api_client.cpp": "2e79322fefce46d06a9a36da5789cf36fe98b7b55a062f69dcc8ff9ad7d403f3",
+        "cpp/logos_api_consumer.cpp": "a75b768718e364f2dcb8bd0dc3d26ab3637cfa7caafc66415b5e526cf3070c95",
+        "cpp/logos_api_provider.cpp": "ba4ed24125a4aae177dd30cb4473fdac89651ece9ac38c4960dc4ef2a6f517cc",
+        "cpp/logos_provider_object.cpp": "3c6ed32800d53b8be1ca2d923f4ccbf3cacc7cab57ec4107d69031a0c1d204ca",
+        "cpp/logos_types.cpp": "bd3d54ce258838c345b0ecffa9d9cf4d038c884e86c566861280745304e2621a",
+        "cpp/module_proxy.cpp": "9ce401f5154d78d60fddb785ebe0fa8125c6ffb9e1157bfdc4daacf1c58a0118",
+        "cpp/qt_provider_object.cpp": "0684e5dbc8d777a51b74ccb147a15f97b04b9cea6d3b175a040906d7d1f2dc8a"
+      },
+      "sha256": "aa9c9ca53f732f393315cf358e8ed4bfd73346c64d395cda14840a74be9f3fcb",
+      "version_needs": {
+        "ld-linux-aarch64.so.1": [
+          "GLIBC_2.17"
+        ],
+        "libQt6Core.so.6": [
+          "Qt_6",
+          "Qt_6.9"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.17",
+          "GLIBC_2.32",
+          "GLIBC_2.34",
+          "GLIBC_2.38"
+        ],
+        "libgcc_s.so.1": [
+          "GCC_3.0"
+        ],
+        "libstdc++.so.6": [
+          "CXXABI_1.3",
+          "CXXABI_1.3.5",
+          "CXXABI_1.3.8",
+          "CXXABI_1.3.9",
+          "GLIBCXX_3.4",
+          "GLIBCXX_3.4.14",
+          "GLIBCXX_3.4.19",
+          "GLIBCXX_3.4.21",
+          "GLIBCXX_3.4.26",
+          "GLIBCXX_3.4.29"
+        ]
+      }
+    }
+  }
+}

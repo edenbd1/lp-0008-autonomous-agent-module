@@ -1058,6 +1058,108 @@ or a Nim build of the library, exactly as
 [`module/third-party/liblogosdelivery/README.md`](../module/third-party/liblogosdelivery/README.md)
 sets out.
 
+## CLOSED: the deployment command no longer needs a build toolchain
+
+This section used to be the last open item under "on any machine", and it was
+one sentence long: **`logos-core-headless.sh` compiles a harness**, so running
+it needed a C++17 compiler, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk`
+checkout and `nlohmann/json` — on every platform. It compiles one because
+`liblogos_core`'s C API can *load* a module and cannot *call a method* on one,
+and the SDK is what speaks the runtime's transport. A machine that could run
+Logos Core still could not run this, and that is not "any machine".
+
+The harness is built once per variant now and committed, exactly as the plugin
+is — `module/harness/{darwin-arm64,linux-amd64,linux-arm64}/logos_core_load_test`,
+1.4 MB each — with `module/harness/harness.sources` recording what each was
+built from.
+
+**The measurement, and it is the whole point: a machine with no toolchain.**
+
+```
+$ ./scripts/harness-no-toolchain.sh linux-arm64
+image     ubuntu:24.04 (linux/arm64), stock, nothing added but python3
+  ok    no cc … no c++ … no gcc … no make … no cmake … no moc … no qmake
+  ok    no Qt SDK, no nlohmann/json, no logos-cpp-sdk checkout
+  ok    installed: python3
+harness   /work/module/harness/linux-arm64/logos_core_load_test
+          shipped, sha256 aa9c9ca53f732f39, as recorded in module/harness/harness.sources
+          no compiler, no Qt SDK and no logos-cpp-sdk checkout were needed
+  <-    ... 40 assertions
+all steps confirmed (0 failure(s))
+```
+
+Both Linux variants, in a stock `ubuntu:24.04` container: 40 assertions, zero
+failures, out of the committed package and the committed harness. The script
+**refuses to report anything at all** if it finds a compiler on the machine it
+is checking, and it asserts the two controls that make the green mean something
+— the same command asked to build the harness there is refused, by name, for
+all three things it lacks; and a harness whose bytes are not the recorded ones
+is not run.
+
+On macOS there is no toolchain-free container to run in, because the runtime
+lives inside an installed `.app`. The equivalent measurement is: every compiler
+on `PATH` replaced by a shim that exits non-zero and prints `COMPILER INVOKED`,
+with `QT_ROOT`, `LOGOS_CPP_SDK_ROOT` and `EXTRA_INCLUDE_DIR` pointed at paths
+that do not exist. `./scripts/logos-core-headless.sh storage` still reports
+**all steps confirmed (0 failure(s))**, 40 assertions, and the shim is never
+invoked. The shim is not decoration: with the same `PATH` and
+`HARNESS_FROM_SOURCE=1`, the run stops at `COMPILER INVOKED: c++ -std=c++17 …`.
+
+**What it took, and what is worth knowing before doing it again.**
+
+- **The binary must carry no rpath.** Both platforms' harnesses used to link one
+  to the Qt they were compiled against, which is a directory on the machine that
+  compiled them. They now carry none, and find Qt through the environment the
+  run step sets: `LD_LIBRARY_PATH=$APP/usr/lib` on Linux,
+  `DYLD_FRAMEWORK_PATH=$APP/Contents/Frameworks` on macOS. That is the app's
+  **own** Qt 6.9.2 — the same libraries `logos_host` loads the plugin under, so
+  the harness cannot be running a different Qt from the runtime it is driving.
+  It is load-bearing rather than belt-and-braces: run the macOS binary without
+  the variable and dyld says `Library not loaded: @rpath/QtCore.framework/…
+  Reason: no LC_RPATH's found`.
+- **The dependency floor has to be measured, not assumed.** A shipped binary
+  that needs a newer glibc than the runtime would make "any machine that can run
+  Logos Core" false, silently, on somebody else's distribution. Read out of the
+  binaries themselves: the harness needs at most `GLIBC_2.38`, `GLIBCXX_3.4.29`,
+  `CXXABI_1.3.9`; `liblogos_core.so` needs `GLIBC_2.38`, `GLIBCXX_3.4.29`,
+  `CXXABI_1.3.15`, and the app's Qt needs `GLIBCXX_3.4.32`. Below the runtime on
+  every axis, and `scripts/check-package-fresh.py` goes red if that stops being
+  true.
+- **The build directory had to become per-variant.** The three variants are
+  built out of one checkout shared into three containers. With one build
+  directory the Mach-O `.o` files from the macOS build are newer than the SDK
+  sources the Linux build reads, so the Linux build skips compiling them and
+  hands Mach-O objects to `ld` — and a macOS harness is "up to date" for a Linux
+  run, which then dies of `Exec format error` in the middle of a deployment.
+
+**What this does NOT close, stated plainly.**
+
+- **You are running a binary somebody else built.** That is a real cost and the
+  answer to it is not "trust the record": `scripts/check-package-fresh.py`
+  recomputes the record, requires every string literal of
+  `module/tests/logos_core_load_test.cpp` to be inside each binary, requires each
+  to be the architecture its variant claims, to carry no rpath, to link Qt (and,
+  on ELF, `liblogos_core`), and to need no newer glibc than the runtime. All of
+  that runs with nothing but `python3`, on the machine that is about to trust the
+  binary — the toolchain-free run above does exactly that as its last step. What
+  none of it proves is that the bytes are what *your* compiler would produce
+  from that source: the harness is not byte-reproducible across toolchains any
+  more than the plugin is. `HARNESS_FROM_SOURCE=1` builds your own instead, and
+  `--build-harness` replaces the shipped one; both are one command and both need
+  the four prerequisites this section removed from the default path.
+- **A harness for a fourth platform would have to be built on that platform.**
+  There are three because Logos Core is published for three. `check-package-fresh.py`
+  fails if the package ever ships a plugin variant with no harness beside it, so
+  the hole cannot open quietly.
+- **The macOS binary is ad-hoc signed, by the linker, as every locally built
+  Mach-O is.** A `git clone` carries it without quarantine and it runs. A
+  download of a zip or tarball through a browser gets `com.apple.quarantine`,
+  and Gatekeeper refuses a non-notarized executable until that attribute is
+  removed (`xattr -d com.apple.quarantine`) — which is a property of how the
+  file arrived, not of the file, and applies to every unsigned binary anyone
+  publishes. Not measured here: this repository is cloned, not downloaded as a
+  zip, in every procedure it documents.
+
 ## deploy-agents.sh is one command, plus four things it cannot do for you
 
 ## Two commands, not one, and what each needs before it will run
@@ -1190,6 +1292,17 @@ anything is built, and the script prints the missing ones by name with what to
 do about them, so a machine that cannot run this says which piece it lacks
 instead of failing inside a compile.
 
+**The list is now two items long, and it used to be six.** Four of them — a
+C++17 compiler, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk` checkout and
+`nlohmann/json` — were prerequisites of *running* this command, because it
+compiled the harness that drives the runtime on every machine it ran on. They
+are prerequisites of **rebuilding** the harness now, and of nothing else: it is
+built once per variant and committed under `module/harness/`, the way the plugin
+is, and the shipped one is checked against the source it came from before it is
+run. See "CLOSED: the deployment command no longer needs a build toolchain"
+above for the measurement, and
+[`basecamp.md`](basecamp.md) for how to rebuild it.
+
 **A retraction first, because this list used to open on it.** It said the half
 "cannot be made to work on an arbitrary machine ... because `liblogos_core`
 ships inside the Logos app and there is no headless distribution of it to
@@ -1221,54 +1334,64 @@ Run once, then nothing below needs setting:
    - **macOS:** install LogosBasecamp from the `.dmg`. There is no AppImage to
      unpack there and no headless build published, so this one really is an app
      install. Measured against Basecamp 0.2.2 on darwin-arm64.
-2. **Qt 6.9.2** (`QT_ROOT`), including `qtremoteobjects` and a `libexec/moc`.
-   The AppImage carries Qt's libraries and not its SDK, so this is a separate
-   download on both platforms. The `aqtinstall` lines are in
-   [`basecamp.md`](basecamp.md); an install with only `lib` in it is the trap
-   described there, and on Linux the `icu` archive is required or every link
-   ends in `undefined reference to ucnv_open_73`.
-3. **A `logos-cpp-sdk` checkout** (`LOGOS_CPP_SDK_ROOT`), pinned at `c87f343`.
-   The harness calls the loaded module over the runtime's transport, and
-   `liblogos_core`'s C API has no "call a method" entry point.
-4. **`nlohmann/json`** headers (`EXTRA_INCLUDE_DIR`, default
-   `/opt/homebrew/include` on macOS, `/usr/include` on Linux —
-   `apt install nlohmann-json3-dev`).
-5. **`artifacts/agents.tsv`**, i.e. the first command has been run — it is where
+2. **`artifacts/agents.tsv`**, i.e. the first command has been run — it is where
    the owner and policy account come from. **For the agents this repository
    publishes that file is committed**, so a fresh clone has it and this
    prerequisite costs nothing; it is only for your own agents that the on-chain
    command has to run first. Without a row for the requested category the script
    says so and exits 1.
-6. **A C++17 compiler and a libstdc++ new enough for the runtime.** On Linux the
-   floor is upstream's, not ours: the libraries inside Basecamp's AppImage want
-   `GLIBC_2.38`, `CXXABI_1.3.15` and `GLIBCXX_3.4.32`. Debian bookworm (glibc
-   2.36, gcc 12) builds the harness and then dies on `version GLIBC_2.38 not
-   found (required by liblogos_core.so)`. Ubuntu 24.04 is above the line.
+3. **A glibc and a libstdc++ new enough for the runtime**, which is a floor
+   upstream sets and not one this repository adds to. Measured, out of the
+   published AppImage: `liblogos_core.so` needs `GLIBC_2.38`, `GLIBCXX_3.4.29`
+   and `CXXABI_1.3.15`; the app's Qt needs `CXXABI_1.3.15` and `GLIBCXX_3.4.32`;
+   its bundled `libsystemd` needs `GLIBC_2.39`. The **shipped harness needs at
+   most `GLIBC_2.38`, `GLIBCXX_3.4.29`, `CXXABI_1.3.9`** on both architectures —
+   below the runtime on every axis, which is asserted rather than hoped:
+   `scripts/check-package-fresh.py` reads the version-requirement table out of
+   each committed binary and goes red if one climbs past `liblogos_core`'s own.
+   So any Linux machine that can run Logos Core can run this. Debian bookworm
+   (glibc 2.36) is below that line and is upstream's floor, not ours: there the
+   *runtime* fails to load with `version GLIBC_2.38 not found (required by
+   liblogos_core.so)` before anything of this repository's runs. Ubuntu 24.04 is
+   above it.
 
 **Linux is no longer untested, on either architecture.** Exercised on x86-64
 Linux and on aarch64 Linux — Ubuntu 24.04, `liblogos_core.so` out of the
-matching `LogosBasecamp-Desktop-v0.2.2-d41a72-*.AppImage`, official Qt 6.9.2 for
-that architecture, the committed `module/agent.lgx` — with all steps confirmed
-and zero failures on both. The transcripts are in [`basecamp.md`](basecamp.md).
+matching `LogosBasecamp-Desktop-v0.2.2-d41a72-*.AppImage`, the committed
+`module/agent.lgx` and the committed harness — with all steps confirmed and zero
+failures on both, in a container that has **no compiler, no Qt SDK, no
+`logos-cpp-sdk` checkout and no `nlohmann/json`**:
+`./scripts/harness-no-toolchain.sh`. The transcripts are in
+[`basecamp.md`](basecamp.md).
 
 ### Additional prerequisites for `--alongside`
 
 `./scripts/logos-core-headless.sh storage --alongside` loads the wallet, storage
 and messaging modules into the same runtime, and those have to be built first by
-`./scripts/build-companion-modules.sh`. That script needs everything above plus:
+`./scripts/build-companion-modules.sh`. That script **builds three upstream
+modules from source**, so it needs everything above plus a full toolchain — the
+same four the shipped harness removed from the plain run, which is why they are
+written out again here rather than referred to:
 
-7. **`lgx`** (`LGX_BIN`), the packager from `logos-co/logos-package` that
+4. **A C++17 compiler**, **Qt 6.9.2** (`QT_ROOT`) including `qtremoteobjects`
+   and a `libexec/moc`, a **`logos-cpp-sdk` checkout** (`LOGOS_CPP_SDK_ROOT`,
+   pinned at `c87f343`) and **`nlohmann/json`** headers (`EXTRA_INCLUDE_DIR`).
+   The `aqtinstall` lines are in [`basecamp.md`](basecamp.md); an install with
+   only `lib` in it is the trap described there, and on Linux the `icu` archive
+   is required or every link ends in `undefined reference to ucnv_open_73`.
+   These four are also what `--build-harness` and `HARNESS_FROM_SOURCE=1` need.
+5. **`lgx`** (`LGX_BIN`), the packager from `logos-co/logos-package` that
    `module/package-basecamp.sh` already needs.
-8. **A `logos-module-builder` and a `logos-module` checkout**
+6. **A `logos-module-builder` and a `logos-module` checkout**
    (`LOGOS_MODULE_BUILDER_ROOT`, `LOGOS_MODULE_ROOT`) — the same two the agent
    module's own build needs, and the same pinned revisions.
-9. **Go**, for `status-im/go-wallet-sdk`'s `make static-library`, which is what
+7. **Go**, for `status-im/go-wallet-sdk`'s `make static-library`, which is what
    `logos-wallet-module` links.
-10. **Nim and nimble** on `PATH`, for `liblogosdelivery`. Nimble installs Nim
+8. **Nim and nimble** on `PATH`, for `liblogosdelivery`. Nimble installs Nim
    into `~/.nimble/bin` and does not add it to `PATH`; the script does that
    itself and says so if it still cannot find it.
-11. **A built Logos Storage library** (`STORAGE_SRC`), which
-    `scripts/exercise-nodes.sh` already documents how to produce.
+9. **A built Logos Storage library** (`STORAGE_SRC`), which
+   `scripts/exercise-nodes.sh` already documents how to produce.
 
 Each is checked by name before anything is built. The heaviest by far is
 `liblogosdelivery`: a large Nim project, several minutes on a warm tree and
@@ -1304,7 +1427,7 @@ of this section and is longer than any of them.
   and it would report one exit code for two unrelated failures — which hides the
   gap rather than closing it. That is a choice, and it is the reason the box
   below is not argued on the count.
-- **"On any machine" — the platform clause is closed and one clause is not.**
+- **"On any machine" — closed, on both clauses.**
   Every platform the Logos app is published for is covered and exercised:
   macOS arm64, Linux x86-64, Linux aarch64. There is no fourth; Logos Core has
   no Windows build. What is **no longer** true is the reason this section used
@@ -1312,21 +1435,15 @@ of this section and is longer than any of them.
   publishes no headless build. On Linux it publishes an AppImage, and one
   command unpacks it.
 
-  So the whole of "on any machine" now rests on one thing, and it is worth
-  naming precisely rather than filed under "prepared":
-  **`logos-core-headless.sh` compiles a harness, so it needs a C++17 compiler,
-  Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk` checkout and
-  `nlohmann/json` — on every platform.** It compiles one because
-  `liblogos_core`'s C API can load a module and cannot call a method on it; the
-  SDK is what speaks the runtime's transport. A machine that can *run* Logos
-  Core therefore still cannot run *this* until it has a build toolchain, and
-  that is not "any machine".
-
-  Closing it is `[NOT BUILT]` and ours, not upstream's: ship the harness built,
-  one per variant, the way the plugins now are — the same
-  build-once-per-platform job that closed the variants, and the same three
-  containers. It is not attempted here, and the box stays empty because of it
-  rather than because of anything about a platform.
+  And the second clause, which this section carried as the last open item: the
+  command used to **compile** a harness, so a C++17 compiler, Qt 6.9.2 with
+  `qtremoteobjects`, a `logos-cpp-sdk` checkout and `nlohmann/json` were
+  prerequisites of *running* it. The harness is built once per variant and
+  committed now, and the command was run to `all steps confirmed (0
+  failure(s))` in a stock `ubuntu:24.04` container holding none of those four —
+  `./scripts/harness-no-toolchain.sh`, which refuses to report anything at all
+  if it finds a compiler on the machine it is checking. The section above has
+  the transcript and what it cost.
 
   (An agent of your own additionally needs faucet-funded balance, which is a
   testnet's policy and cannot be scripted. The agents this repository publishes
