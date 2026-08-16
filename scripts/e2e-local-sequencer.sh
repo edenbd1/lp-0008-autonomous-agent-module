@@ -81,8 +81,57 @@ PROOFS_DONE=0; PROOFS_SECS=0
 # refused second anchor, the spend inside the envelope, the spend outside it.
 PROOFS_EXPECTED=6
 CAP_SECS=$(( ${E2E_CAP_MINUTES:-340} * 60 ))
+# A minute between heartbeats in a run that lasts hours. Overridable so the
+# machinery can be exercised in seconds rather than trusted -- a heartbeat that
+# has never been watched is a heartbeat nobody knows the shape of.
+BEAT_SECS=${E2E_BEAT_SECONDS:-60}
 
 hms() { printf '%dh%02dm%02ds' $(($1/3600)) $((($1%3600)/60)) $(($1%60)); }
+
+# What the machine is. Printed once, at the top, because "the runner was slow"
+# is a claim about hardware and it should be readable in the log rather than
+# inferred from timestamps a day later.
+machine_facts() {
+  echo "  host      $(uname -s) $(uname -m), $( \
+    (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo '?') ) cpu(s)"
+  if [ -r /proc/cpuinfo ]; then
+    echo "  cpu       $(sed -n 's/^model name[[:space:]]*: *//p' /proc/cpuinfo | head -1)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    echo "  cpu       $(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
+  fi
+  if [ -r /proc/meminfo ]; then
+    echo "  memory    $(awk '/MemTotal/{printf "%.1f GiB", $2/1048576}' /proc/meminfo)"
+  fi
+  echo "  load      $(uptime 2>/dev/null | sed 's/.*load average[s]*: *//')"
+  echo "  r0vm      $(r0vm --version 2>/dev/null || echo 'not on PATH')"
+  echo "  dev mode  RISC0_DEV_MODE=${RISC0_DEV_MODE:-<unset>}   (0 = real proofs)"
+}
+
+# The chain's own tip, so a heartbeat says whether the sequencer is still making
+# blocks or has stopped underneath a proof that will never land.
+tip_block() {
+  curl -s -m 5 -X POST "$RPC" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getLastBlockId","params":[]}' 2>/dev/null \
+  | grep -oE '"result":[0-9]+' | grep -oE '[0-9]+' | head -1
+}
+
+# CPU and resident size of a process AND its descendants. During a proof the
+# work is in r0vm, which is a child of the wallet or of spel, so reporting only
+# the process we launched would report a parent asleep on a wait().
+procstat() {
+  local root="$1"
+  ps -eo pid,ppid,pcpu,rss 2>/dev/null | awk -v root="$root" '
+    NR > 1 { cpu[$1] = $3; rss[$1] = $4; parent[$1] = $2; pids[n++] = $1 }
+    END {
+      want[root] = 1
+      for (pass = 0; pass < 12; pass++)
+        for (i = 0; i < n; i++)
+          if (want[parent[pids[i]]]) want[pids[i]] = 1
+      for (i = 0; i < n; i++)
+        if (want[pids[i]]) { c += cpu[pids[i]]; r += rss[pids[i]]; k++ }
+      if (k) printf "%d proc(s), %.0f%% cpu, %.1f GiB rss", k, c, r/1048576
+    }'
+}
 
 beat() {   # beat <label> <command...>  -- run it quietly, narrate the wait
   local label="$1"; shift
@@ -90,17 +139,20 @@ beat() {   # beat <label> <command...>  -- run it quietly, narrate the wait
   t0=$(date +%s)
   "$@" </dev/null >/dev/null 2>&1 & pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    sleep 60
+    sleep "$BEAT_SECS"
     kill -0 "$pid" 2>/dev/null || break
     now=$(date +%s)
-    printf '    %s: still proving, %s in (run %s)\n' \
-      "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))"
+    printf '    %s: still proving, %s in (run %s) | block %s | %s\n' \
+      "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))" \
+      "$(tip_block)" "$(procstat "$pid")"
+    [ -f "${WORK:-}/sequencer.log" ] && \
+      printf '      seq| %s\n' "$(tail -1 "$WORK/sequencer.log" 2>/dev/null | cut -c1-150)"
   done
   wait "$pid"; rc=$?
   now=$(date +%s)
   PROOFS_DONE=$((PROOFS_DONE + 1))
   PROOFS_SECS=$((PROOFS_SECS + now - t0))
-  printf '    %s: %s\n' "$label" "$(hms $((now - t0)))"
+  printf '    %s: %s (block %s)\n' "$label" "$(hms $((now - t0)))" "$(tip_block)"
   # The prediction, from measured rate rather than from the comment at the top.
   if [ "$PROOFS_DONE" -ge 1 ] && [ "$PROOFS_DONE" -lt "$PROOFS_EXPECTED" ]; then
     local rate=$((PROOFS_SECS / PROOFS_DONE))
@@ -128,17 +180,20 @@ beat_cap() {   # beat_cap <label> <outfile> <command...>
   t0=$(date +%s)
   "$@" </dev/null >"$out" 2>&1 & pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    sleep 60
+    sleep "$BEAT_SECS"
     kill -0 "$pid" 2>/dev/null || break
     now=$(date +%s)
-    printf '    %s: still proving, %s in (run %s)\n' \
-      "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))"
+    printf '    %s: still proving, %s in (run %s) | block %s | %s\n' \
+      "$label" "$(hms $((now - t0)))" "$(hms $((now - T_START)))" \
+      "$(tip_block)" "$(procstat "$pid")"
+    [ -f "${WORK:-}/sequencer.log" ] && \
+      printf '      seq| %s\n' "$(tail -1 "$WORK/sequencer.log" 2>/dev/null | cut -c1-150)"
   done
   wait "$pid"; rc=$?
   now=$(date +%s)
   PROOFS_DONE=$((PROOFS_DONE + 1))
   PROOFS_SECS=$((PROOFS_SECS + now - t0))
-  printf '    %s: %s\n' "$label" "$(hms $((now - t0)))"
+  printf '    %s: %s (block %s)\n' "$label" "$(hms $((now - t0)))" "$(tip_block)"
   return $rc
 }
 
@@ -198,6 +253,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT INT TERM
+
+say "[0/5] the machine this is being proved on"
+machine_facts
 
 say "[1/5] starting a real sequencer in standalone mode on $RPC"
 python3 - "$CONFIG_SRC" "$SEQ_HOME" <<'PY'
