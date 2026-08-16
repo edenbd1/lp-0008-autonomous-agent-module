@@ -282,6 +282,110 @@ void whatItWillNotAnswer(void)
           "and the attempt is reported");
 }
 
+/// The five guards in `owner.answer` and `owner.watch` that decide whether a
+/// reply goes on the wire at all.
+///
+/// Every one of them was found by deleting it and watching this suite stay
+/// green — `decision != "approve" && decision != "deny"`, the empty-id refusal,
+/// "one payment, one answer", not marking a request answered when the node
+/// refused the send, and dropping what was held when the channel is re-pointed
+/// at another pair. Five deletions, five clean runs, and the CI floor of 25
+/// passing assertions satisfied by all of them. The live `plugin_delivery_test
+/// owner` mode does cover three, and it needs a Delivery node, so CI never runs
+/// it: for the suite that CI does run these were guards nothing watched.
+///
+/// Each check below therefore asserts the SPECIFIC refusal by its own words and
+/// then the consequence of it — a reply that did not reach the wire, a request
+/// that can still be answered. `!ok(...)` alone is the shape this repository has
+/// spent two sweeps removing: it is equally true of a call that failed for a
+/// reason nobody meant.
+void whatItRefusesToSend(void)
+{
+    std::printf("\nwhat owner.answer refuses to put on the wire, and what it leaves answerable\n");
+
+    FakeChannel ch;
+    OwnerResponder r(responderPort(ch));
+    check(ok(r.watch("{}")), "watching");
+    ch.arrive(requestFrom(kAgent, "250", 21), kAgent);
+    check(parsed(r.pending("{}")).value("pending", json::array()).size() == 1,
+          "one request is waiting, which is what makes every refusal below a refusal");
+    const std::size_t before = ch.sent.size();
+
+    // Two words and no third. "yes", "ok" and "" are refused rather than
+    // guessed at, because the guess that costs money reads an unfamiliar answer
+    // as consent.
+    for (const char *word : {"yes", "ok", "APPROVE", ""}) {
+        const std::string said =
+            r.answer(json{{"id", "spend-21"}, {"decision", word}}.dump());
+        check(err(said).find("'approve' or 'deny'") != std::string::npos,
+              std::string("'") + word + "' is not read as consent: " + err(said));
+    }
+    check(ch.sent.size() == before, "and not one of them reached the channel");
+
+    // An answer that names no request could settle any spend.
+    check(err(r.answer(R"({"decision":"approve"})")).find("names no request") != std::string::npos,
+          "an answer with no id is refused by that name, not by falling through to a lookup");
+    check(err(r.answer(R"({"id":"","decision":"approve"})")).find("names no request") !=
+              std::string::npos,
+          "and an empty id is the same refusal rather than a search for \"\"");
+    check(ch.sent.size() == before, "still nothing on the channel");
+
+    // The request is still answerable: every refusal above was about the
+    // ANSWER, and none of them consumed the question.
+    const std::string good = r.answer(R"({"id":"spend-21","decision":"approve"})");
+    check(ok(good) && parsed(good).value("decision", std::string{}) == "approve",
+          "the same request then takes a real answer, so the four refusals cost nothing");
+    check(ch.sent.size() == before + 1, "which is the one document that reached the channel");
+
+    // One payment, one answer. The second attempt must name the FIRST decision,
+    // so a caller can tell "already settled" from "no such request".
+    const std::string again = r.answer(R"({"id":"spend-21","decision":"deny"})");
+    check(err(again).find("already answered with 'approve'") != std::string::npos,
+          "a second answer is refused, naming the decision that stands: " + err(again));
+    check(ch.sent.size() == before + 1, "and no second reply went out under one request");
+    check(err(r.answer(R"({"id":"spend-nobody-sent","decision":"approve"})"))
+                  .find("nothing here to answer") != std::string::npos,
+          "an id nobody asked about is a different refusal from an id already answered");
+
+    // A send the node refused is not an answer. Leaving it unanswered is what
+    // lets the owner press the button again when the node comes back, instead
+    // of being told the spend was already settled.
+    FakeChannel flaky;
+    OwnerResponder f(responderPort(flaky));
+    check(ok(f.watch("{}")), "watching a second channel");
+    flaky.arrive(requestFrom(kAgent, "250", 22), kAgent);
+    (void)f.pending("{}");
+    flaky.sendOk = false;
+    check(err(f.answer(R"({"id":"spend-22","decision":"approve"})"))
+                  .find("not accepted by this node") != std::string::npos,
+          "a reply the node would not take is reported as not sent");
+    flaky.sendOk = true;
+    const std::string retried = f.answer(R"({"id":"spend-22","decision":"approve"})");
+    check(ok(retried), "and the request is still answerable, so the owner can retry it");
+    check(flaky.sent.size() == 1,
+          "with exactly one reply on the wire: the refused send left no record of an answer");
+
+    // Re-watching another pair replaces the channel, and a request is only
+    // answerable on the channel it arrived on — otherwise `owner.answer` could
+    // send a reply about agent A down agent B's channel.
+    FakeChannel two;
+    OwnerResponder t(responderPort(two));
+    check(ok(t.watch("{}")), "watching");
+    two.arrive(requestFrom(kAgent, "250", 23), kAgent);
+    check(parsed(t.pending("{}")).value("pending", json::array()).size() == 1,
+          "with one request held on this pair");
+    const std::string moved = t.watch(json{{"agent", kOther}}.dump());
+    check(parsed(moved).value("rewatched", false),
+          "re-watching another agent replaces the channel and says so");
+    check(two.createdChannel == std::string("/lp-0008/1/owner-channel/") + kOwner + "/" + kOther,
+          "on the id derived from the new pair");
+    check(err(t.answer(R"({"id":"spend-23","decision":"approve"})"))
+                  .find("nothing here to answer") != std::string::npos,
+          "and the request held for the OLD pair is gone, not answerable down the new channel");
+    check(parsed(t.pending("{}")).value("frames", -1) == 0,
+          "the counters restarted with the channel, so nothing is attributed to the wrong pair");
+}
+
 void theTwoHalvesAgainstEachOther(void)
 {
     std::printf("\nthe agent asks, this owner answers, and the agent's own checker reads it\n");
@@ -380,6 +484,7 @@ int main()
     refusesBeforeItCan();
     theAuthorshipRule();
     whatItWillNotAnswer();
+    whatItRefusesToSend();
     theTwoHalvesAgainstEachOther();
 
     std::printf("\n%s (%d failure(s))\n",

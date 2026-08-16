@@ -325,10 +325,22 @@ if [ -f "$SHIELDED" ]; then
   c_blk=$(col "$SHIELDED" block)
   c_prog=$(col "$SHIELDED" program)
   c_note=$(col "$SHIELDED" note_account)
-  if [ -z "$c_tx" ] || [ -z "$c_blk" ] || [ -z "$c_prog" ] || [ -z "$c_note" ]; then
-    bad "$SHIELDED is missing one of the tx/block/program/note_account columns"
+  c_role=$(col "$SHIELDED" role)
+  if [ -z "$c_tx" ] || [ -z "$c_blk" ] || [ -z "$c_prog" ] || [ -z "$c_note" ] \
+     || [ -z "$c_role" ]; then
+    bad "$SHIELDED is missing one of the role/tx/block/program/note_account columns"
   else
+    # Counted, because the loop below is the whole section and a loop over
+    # nothing runs clean. Measured: truncating this manifest to its header left
+    # this script exit 0, printing the section heading with nothing under it and
+    # then "DEPLOYMENT.md agrees with artifacts/ and with the chain." — the
+    # a2a-task.tsv section directly above has had a floor (`need 2`) for exactly
+    # this reason and this one had none, on the manifest that is the ONLY
+    # evidence for "an agent can be paid at its shielded account".
+    sh_rows=0; sh_settlements=0
     while IFS=$'\t' read -r -a f; do
+      sh_rows=$((sh_rows + 1))
+      role="${f[$((c_role-1))]}"
       stx="${f[$((c_tx-1))]}"; want_b="${f[$((c_blk-1))]}"
       prog="${f[$((c_prog-1))]}"; note="${f[$((c_note-1))]}"
       out=$(rpc getTransaction "[\"$stx\"]" | python3 -c "
@@ -353,6 +365,7 @@ print('%s %s' % (r[1], 'SHIPPED' if carries else 'OTHER'))")
           ok "$stx  block $b  ${prog#builtin:} — a program LEZ ships, no local binary to attribute against" ;;
         "$DEPLOY_TX")
           if [ "$chain" = SHIPPED ]; then
+            [ "$role" = settlement ] && sh_settlements=$((sh_settlements + 1))
             ok "$stx  block $b  under the shipped program, paying Private/$note"
           elif [ -z "${SHIPPED_IMG:-}" ]; then
             # There is no ImageID to attribute against, so this row cannot be
@@ -371,6 +384,19 @@ print('%s %s' % (r[1], 'SHIPPED' if carries else 'OTHER'))")
           bad "$stx  names program ${prog:0:8}…, which is neither the shipped one nor a builtin" ;;
       esac
     done < <(rows "$SHIELDED")
+
+    # The positive statement, and the reason it is a failure rather than a
+    # label. What this manifest is cited for — README §7, docs/DEPLOYMENT.md,
+    # SUBMISSION-DRAFT.md — is that the SHIPPED program paid an agent at its
+    # shielded account. A `builtin:` row is the money coming back out through
+    # LEZ's own transfer program and cannot support that sentence, so it is
+    # counted separately and does not satisfy this. Zero rows is not "nothing
+    # to disagree with"; it is the claim having no evidence at all.
+    if [ "$sh_settlements" -ge 1 ]; then
+      ok "$sh_settlements of $sh_rows row(s) are settlements to a shielded payee under the shipped program"
+    else
+      bad "$SHIELDED holds $sh_rows row(s) and not one of them is a settlement under the shipped program: the shielded-payee claim has no evidence in it"
+    fi
   fi
 else
   bad "$SHIELDED is missing: the claim that an agent can be paid at its shielded account has no manifest"
