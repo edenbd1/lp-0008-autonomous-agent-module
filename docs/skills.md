@@ -441,7 +441,7 @@ for the same key, and it is the premise the anchored policy exists to bound.
 It is registered because the module ships a pluggable inference seam and this is
 what sits behind it — see [Pluggable inference](#pluggable-inference). It is
 *not* the demonstration that the skill interface works: it is built by
-`installBuiltinSkills` in `agent_module_plugin.cpp` like the other twenty, so it
+`installBuiltinSkills` in `agent_module_plugin.cpp` like the other twenty-four, so it
 is a built-in that happens not to be on the prize's list. §4 above is the
 demonstration, and it is external, separately compiled, and self-checking.
 

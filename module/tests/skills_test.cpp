@@ -612,7 +612,11 @@ int main()
         check(!entryFor(lj["skills"], "meta.skills").empty(),
               "including itself, because it is registered rather than special-cased");
 
-        // The other twenty have no port. Each must come back as its own refusal
+        // Every other built-in has no port — deliberately not written as a
+        // number here: it is the registry less the two below, which is a count
+        // only a reader who does the arithmetic can check, and
+        // `scripts/check-docs.py` says why it will not guess at that shape.
+        // Each must come back as its own refusal
         // — not as "no skill named", which is the registry saying the skill does
         // not exist, and not as ok:true, and not as a crash on an empty
         // std::function.

@@ -625,7 +625,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   entries, each with a parameter schema, `invoke()` dispatching to every one, and
   `meta.skills` listing all 25 — including itself — over the boundary.
   Documented in [`docs/skills.md`](docs/skills.md), and the count is gated:
-  `./scripts/check-docs.py` (exit 0) reports `checked 21 skill-count mention(s)
+  `./scripts/check-docs.py` (exit 0) reports `checked 29 skill-count mention(s)
   against the 25 the module registers`, and `examples/agent-console/run.sh`
   asserts `docs/skills.md §7 lists exactly the 25 skills the module registers`.
 

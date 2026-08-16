@@ -64,7 +64,23 @@ jobs:
               if got.get(k, 0) < low:
                   sys.exit("check-docs.py checked %d %s (floor %d): it walked "
                            "almost nothing" % (got.get(k, 0), k, low))
-          print("counts above their floors:", got)
+          # The skill-count line needs a floor of its own, and it did not have
+          # one. Every count-shaped mention in the tree is matched by a regex,
+          # and a regex that stops matching does not fail: it reports "checked 0
+          # mention(s)" and exits 0, which is the same green as a tree with no
+          # stale counts in it. That is the defect this gate exists to catch,
+          # pointed at the gate. The floor is well under the mentions the tree
+          # carries, because it is meant to catch "the matcher is dead", not to
+          # freeze a number that moves with ordinary edits.
+          counts = [l for l in open("check-docs.out", encoding="utf-8")
+                    if "skill-count mention" in l]
+          if not counts:
+              sys.exit("check-docs.py printed no skill-count line at all")
+          mentions = int(re.search(r"checked (\d+)", counts[0]).group(1))
+          if mentions < 20:
+              sys.exit("check-docs.py matched %d skill-count mention(s) (floor "
+                       "20): the count matcher is not seeing this tree" % mentions)
+          print("counts above their floors:", got, "| skill-count mentions:", mentions)
           PY_COUNTS
           rm -f check-docs.out
 

@@ -23,7 +23,7 @@
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
     "module/src/agent_module_plugin.cpp": "efa30145dd7a99f57199853d9bdee3e92063b6a07efe85d43c31909419e966be",
-    "module/src/agent_module_plugin.h": "0a8624c513f7d7c4d88c634a1b6764d1062e43049247a9478545ba358a58bbf8",
+    "module/src/agent_module_plugin.h": "b2cf160b47a9824b12ee82d8c1786213a541e80f7db861c15fb9a9d9900aa812",
     "module/src/agent_skills.cpp": "e741574536996fe0f8ae0bebefefa3caa6d5e88a461db6826a590ae182045374",
     "module/src/agent_skills.h": "d2cc5d784f57603269ac69bccb904f8e1f0115f505398e52b2d19e106ba3820f",
     "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",

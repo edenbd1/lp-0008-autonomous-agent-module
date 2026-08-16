@@ -309,26 +309,104 @@ SKILL_FILES = DOCS + [
 # registry of one skill is not a thing this repository has ever had and `0
 # entries` / `1 entries` appear in transcripts of failures.
 #
-# The hyphenated form is here because it escaped: this gate went green over
-# `reads its 22-skill card` in README.md §8a while the module registered 23,
-# counting 21 other mentions on the same pass. A gate that reports a number and
-# misses the one wrong line is worse than no gate, because the number reads as
-# coverage. Adjectival compounds (`22-skill card`, `23-skill registry`) are the
-# same claim with a hyphen in it.
+# THE FOUR WAYS A COUNT HAS HIDDEN FROM THIS GATE, EACH FOUND THE SAME WAY:
+# somebody read a number, believed it, and it was wrong.
 #
-# The **bold** form is here for the same reason the hyphenated one is, and it was
-# found the same way: `docs/skills.md` §7 opened "The module registers **22**
-# skills" while the module registered 23, and this gate counted 21 other mentions
-# on the same pass without seeing it — markdown emphasis puts `**` between the
-# digits and the word, so `\b22\s+skills\b` never matched. A number a reader sees
-# in bold is the one they are most likely to quote.
+# 1. THE HYPHENATED FORM. This gate went green over `reads its 22-skill card` in
+#    README.md §8a while the module registered 23, counting 21 other mentions on
+#    the same pass. A gate that reports a number and misses the one wrong line is
+#    worse than no gate, because the number reads as coverage.
+# 2. MARKDOWN EMPHASIS, which is not a word boundary to a reader and was one to
+#    this regex. `docs/skills.md` §7 opened "The module registers **22** skills"
+#    while the module registered 23, and `\b22\s+skills\b` never matched because
+#    two asterisks sat between the digits and the word. The number a reader sees
+#    in bold is the one they are most likely to quote, so emphasis is stripped
+#    before matching rather than enumerated as more alternatives.
+# 3. A LINE BREAK between the number and the noun. These documents are wrapped at
+#    about 80 columns and this gate reads one line at a time, so "the module
+#    registers 25\nskills" was invisible for the same reason the bold form was.
+#    Adjacent lines are therefore joined and scanned as a window, and a match is
+#    only counted there if it SPANS the break — otherwise every mention would be
+#    counted twice.
+# 4. THE NUMBER SPELLED OUT. `agent_module_plugin.h` said "Register the
+#    twenty-two skills this module ships with" against a registry of 25, and
+#    `skills_test.cpp` said "The other twenty have no port" when it was 23.
+#
+# The fourth is the one to be careful with, and the care is the point. "All
+# twenty-one are implemented" and "the prize's twenty-one" are TRUE sentences
+# about a different quantity — the prize's list of default skills — and a gate
+# that flagged them would be wrong about a line nobody should change. So spelled
+# numbers are read only inside two frames that can mean nothing else:
+#
+#   "the module's own <n>"  — a claim about this registry, so it must equal it;
+#   "the <n> skills"        — likewise, and this is the one that caught
+#                             `agent_module_plugin.h` still promising to
+#                             "Register the twenty-two skills this module ships
+#                             with" against a registry of 25;
+#   "the other <n>"         — everything but the one under discussion, which is
+#                             the registry MINUS ONE. Not decoration either:
+#                             `docs/skills.md` said "registers the other twenty"
+#                             while the module had 23, and "like the other
+#                             twenty" in another paragraph of the same file, so
+#                             two sentences were wrong by four between them and
+#                             no arithmetic anywhere would have caught either.
+#
+# A frame that was tried and removed belongs here too, because the reason is the
+# whole discipline: `"the same <n>"` would have caught a second stale number in
+# that same header — and it also matched "the same 32 bytes the wallet would have
+# supplied" in `ci.yml`, a true sentence about a public key on a line that
+# happens to say "card". One false positive is enough to make a gate advisory,
+# and an advisory gate is a gate that is off. The sentence in the header was
+# rewritten to carry no second number instead.
+#
+# The last frame is the one with a limit, and it is stated rather than papered
+# over: "the other <n>" means "all but the k I am talking about", and this gate
+# can only read k = 1. `skills_test.cpp` had a comment meaning all but TWO, and
+# the fix there was to write the sentence without a number at all — a count only
+# some readers can compute is the thing this gate exists to stop, and removing it
+# is better than teaching the gate to guess which k a sentence meant.
+EMPHASIS = re.compile(r"[*_`]+")
+
+WORD_NUMBERS = {
+    "twenty": 20, "twenty-one": 21, "twenty-two": 22, "twenty-three": 23,
+    "twenty-four": 24, "twenty-five": 25, "twenty-six": 26, "twenty-seven": 27,
+    "twenty-eight": 28, "twenty-nine": 29, "thirty": 30, "thirty-one": 31,
+    "thirty-two": 32, "thirty-three": 33, "thirty-four": 34, "thirty-five": 35,
+}
+# Longest first, or "twenty" matches the head of "twenty-five" and the gate
+# reads 20 out of a line that says 25.
+_WORDS = "|".join(sorted(WORD_NUMBERS, key=len, reverse=True))
+
+# Case-insensitive throughout: "The other twenty" opens a sentence, and a gate
+# that read the lower-case half of the tree would be the same defect one
+# capital letter along.
 COUNT_SHAPES = re.compile(
     r"\b(\d{2,3})\s+(?:skills|built-in skills|entries|of them)\b"
-    r"|\*\*(\d{2,3})\*\*\s+(?:skills|built-in skills|entries)\b"
     r"|\b(\d{2,3})-skill\b"
     r"|\ball\s+(\d{2,3})\b"
     r"|\bexactly\s+(\d{2,3})\b"
-    r"|\bevery one of the\s+(\d{2,3})\b")
+    r"|\bevery one of the\s+(\d{2,3})\b"
+    r"|\bmodule's own\s+(%s|\d{2,3})\b"
+    r"|\bthe\s+(%s|\d{2,3})\s+skills\b" % (_WORDS, _WORDS), re.I)
+
+# The same reading, for the frame whose true value is the registry less the one
+# skill the sentence is about.
+COUNT_SHAPES_LESS_ONE = re.compile(
+    r"\bthe (?:other|remaining)\s+(%s|\d{2,3})\b" % _WORDS, re.I)
+
+
+def count_mentions(text):
+    """Every count-shaped claim in `text`, as (span, stated value, expected offset)."""
+    for m in COUNT_SHAPES.finditer(text):
+        yield m, next(g for g in m.groups() if g), 0
+    for m in COUNT_SHAPES_LESS_ONE.finditer(text):
+        yield m, m.group(1), 1
+
+
+def stated_value(token):
+    """`twenty-five` and `25` are the same claim."""
+    return WORD_NUMBERS.get(token.lower(), None) if not token.isdigit() else int(token)
+
 
 # …and the line has to be talking about skills at all.
 ABOUT_SKILLS = re.compile(r"skill|card|registry|registered|dispatch", re.I)
@@ -355,19 +433,43 @@ for rel in sorted(set(SKILL_FILES)):
     path = os.path.join(ROOT, rel)
     if not os.path.isfile(path):
         continue
-    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
-        if HISTORICAL in raw or not ABOUT_SKILLS.search(raw):
-            continue
-        for m in COUNT_SHAPES.finditer(raw):
-            value = next(g for g in m.groups() if g)
-            counted += 1
-            if int(value) != expected_count:
-                failures.append(
-                    "%s:%d  says %s where the module registers %d built-in skills "
-                    "(%s). Either the count moved and this did not, or the line is "
-                    "about a count that is no longer true and needs %s on it."
-                    % (rel, lineno, value, expected_count, m.group(0).strip(),
-                       HISTORICAL))
+    lines = open(path, encoding="utf-8").read().splitlines()
+    for i, raw in enumerate(lines):
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        # Emphasis is stripped before anything is matched: `**25**` and `25` are
+        # the same claim to a reader, so they have to be the same claim here.
+        here = EMPHASIS.sub("", raw)
+        # The window, for a claim that wrapped. Comment and list markers on the
+        # continuation are dropped so `25\n// skills` reads as `25 skills`.
+        cont = re.sub(r"^\s*(?://+|#|\*|-|>)?\s*", " ", EMPHASIS.sub("", nxt))
+        window = here.rstrip() + cont
+        boundary = len(here.rstrip())
+
+        for text, spans_break in ((here, False), (window, True)):
+            if not ABOUT_SKILLS.search(text):
+                continue
+            if HISTORICAL in raw or (spans_break and HISTORICAL in nxt):
+                continue
+            for m, token, offset in count_mentions(text):
+                # In the window pass, only a claim that really crossed the line
+                # break is new; anything wholly inside this line was counted by
+                # the pass above, and anything wholly inside the next line will
+                # be counted when that line is `here`.
+                if spans_break and not (m.start() < boundary <= m.end()):
+                    continue
+                value = stated_value(token)
+                if value is None:
+                    continue
+                counted += 1
+                expected = expected_count - offset
+                if value != expected:
+                    failures.append(
+                        "%s:%d  says %s where the module registers %d built-in skills "
+                        "(%s%s). Either the count moved and this did not, or the line is "
+                        "about a count that is no longer true and needs %s on it."
+                        % (rel, i + 1, token, expected_count, m.group(0).strip(),
+                           ", which should be %d here" % expected if offset else "",
+                           HISTORICAL))
 
 print("checked %d skill-count mention(s) against the %d the module registers"
       % (counted, expected_count))

@@ -209,11 +209,13 @@ public:
     /// the registration.
     StdLogosResult registerSkill(std::shared_ptr<logos::agent::ISkill> skill);
 
-    /// Register the twenty-two skills this module ships with, wired to `ports`.
+    /// Register the twenty-five skills this module ships with, wired to `ports`.
     ///
     /// Before @ref start, and once. A host that has transports wires them here;
-    /// a host that does not gets the same twenty-two from @ref start with
-    /// nothing wired, and each one refuses with the port it is missing.
+    /// a host that does not gets the same set from @ref start with nothing
+    /// wired, and each one refuses with the port it is missing. (No second
+    /// number in that sentence on purpose: `scripts/check-docs.py` reads the
+    /// count above, and a repetition it cannot read is a count that drifts.)
     ///
     /// `value` is the number registered. A name already taken — a third party
     /// registered its own `wallet.send` first — is *not* overwritten and not
