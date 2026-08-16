@@ -583,12 +583,13 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
 - [ ] **UNMET `[NOT BUILT]` — The owner can deploy the agent and configure it
   with a single CLI command on any machine using Logos Core headless.**
-  Three clauses. Two of them are now met and the third has moved a long way and
-  is still short, which is why the box is still empty — but the reason it is
-  empty has changed completely, and the `[UPSTREAM]` half of the old label was
-  **withdrawn** rather than quietly dropped.
+  Three clauses. Two are met, the third is met on every platform and short by
+  one thing that is not a platform, and the `[UPSTREAM]` half of the old label
+  was **withdrawn** rather than quietly dropped. The box is still empty and it is
+  now empty for a single, nameable reason.
 
-  **The Logos Core half is one command, and it now runs on two platforms.**
+  **The Logos Core half is one command, and it now runs everywhere Logos Core
+  does.**
   `./scripts/logos-core-headless.sh storage` (exit 0) installs `module/agent.lgx`
   into the user modules directory the way Basecamp's own installer does — picking
   the variant for the machine it is on — builds the harness if it is not built,
@@ -626,7 +627,8 @@ one of them — `meta.skills` — was documented in three headers before it exis
   So the runtime half was obtainable all along, and this document was blaming
   upstream for something upstream publishes.
 
-  With that, and with a `linux-amd64` variant now in **both** packages:
+  With that, and with `linux-amd64` **and** `linux-arm64` variants now in both
+  packages — every platform the Logos app is published for:
 
   ```
   install   module/agent.lgx  variant linux-amd64
@@ -634,7 +636,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
     ok    logos_core_load_module() reports success
     ok    configure() is accepted across the transport
     ok    start() is accepted across the transport
-    ok    the loaded module lists all 25 documented skills
+    ok    the loaded module lists all 28 documented skills
     ok    and bound to the owner it was configured with
     ok    and to the policy account it was configured with
   all steps confirmed (0 failure(s))
@@ -642,36 +644,49 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
   — x86-64 Linux, Ubuntu 24.04, `liblogos_core.so` out of
   `LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage`, from the committed
-  package: the same assertions as the macOS run, in the same order, with the same
-  result. Getting there needed three fixes worth naming, because each was a
-  defect and not a port: the script installed `tar tzf … | head -n1` and so
-  installed the **dylib** on Linux the moment the package gained a second
-  variant; official Qt for Linux needs its `icu` archive or every link ends in
-  `undefined reference to ucnv_open_73`; and the plugin has referenced
-  `operator<<(QDataStream&, const LogosResult&)` without defining it in every
-  build this repository has ever shipped — Mach-O binds lazily and never
-  faulted, ELF loads the module, joins it to the runtime, and then dies on the
-  first call across the transport looking exactly like a Qt mismatch.
+  package: the same 40 assertions as the macOS run, in the same order, with the
+  same result. **aarch64 Linux is identical**, against the `aarch64` AppImage
+  and Qt's `linux_gcc_arm64` build — `variant linux-arm64`, 28 skills, 40
+  assertions, 0 failures.
 
-  **What is still missing, precisely:**
+  Getting there needed three fixes worth naming, because each was a defect and
+  not a port: the script installed `tar tzf … | head -n1` and so installed the
+  **dylib** on Linux the moment the package gained a second variant; official Qt
+  for Linux needs its `icu` archive or every link ends in `undefined reference
+  to ucnv_open_73`; and the plugin has referenced
+  `operator<<(QDataStream&, const LogosResult&)` **without defining it in every
+  build this repository has ever shipped** — `logos-module-builder` does not
+  compile `logos_types.cpp`, Mach-O binds lazily and never faulted, and on ELF
+  the module loads, joins the runtime, hands out a client and then dies on the
+  first call across the transport looking exactly like the Qt mismatch this
+  project spent two days learning to distrust. Porting found it; nothing else
+  would have.
 
-  - **`linux-arm64`.** Basecamp 0.2.2 publishes three artefacts — macOS arm64
-    `.dmg`, Linux `x86_64` and `aarch64` AppImages — and this covers two.
-    The aarch64 AppImage's sha256 is pinned and that unpack route is exercised;
-    the variant is not built, so it is not claimed.
-  - **"Prepared" is still a real word.** Qt 6.9.2 with `qtremoteobjects` (plus
-    `icu` on Linux), a `logos-cpp-sdk` checkout at `c87f343`, and
-    `nlohmann/json` — the AppImage carries Qt's libraries and not its SDK, and
-    the harness is compiled.
-  - **An agent of your own needs a faucet.** `deploy-agents.sh` needs
-    testnet balance on `SIGNER`, which is a testnet's policy and cannot be
-    scripted. The published agents need none of this.
-  - **The `linux-amd64` variant has no Logos Delivery library**, because upstream
-    publishes none for Linux and never has. It carries the code path — asserted,
-    not claimed: `check-package-fresh.py` finds all 721 source literals in both
-    binaries — and no library beside it, so the transport cannot come up there.
-    That is outside this criterion and inside the messaging one, and it is stated
-    here so the two variants are not read as identical.
+  **What is still missing, precisely — and after this pass it is one thing.**
+
+  - **The command compiles a harness.** `logos-core-headless.sh` needs a C++17
+    compiler, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk` checkout at
+    `c87f343` and `nlohmann/json`, on every platform — because
+    `liblogos_core`'s C API can *load* a module and cannot *call a method* on
+    one, and the SDK is what speaks the runtime's transport. A machine that can
+    run Logos Core still cannot run this until it has a build toolchain, and
+    that is not "any machine". It is `[NOT BUILT]` and ours: ship the harness
+    built, one per variant, the same build-once-per-platform job that closed the
+    variants. Not attempted here, and it is the whole of what empties the box.
+  - **`linux-arm64` is no longer on this list.** It was, one pass ago, as "one
+    container build per package". That estimate was right and the build is done:
+    Basecamp 0.2.2 publishes three artefacts, all three are packaged, and all
+    three were run. There is no fourth — Logos Core has no Windows build.
+  - **An agent of your own needs a faucet.** `deploy-agents.sh` needs testnet
+    balance on `SIGNER`, which is a testnet's policy and cannot be scripted. The
+    published agents need none of it, which is why the one command above takes
+    no chain access.
+  - **Neither Linux variant carries a Logos Delivery library**, because upstream
+    publishes none for Linux and never has. Both carry the code path — asserted,
+    not claimed: `check-package-fresh.py` finds all 750 source literals in all
+    three binaries — and no library beside them, so the transport cannot come up
+    there. That is outside this criterion and inside the messaging one, and it
+    is stated here so the variants are not read as identical.
 
   Every prerequisite is checked before anything is compiled and named in the
   error when it is missing, so a machine that cannot run this says which piece it
@@ -1774,7 +1789,7 @@ the same answer about what is missing and whose it is.
 |---|---|---|
 | CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
 | Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
-| Single CLI command, on any machine, Logos Core headless | `[NOT BUILT]` | Two of the three platforms the Logos app ships for are covered and exercised, out of one package. What is left is a `linux-arm64` variant, a prepared machine (Qt 6.9.2, `logos-cpp-sdk`, `nlohmann/json`), and a faucet for agents of your own. The `[UPSTREAM]` half was withdrawn: the Linux runtime is an AppImage and `./scripts/fetch-logos-core.sh` unpacks it. |
+| Single CLI command, on any machine, Logos Core headless | `[NOT BUILT]` | Every platform the Logos app ships for is covered and exercised, out of one package. One thing is left and it is not a platform: the command **compiles** a harness, so it needs a compiler, Qt 6.9.2 and a `logos-cpp-sdk` checkout. Ship the harness built, one per variant. The `[UPSTREAM]` half was withdrawn: the Linux runtime is an AppImage and `./scripts/fetch-logos-core.sh` unpacks it. |
 
 **All three are entirely ours, and the last `[UPSTREAM]` label on this list is
 gone.** Nothing here is refused by the stack. Two earlier passes said otherwise;

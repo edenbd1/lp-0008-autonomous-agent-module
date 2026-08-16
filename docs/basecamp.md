@@ -523,8 +523,9 @@ Stated plainly, because a reviewer will check.
   with no installer, no root, no FUSE and no display.
   `scripts/fetch-logos-core.sh` does that, checksum-pinned, and
   `scripts/logos-core-headless.sh` then runs against it with nothing set.
-  Both packages now carry a `linux-amd64` variant, and the run below is on
-  x86-64 Linux, green, from the committed package. See "Linux" below.
+  Both packages now carry `linux-amd64` **and** `linux-arm64`, and the runs
+  below are on x86-64 and aarch64 Linux, both green, from the committed
+  package. See "Linux" below.
 - **The GUI click is now verified; two rows below it are not.** This bullet used
   to read "No click in the Basecamp GUI" and then "No owner-facing UI plugin",
   and both are closed — `app/` is the `ui` plugin, the tile is in Basecamp's
@@ -705,7 +706,7 @@ then silently falls through to the system Qt. `module/package-basecamp.sh`
 refuses to package a plugin that got this wrong, so the mistake cannot reach the
 committed artefact, but it is cheaper to catch here.
 
-### Linux, and the `linux-amd64` variant
+### Linux, and the two Linux variants
 
 Two things had to be established before any of this could be written down, and
 both were assumptions this document previously recorded as facts.
@@ -741,6 +742,9 @@ building anything.
 
 ```sh
 python3 -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 \
+    -m qtremoteobjects --archives qtbase icu --outputdir ~/logos/Qt
+# aarch64: the host and the arch both change, and so does the directory
+python3 -m aqt install-qt linux_arm64 desktop 6.9.2 linux_gcc_arm64 \
     -m qtremoteobjects --archives qtbase icu --outputdir ~/logos/Qt
 ```
 
@@ -825,7 +829,7 @@ install   module/agent.lgx  variant linux-amd64
   ok    the module is in the runtime's loaded set
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
-  ok    the loaded module lists all 25 documented skills
+  ok    the loaded module lists all 28 documented skills
   ok    and bound to the owner it was configured with
   ok    and to the policy account it was configured with
 
@@ -833,9 +837,13 @@ all steps confirmed (0 failure(s))
 ```
 
 That run is x86-64 Linux, from the committed `module/agent.lgx`, against
-`liblogos_core.so` out of the published AppImage — the same 36 assertions the
-macOS run makes, in the same order, with the same result. The environment it was
-performed in is recorded in `docs/limitations.md`.
+`liblogos_core.so` out of the published AppImage — the same 40 assertions the
+macOS run makes, in the same order, with the same result. **aarch64 Linux is the
+same**, against the `aarch64` AppImage and Qt's `linux_gcc_arm64` build:
+`install module/agent.lgx variant linux-arm64`, 28 skills, 40 assertions, 0
+failures. On an Apple Silicon host a `linux/arm64` container is native, so that
+leg is the cheapest of the three to reproduce and the last one that was open.
+The environments both were performed in are recorded in `docs/limitations.md`.
 
 **The variant is chosen, not stumbled into.** `logos-core-headless.sh` used to
 install `tar tzf … | head -n1`, which was correct for exactly as long as the
@@ -1008,16 +1016,18 @@ $LGX verify   module/agent.lgx    # contents match the manifest hashes
 $LGX manifest module/agent.lgx    # type: core, two variants
 ```
 
-`manifest` prints two variants now, and which one you get is the point of them:
+`manifest` prints three variants now — one for every platform the Logos app is
+published for — and which one you get is the point of them:
 
 ```
-Variants:       darwin-arm64, linux-amd64
+Variants:       darwin-arm64, linux-amd64, linux-arm64
                 darwin-arm64 -> agent_plugin.dylib
                 linux-amd64 -> agent_plugin.so
+                linux-arm64 -> agent_plugin.so
 ```
 
 That prints root hash
-`PLACEHOLDER_ROOT_HASH`. Rebuilding
+`fdafdde1c228959c65ba3cbe8824487a22e05b6b871df228b43e0eff1bda8924`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -1595,14 +1605,12 @@ Honest list, in the order that matters:
    second app is bound to and what it does not sign.
 3. ~~A `linux-amd64` variant of **both** packages, since a reviewer may be on
    Linux and a package with only `darwin-arm64` is unopenable for them.~~
-   Built. Both packages carry `darwin-arm64` and `linux-amd64`, and Logos Core
-   loads, configures and starts the module out of the committed package on
-   x86-64 Linux — see "Linux, and the `linux-amd64` variant" above, which also
+   Built, and so is `linux-arm64`. Both packages carry all three variants —
+   every platform the Logos app is published for — and Logos Core loads,
+   configures and starts the module out of the committed package on x86-64 and
+   on aarch64 Linux. See "Linux, and the two Linux variants" above, which
    records the three defects that had to be fixed first and the one capability
-   the Linux variant does not have (no `liblogosdelivery.so` exists to ship).
-   What is left of this item is `linux-arm64`: Basecamp publishes an aarch64
-   AppImage, its sha256 is already pinned in `scripts/fetch-logos-core.sh`, and
-   the variant is not built.
+   the Linux variants do not have (no `liblogosdelivery.so` exists to ship).
 4. ~~A Basecamp `ui` app for the owner console.~~ Built: `app/`. It is a Qt
    Widgets plugin implementing `IComponent`, packaged `type: ui`, and it drives
    the loaded module through its published method table — no second

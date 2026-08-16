@@ -21,6 +21,9 @@ _external/
 build-basecamp/
 # The linux-amd64 build tree, from the container build in docs/basecamp.md.
 build-linux/
+build-linux-arm64/
+build-ui-linux/
+build-ui-arm64/
 # scripts/logos-core-headless.sh builds the headless harness and keeps the
 # module's persistence base here.
 build-headless/

@@ -35,8 +35,10 @@ DEST="${1:-$ROOT/_external/logos-core}"
 VERSION="${BASECAMP_VERSION:-0.2.2}"
 BUILD="${BASECAMP_BUILD:-d41a72}"
 
-# Pinned. Both were downloaded and checked here; the sha256 GitHub's own asset
-# `digest` field reports for each is the same value.
+# Pinned. Both were downloaded and checked here, and both routes below were
+# exercised: `--appimage-extract` natively on aarch64, `unsquashfs` on x86_64
+# under container emulation. The sha256 GitHub's own asset `digest` field
+# reports for each is the same value.
 case "$(uname -m)" in
     x86_64|amd64)   ARCH=x86_64  ; SHA256=b5dd636f966411d0c2de72a739bdf2c832ec95f20315388630b294907f7dd5ae ;;
     aarch64|arm64)  ARCH=aarch64 ; SHA256=9fed46b9e06f21d0ca6f9bfc14747494ad27fb66377cef4e61a94f612f287ef2 ;;

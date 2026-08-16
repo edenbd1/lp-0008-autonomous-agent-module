@@ -183,10 +183,13 @@ loads nowhere:
   ok    type: ui — Basecamp installs this into its plugins directory
   ok    main[darwin-arm64] = agent_ui.dylib is in the package
   ok    main[linux-amd64] = agent_ui.so is in the package
+  ok    main[linux-arm64] = agent_ui.so is in the package
 ```
 
-`app/agent-ui.lgx` carries **two** variants. The Linux one is built the same
-way, in a container, against the same official Qt 6.9.2 — see
+`app/agent-ui.lgx` carries **three** variants — `darwin-arm64`, `linux-amd64`
+and `linux-arm64`, one per platform the Logos app is published for. The Linux
+ones are built the same way, in a container, against the same official Qt
+6.9.2 (`linux_gcc_64` and `linux_gcc_arm64` respectively) — see
 [`../docs/basecamp.md`](../docs/basecamp.md), "Linux, and the `linux-amd64`
 variant", which covers the whole toolchain once for both packages:
 
@@ -246,7 +249,8 @@ ls   # agent_ui.dylib  manifest.json  metadata.json  variant
 ```
 
 On Linux the directory is `~/.local/share/Logos/LogosBasecamp/plugins` and the
-variant is `linux-amd64` — `agent_ui.so`. Flatten the variant you need, not the
+variant is `linux-amd64` or `linux-arm64` — either way `agent_ui.so`, and they
+are not interchangeable. Flatten the variant you need, not the
 first one in the archive: a plugin directory holding the other platform's binary
 looks complete and can never load, and Basecamp reports a plugin that fails to
 load to nobody.

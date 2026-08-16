@@ -1150,7 +1150,7 @@ jobs:
             || { echo "it did not install the linux-amd64 variant"; exit 1; }
           grep -q "all steps confirmed (0 failure(s))" headless.out \
             || { echo "no confirmation banner"; exit 1; }
-          grep -q "the loaded module lists all 25 documented skills" headless.out \
+          grep -q "the loaded module lists all 28 documented skills" headless.out \
             || { echo "the module loaded and never listed its skills"; exit 1; }
           grep -q "and to the policy account it was configured with" headless.out \
             || { echo "it never read the envelope back out of meta.status"; exit 1; }

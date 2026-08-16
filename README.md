@@ -426,11 +426,11 @@ policy    <its policy account, from the manifest>
 all steps confirmed (0 failure(s))
 ```
 
-**It runs on macOS arm64 and on x86-64 Linux, out of the same package.**
-`module/agent.lgx` carries a `darwin-arm64` variant and a `linux-amd64` one, and
-the script installs the one this machine needs — the transcript above is the
-macOS run; the Linux run makes the same 36 assertions with the same result, and
-is in [`docs/basecamp.md`](docs/basecamp.md).
+**It runs on every platform the Logos app is published for, out of the same
+package.** `module/agent.lgx` carries `darwin-arm64`, `linux-amd64` and
+`linux-arm64`, and the script installs the one this machine needs — the
+transcript above is the macOS run; both Linux runs make the same 40 assertions
+with the same result, and are in [`docs/basecamp.md`](docs/basecamp.md).
 
 **It needs a prepared machine, and it says which piece is missing when it is
 not.** A Logos Core runtime, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk`
@@ -441,7 +441,7 @@ install:
 ./scripts/fetch-logos-core.sh      # ~278 MB, checksum-pinned
 ```
 
-because the Linux Logos app is an AppImage — a SquashFS image with an ELF
+because the Linux Logos app is an AppImage (both architectures) — a SquashFS image with an ELF
 runtime in front of it — so `liblogos_core.so`, `logos_host`, the embedded
 modules and Basecamp's own Qt come out of it with no installer, no root, no FUSE
 and no display. On **macOS** it really is an app install, from the `.dmg` on the
@@ -698,9 +698,9 @@ one is the host.
 
 ## 8. Load the module in the Logos app (Basecamp)
 
-The loadable asset is committed: `module/agent.lgx`, with a `darwin-arm64`
-variant and a `linux-amd64` one. Check it against itself rather than trusting
-this page.
+The loadable asset is committed: `module/agent.lgx`, with `darwin-arm64`,
+`linux-amd64` and `linux-arm64` variants. Check it against itself rather than
+trusting this page.
 
 It is a binary built by hand from `module/src`, so the question that matters
 about it is not whether it is a valid package — it always was, twice while
@@ -710,16 +710,16 @@ nothing but `python3`:
 
 ```sh
 ./scripts/check-package-fresh.py
-#   ok    all NN build inputs hash exactly as they did when the package was made
-#   ok    every one of the LL source literals of >= 8 bytes is in the darwin-arm64 binary
-#   ok    every one of the LL source literals of >= 8 bytes is in the linux-amd64 binary
-#   ok    every one of the LL source literals of >= 8 bytes is in the linux-arm64 binary
+#   ok    all 31 build inputs hash exactly as they did when the package was made
+#   ok    every one of the 750 source literals of >= 8 bytes is in the darwin-arm64 binary
+#   ok    every one of the 750 source literals of >= 8 bytes is in the linux-amd64 binary
+#   ok    every one of the 750 source literals of >= 8 bytes is in the linux-arm64 binary
 ```
 
-Both variants, and that matters more than it looks: the `linux-amd64` plugin is
+All three variants, and that matters more than it looks: the Linux plugins are
 built from the same translation units as the macOS one, so "the delivery code
 path is in there" is an assertion rather than a claim, and a variant built by a
-different machine cannot ride along on the other's provenance —
+different machine cannot ride along on another's provenance —
 `scripts/write-package-record.py` re-checks the sibling's bytes and its literals
 before it will carry its record forward.
 
@@ -741,7 +741,7 @@ git clone https://github.com/logos-co/logos-package && \
   git -C logos-package checkout 18b0075     # then build it — docs/basecamp.md
 
 lgx verify   module/agent.lgx     # contents match the manifest hashes
-lgx manifest module/agent.lgx     # type: core; darwin-arm64 and linux-amd64
+lgx manifest module/agent.lgx     # type: core; three platform variants
 ```
 
 Basecamp 0.2.2 has no "install from file" button — its Package Manager installs
@@ -759,7 +759,8 @@ ls   # agent_plugin.dylib  manifest.json  metadata.json  variant
 ```
 
 On Linux the directory is `~/.local/share/Logos/LogosBasecamp/modules` and the
-variant is `linux-amd64` — `agent_plugin.so`, not the dylib. `LOGOS_USER_DIR`
+variant is `linux-amd64` or `linux-arm64` — `agent_plugin.so`, not the dylib,
+and the two are not interchangeable. `LOGOS_USER_DIR`
 overrides the base outright, which is the clean way to try this without touching
 an existing install. `./scripts/logos-core-headless.sh` does all of this for you
 and picks the variant for the machine it is on; doing it by hand is for a
@@ -1144,7 +1145,10 @@ cannot use must be refused before anything is installed, and asking the runtime
 for a module that is not there must go red at the load. It has been rehearsed
 end to end in a bare `ubuntu:24.04` amd64 container, step for step, including
 all three controls; it has not yet run on a GitHub runner, because nothing here
-has been pushed.
+has been pushed. The `linux-arm64` leg is not in CI and was exercised the same
+way, in a native `linux/arm64` container against the `aarch64` AppImage — 40
+assertions, 0 failures — which is stated rather than added as a second job
+nothing has watched run.
 
 [`.github/workflows/e2e-local-sequencer.yml`](.github/workflows/e2e-local-sequencer.yml)
 runs the whole policy lifecycle against a real standalone LEZ sequencer with
