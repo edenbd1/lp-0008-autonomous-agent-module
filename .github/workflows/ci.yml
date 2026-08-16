@@ -754,12 +754,16 @@ jobs:
   # WHY THERE IS NO REBUILD HERE, named rather than implied, because "prefer
   # failing loudly to guessing" applies to the workflow as much as to the script:
   #
-  #   - The package ships one variant and it is darwin-arm64. ubuntu-latest
-  #     cannot emit a Mach-O arm64 dylib: that needs the macOS SDK, which is not
-  #     redistributable and is not on this runner. So the rebuild-and-compare
-  #     that would settle the question outright is not available in this job at
-  #     any price, and pretending otherwise by comparing a linux-amd64 .so
-  #     against a darwin-arm64 dylib would be a check in the shape of a check.
+  #   - The package ships three variants and one of them is darwin-arm64.
+  #     ubuntu-latest cannot emit a Mach-O arm64 dylib: that needs the macOS SDK,
+  #     which is not redistributable and is not on this runner. So a
+  #     rebuild-and-compare that settled the question for the WHOLE package is
+  #     not available in this job at any price, and pretending otherwise by
+  #     rebuilding the linux-amd64 .so and calling the package checked would be a
+  #     check in the shape of a check. (The `linux-headless` job below does
+  #     exercise the linux-amd64 variant, but by RUNNING it in a real Logos Core
+  #     rather than by comparing bytes — a different property, and the one a
+  #     reviewer on Linux actually cares about.)
   #
   #   - macos-14 is arm64 and could do it — aqtinstall for the pinned Qt 6.9.2,
   #     the three logos checkouts docs/basecamp.md pins, brew nlohmann-json, and
@@ -890,31 +894,41 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import io, tarfile
+          import io, json, tarfile
           src = tarfile.open("module/agent.lgx", "r:gz")
           members = [(m, src.extractfile(m).read() if m.isfile() else None)
                      for m in src.getmembers()]
+          manifest = json.loads(dict((m.name, d) for m, d in members)["manifest.json"])
+          want = len(manifest["main"])
           hit = 0
           out = tarfile.open("module/agent.lgx", "w:gz", format=tarfile.GNU_FORMAT)
           for m, data in members:
-              # The PLUGIN specifically, not any shared library in the package.
-              # This used to match every .dylib, which was true until the
-              # package started carrying liblogosdelivery beside the plugin --
-              # and then the assertion below died on two hits before the control
-              # ever ran, leaving "a swapped binary is detected" unverified
-              # rather than merely untested. A control that stops working when
-              # the thing it guards grows is worse than no control, because it
-              # goes red for a reason that is not the property.
-              if data is not None and m.name.endswith(("agent_plugin.dylib",
-                                                       "agent_plugin.so")):
-                  # One byte, deep in __TEXT. Same length, so the size and the
-                  # manifest's own idea of the file are untouched.
+              # The PLUGINS specifically, not any shared library in the package,
+              # and EVERY variant's rather than one.
+              #
+              # This has now been wrong twice in the same way. It first matched
+              # every .dylib, which was true until the package started carrying
+              # liblogosdelivery beside the plugin; the fix pinned it to exactly
+              # one agent_plugin, which was true until the package gained a
+              # second and a third variant. Both times the assertion would have
+              # died before the control ever ran, leaving "a swapped binary is
+              # detected" unverified rather than merely untested -- which is the
+              # failure its own comment warned about. So the count is taken from
+              # the manifest instead of written down, and every variant is
+              # corrupted, because the property is "a swapped binary is caught"
+              # and there are three binaries to swap.
+              if data is not None and m.name.startswith("variants/") and \
+                 m.name.endswith(("/agent_plugin.dylib", "/agent_plugin.so")):
+                  # One byte, deep in the text segment. Same length, so the size
+                  # and the manifest's own idea of the file are untouched.
                   data = data[:0x40000] + bytes([data[0x40000] ^ 0xFF]) + data[0x40001:]
                   hit += 1
               out.addfile(m, io.BytesIO(data)) if data is not None else out.addfile(m)
           out.close()
-          assert hit == 1, "expected exactly one agent_plugin binary in the package, found %d" % hit
-          print("one byte flipped in the packaged plugin; the archive is otherwise identical")
+          assert hit == want, \
+              "the manifest declares %d variant(s) and %d plugin(s) were found" % (want, hit)
+          print("one byte flipped in each of the %d packaged plugins; "
+                "the archive is otherwise identical" % hit)
           PY
           set +e
           ./scripts/check-package-fresh.py > swapped.out 2>&1; rc=$?
