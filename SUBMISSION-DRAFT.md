@@ -1770,9 +1770,12 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   has been seen.** Ask, rather than reading this line:
   `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
 
-  Of the runs that did finish, fourteen steps ran
-  and one skipped — `Sequencer log on failure`, which is `if: failure()`, so it
-  skips exactly when the job succeeds and asserts nothing.
+  Of the runs that did finish, fourteen steps ran and one skipped — the
+  sequencer-log step, which is guarded so that it runs only when there is a
+  failure to explain, and therefore skips exactly when the job succeeds. It was
+  `if: failure()` and is now `if: failure() || cancelled()`: run 31950647965 ran
+  past its 340-minute cap, GitHub marked it `cancelled` rather than `failed`,
+  and the step was skipped in the one case its output was most wanted.
 
   Three real proofs, not dev-mode receipts: the same script under
   `RISC0_DEV_MODE=1` does the same three operations in 16, 30 and 32 seconds, so a
