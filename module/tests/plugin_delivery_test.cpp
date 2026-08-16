@@ -519,8 +519,38 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     // is that the poll ANSWERS; asserting it found nothing would be an
     // assertion about which process got there first, which is the mistake
     // `docs/limitations.md` records costing a settlement.
+    //
+    // WHAT IT FINDS IS COUNTED, THOUGH, AND THAT COST A SECOND SETTLEMENT.
+    //
+    // In `peers` mode this poll runs before the peer has answered, so it applies
+    // nothing and the loop below sees every update. In `settle` mode it runs on
+    // the far side of a 434-second proof, by which time the peer's `working` and
+    // `completed` are both waiting — so THIS call applies them both, and a
+    // counter that only watched the loop reported "applying 0 status update(s)
+    // the peer published" about a task whose own history read
+    // submitted -> working -> completed.
+    //
+    // Settlement 9 is that run: the money moved, the lifecycle ran, and the
+    // harness went red four lines past the payment on an assertion that was
+    // measuring where the work happened rather than whether it did. So the
+    // accounting starts here, at the first poll, and not at the loop.
     const QString myUpdates =
         QStringLiteral("/lp-0008/1/task-") + other + "-" + myTask + "/json";
+    QString state = QStringLiteral("submitted");
+    QStringList authors;
+    int selfIgnored = 0, applied = 0, since = 0;
+    QJsonArray history;
+    // Everything one poll answered, folded into what this step is counting.
+    const auto absorb = [&](const QJsonObject &poll) {
+        since = poll.value("next_since").toInt();
+        selfIgnored += poll.value("ignored").toObject().value("self").toInt();
+        for (const QJsonValue &entry : poll.value("applied").toArray()) {
+            authors.append(entry.toObject().value("from").toString());
+            ++applied;
+        }
+        state = poll.value("state").toString();
+        history = poll.value("history").toArray();
+    };
     QJsonObject updates =
         call(p, "agent.poll",
              QStringLiteral(R"({"agent_address":"%1","task_id":"%2"})").arg(other, myTask));
@@ -529,7 +559,7 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
               updates.value("error").toString());
     check(updates.value("topic").toString() == myUpdates,
           "which is the topic the request was sent to — one topic per task, both ways");
-    int since = updates.value("next_since").toInt();
+    if (updates.value("ok").toBool()) absorb(updates);
 
     bool served = false;
     QString servedText;
@@ -632,10 +662,6 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     // processes: one says the peer's terminal update arrived, the other says
     // this agent's own frame came back off its own node, and a bounded loop that
     // never sees either fails honestly rather than intermittently.
-    QString state = QStringLiteral("submitted");
-    QStringList authors;
-    int selfIgnored = 0, applied = 0;
-    QJsonArray history;
     note(QStringLiteral("polling for the peer's updates, up to %1 rounds of 3 s%2")
              .arg(updateRounds)
              .arg(price.isEmpty() ? QString()
@@ -650,14 +676,7 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
             note("agent.poll: " + updates.value("error").toString());
             break;
         }
-        since = updates.value("next_since").toInt();
-        selfIgnored += updates.value("ignored").toObject().value("self").toInt();
-        for (const QJsonValue &entry : updates.value("applied").toArray()) {
-            authors.append(entry.toObject().value("from").toString());
-            ++applied;
-        }
-        state = updates.value("state").toString();
-        history = updates.value("history").toArray();
+        absorb(updates);
         if (state == QLatin1String("completed") && selfIgnored >= 1) break;
         std::this_thread::sleep_for(std::chrono::seconds(3));
     }
@@ -666,10 +685,17 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     check(state == QLatin1String("completed"),
           "THIS agent's own TaskStore reached `completed`, and every transition into it came "
           "off the wire");
-    check(applied >= 2 && !authors.isEmpty(),
+    check(applied >= 2,
           QStringLiteral("applying %1 status update(s) the peer published").arg(applied));
-    check(!authors.contains(me) && authors.count(other) == int(authors.size()),
-          "all of them published by " + other + ", the OTHER account — none by this one");
+    // `!authors.contains(me)` is true of an empty list, and in the run that
+    // found this the list WAS empty — so this line printed ok next to a FAIL
+    // saying nothing had been applied. An assertion that holds when the thing
+    // it describes did not happen is not an assertion, and this repository has
+    // spent a day removing that shape. The non-emptiness is part of the claim.
+    check(!authors.isEmpty() && !authors.contains(me) &&
+              authors.count(other) == int(authors.size()),
+          QStringLiteral("all %1 of them published by ").arg(authors.size()) + other +
+              ", the OTHER account — none by this one");
     check(selfIgnored >= 1,
           QStringLiteral("while the forged update this agent published about its own task was "
                          "read back off the same topic and refused (%1 of them)")
