@@ -64,7 +64,7 @@ fi
 # The third way a package is wrong, and the only one of the three that is
 # invisible even to a reviewer who unpacks it: the binary loads perfectly and is
 # built from source nobody has read. This repository shipped that too — an
-# `agent.lgx` packaged at f53f822 stayed committed across five commits to
+# `agent.lgx` packaged at 3322142 stayed committed across five commits to
 # module/src, so the downloadable artefact was missing content-topic identifier
 # validation, the owner-channel hardening, `program.call`'s flag-value checking
 # and task persistence, while README §7 offered it as the loadable asset. Every

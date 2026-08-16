@@ -227,7 +227,7 @@ echo "  policy $POLICY  (per-tx $PER_TX, per-period $PER_PERIOD)"
 # Anchoring is TWO signatures from two wallets that never meet. The agent signs
 # first and names the one account allowed to anchor over it; `create_policy`
 # then reads that claim and refuses any other signer (6020), or refuses outright
-# if the agent never claimed (6019). Before 07fcee4 the agent's public id was
+# if the agent never claimed (6019). Before 8dee766 the agent's public id was
 # enough, which meant anchoring over somebody else's agent needed only a value
 # published in the manifest and in its Agent Card.
 #

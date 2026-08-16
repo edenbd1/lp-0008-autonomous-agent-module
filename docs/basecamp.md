@@ -148,7 +148,7 @@ free:
   the registry's `no skill named '…' is registered` means it did not. The
   harness asserts both directions: no listed skill may produce the registry's
   refusal, and a name nobody registered must.
-- **It fails on the artefact this repository shipped in `333e7a8`.** Run against
+- **It fails on the artefact this repository shipped in `726e142`.** Run against
   that `agent.lgx` — packaged before the skills were registered, and otherwise
   identical in manifest, type and load behaviour — the same harness reports
   `skills(): 0 entries`, `[]`, and three failures, while still passing every
@@ -997,8 +997,8 @@ manifest root hash. `scripts/check-package-fresh.py` reads it back, and the
 
 It exists because the two checks above cannot see the defect that has now
 shipped twice from this directory — a package that was correct when it was made
-and was left behind by later commits to `module/src`. `f53f822`'s `agent.lgx`
-stayed committed across five commits to the sources; and `d995d85` made the
+and was left behind by later commits to `module/src`. `3322142`'s `agent.lgx`
+stayed committed across five commits to the sources; and `524866c` made the
 module sign Agent Cards `secp256k1-bip340` instead of the `EdDSA` that
 `scripts/use-cases/verify-agent-card.py` rejects, without repackaging, so the
 published `.lgx` signed cards this repository's own verifier refuses. Both
@@ -1110,7 +1110,7 @@ line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
 so a stale copy of it here is now a CI failure rather than a paragraph nobody
 re-reads. (This line was stale: it said `cf07408e…`, which is the package as it
-stood at `04c9c79` — the one whose Agent Cards this repository's own verifier
+stood at `d7f68c2` — the one whose Agent Cards this repository's own verifier
 rejects. The archive's own sha256 changes on every repackage even when the root
 hash does not, because gzip records a timestamp. The root hash is the one that
 describes the contents.)

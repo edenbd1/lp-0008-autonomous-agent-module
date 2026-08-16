@@ -8,12 +8,12 @@ repackaged, and the published artefact did not contain the fix its own commit
 claimed to make:
 
   1. A rebase left the artefact built from source no longer in the tree: the
-     `agent.lgx` packaged at f53f822 stayed committed across five commits to
+     `agent.lgx` packaged at 3322142 stayed committed across five commits to
      `module/src`, so the downloadable module was missing content-topic
      validation, the owner-channel hardening, `program.call`'s flag checking and
      task persistence, while README §7 offered it as the loadable asset.
 
-  2. d995d85 stopped the module signing Agent Cards `alg: EdDSA` — an algorithm
+  2. 524866c stopped the module signing Agent Cards `alg: EdDSA` — an algorithm
      `scripts/use-cases/verify-agent-card.py`, this repository's own verifier,
      rejects with `unexpected algorithm 'EdDSA'` — and started signing them
      `secp256k1-bip340`. The source was fixed. The package was not rebuilt. So
@@ -51,7 +51,7 @@ WHAT THIS ASSERTS, in two layers.
   (2) The corroboration. Every string literal of >= 8 bytes in `module/src` and
       `module/generated_code` must appear as bytes inside the plugin the package
       actually ships. This is layer 1's forgery check and it is the check that
-      would have caught defect 2 above on its own: the source at d995d85 says
+      would have caught defect 2 above on its own: the source at 524866c says
       "secp256k1-bip340", and those 16 bytes are simply not in the stale binary.
       It is deliberately the same evidence the human investigation used, made
       into an assertion.

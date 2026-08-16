@@ -495,7 +495,7 @@ jobs:
       #
       # Headers only, and only two of them are reached — logos_module_context.h
       # and logos_result.h. Both are Qt-free, so this does not resurrect the Qt
-      # module build removed in 829ef18 for failing on the SDK's own ScopedQArg
+      # module build removed in c1e3112 for failing on the SDK's own ScopedQArg
       # under the runner's GCC.
       - name: Check out the Logos C++ SDK
         env:
@@ -795,7 +795,7 @@ jobs:
       #     plugin binary to load — it drives QPluginLoader over
       #     build-basecamp/modules/agent_plugin.{so,dylib}. Building that
       #     plugin needs the logos-module-builder / logos-module toolchain,
-      #     which is the job removed in 829ef18: it fails on the SDK's own
+      #     which is the job removed in c1e3112: it fails on the SDK's own
       #     ScopedQArg, an overload GCC rejects and Clang accepts, and
       #     switching CI to Clang did not clear it. Upstream's code, not ours.
       #     Run by hand against the built module; docs/basecamp.md carries the
@@ -867,12 +867,12 @@ jobs:
   # which is the file a reviewer downloads, and which is a binary built from that
   # source by hand on a Mac. Twice now the source changed and nothing repackaged:
   #
-  #   f53f822's agent.lgx stayed committed across five commits to module/src, so
+  #   3322142's agent.lgx stayed committed across five commits to module/src, so
   #   the downloadable module had no content-topic validation, no owner-channel
   #   hardening, no flag checking in program.call and no task persistence, while
   #   README §7 offered it as the loadable asset.
   #
-  #   d995d85 made the module sign Agent Cards `secp256k1-bip340` instead of
+  #   524866c made the module sign Agent Cards `secp256k1-bip340` instead of
   #   `EdDSA`, because scripts/use-cases/verify-agent-card.py — this repository's
   #   own verifier — rejects EdDSA outright. The source was fixed and the package
   #   was not rebuilt, so the published .lgx signed cards this repository's own
@@ -1006,8 +1006,8 @@ jobs:
           rm -f package.out
 
       # Control 1, and it is the defect itself rather than an analogue of it:
-      # change what the module signs cards with, exactly as d995d85 did, and
-      # repackage nothing. This is the state main was in at 04c9c79.
+      # change what the module signs cards with, exactly as 524866c did, and
+      # repackage nothing. This is the state main was in at d7f68c2.
       - name: Negative control — source moves, package does not
         run: |
           set -euo pipefail
