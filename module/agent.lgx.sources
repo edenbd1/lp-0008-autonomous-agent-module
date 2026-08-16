@@ -15,15 +15,15 @@
     "name, type or author."
   ],
   "built_from": {
-    "module/CMakeLists.txt": "76111e5d41d7104b72762f8e4e7b5b7b24d23e04dad7e42f511a235cd03a06e2",
+    "module/CMakeLists.txt": "07deb1b9906f65d697fd985d21c542a9fb394c7547a86a6f2330162b721edde5",
     "module/agent_module_plugin_export.h": "149a9597119d18ff7630b1bac939e1051d6c975129e17c4f33513a1dada85aa9",
     "module/generated_code/agent_dispatch.cpp": "26140ef3be69032b4006d43939843ad37ffd0660707d6f83d57cb1b27d88c2a1",
     "module/generated_code/agent_events.cpp": "544722ac079d102aa47c3613b458c7b559644b263727712cc9286f65ce9f93c2",
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "efa30145dd7a99f57199853d9bdee3e92063b6a07efe85d43c31909419e966be",
-    "module/src/agent_module_plugin.h": "b2cf160b47a9824b12ee82d8c1786213a541e80f7db861c15fb9a9d9900aa812",
+    "module/src/agent_module_plugin.cpp": "cdcb6fc27a5a4dca407572041d62e475f4123941bb350ff10eca9ac399deb492",
+    "module/src/agent_module_plugin.h": "9d5b90d251b34a4a1707ed772b6348388d2ec0ada18ee88173f09e1ba5627dfd",
     "module/src/agent_skills.cpp": "e741574536996fe0f8ae0bebefefa3caa6d5e88a461db6826a590ae182045374",
     "module/src/agent_skills.h": "d2cc5d784f57603269ac69bccb904f8e1f0115f505398e52b2d19e106ba3820f",
     "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",
@@ -34,6 +34,8 @@
     "module/src/messaging_skills.h": "6b23d21679cb1c27be21d5765d25e2856be6d84de7b846718685db417c5cc113",
     "module/src/owner_channel.cpp": "1fd284251653869cc8721e5051e298b56d8b4f4444611526e28e7288bc9f002e",
     "module/src/owner_channel.h": "d84c978a8d5e6189e39ac2accdc4d0de430577f5bf195d0f016ac2e21cb7f8d5",
+    "module/src/owner_skills.cpp": "c46d9c614ded7cdafa37c3f2c7ad55e6c4607e7eb175868eb9efaf3610d34939",
+    "module/src/owner_skills.h": "3bfea3a520d9734e9445951b25626f7fcaac01fa0c97c6e6ddf396045a0ec58b",
     "module/src/program_skills.cpp": "67ec2d34c4c36b20486975f729c63518bdf556e2af00ce6a3c79d52855f9bd46",
     "module/src/program_skills.h": "820dc8abe2870a6bb10cb519f979d8add33a152536cc34d1b35a7cccb769ca97",
     "module/src/spend_marker.cpp": "f16403e06be5a6125b880199fcd840581d5ccbc67dd2c39ccf454d02311c3f43",
@@ -46,7 +48,7 @@
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
   "package": "module/agent.lgx",
-  "package_root_hash": "424c9f7151e5dee98924b5ac08be0bc858f3b1b32eb691336a06959e8d15fd45",
+  "package_root_hash": "ca74731277f0ec7392a8fb445a21e165288c2e70e1ec68e8768a6a34652564d2",
   "toolchain": {
     "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
     "host": "darwin-arm64",
@@ -55,9 +57,9 @@
   },
   "variants": {
     "darwin-arm64": {
-      "bytes": 4268720,
+      "bytes": 4440784,
       "main": "agent_plugin.dylib",
-      "sha256": "256c75e73287750f5a2b7b44f4f1db932c9df40707052206cbd50bc9bf2a862a"
+      "sha256": "5b4def6a0e23b0a07bec35ecbc9045d271f3ab53acf1de985963b9ead3bab0b4"
     }
   }
 }

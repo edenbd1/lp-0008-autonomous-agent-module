@@ -429,7 +429,7 @@ unchecked box can be read without the prose around it:
   and saying so is a claim about a named artefact, checked, not an inference
   from something that failed.
 
-Three of the four unchecked boxes below are `[NOT BUILT]`, and the fourth is
+Two of the three unchecked boxes below are `[NOT BUILT]`, and the third is
 `[NOT BUILT]` in one clause and `[UPSTREAM]` in another. **Nothing here is
 blocked outright.** That is a harder thing to write than "the host forbids it",
 and it is the true one: one of these entries said the host forbade it, the host
@@ -474,8 +474,9 @@ one of them — `meta.skills` — was documented in three headers before it exis
   <- loaded modules: wallet_module storage_module delivery_module
                      capability_module agent
   ok configure() is accepted across the transport
-  <- skills(): 25 entries
-  ok invoke() dispatches to every one of the 25
+  <- skills(): 28 entries
+  ok it lists exactly 28 — no more, no fewer (got 28)
+  ok invoke() dispatches to every one of the 28
   <- storage_module getPluginMethods(): 29 method(s) — init, start, stop, …
   ok 'storage_module' answers across the runtime's transport with its own
      method table: it is running, not just loaded
@@ -490,6 +491,14 @@ one of them — `meta.skills` — was documented in three headers before it exis
      loaded in the same runtime
   all steps confirmed (0 failure(s))
   ```
+
+  **One run, not two.** The 28 skills and the three companions in that transcript
+  are the same invocation: the agent's card is read, every skill is dispatched,
+  and the owner-approval path is exercised in a process that is already hosting
+  `storage_module`, `delivery_module` and `wallet_module`, and all three still
+  answer afterwards. Two runs pasted together would have been the easier thing to
+  write and would have asserted nothing about the four of them coexisting, which
+  is the whole of the criterion.
 
   **Why `getPluginMethods` and not the loaded set.** Because "loaded" is not the
   claim and would have been the wrong thing to check. A plugin built against a Qt
@@ -621,12 +630,88 @@ one of them — `meta.skills` — was documented in three headers before it exis
   lacks instead of failing inside a compile. That is good behaviour for a
   prerequisite, and it is not the same thing as "any machine".
 
-- [ ] **UNMET `[NOT BUILT]` — The owner can interact with the agent in real time
-  from a separate Logos app instance using Logos Messaging, with no intermediary
-  server.**
+- [x] **MET — The owner can interact with the agent in real time from a separate
+  Logos app instance using Logos Messaging, with no intermediary server.**
 
-  Four clauses. Three are now demonstrated and the fourth is not, and they must
-  not be blurred.
+  Four clauses, and the fourth — "a separate Logos app instance" — was the last
+  one open in this document. It is closed by execution: **two LogosBasecamp
+  0.2.2 processes**, each with its own `LOGOS_USER_DIR`, its own working
+  directory, its own loaded copy of `module/agent.lgx` in its own `logos_host`,
+  its own `app/agent-ui.lgx` window, and its own Logos Delivery node. A spend
+  minted in one appeared in the other's window **573 ms** later, was denied from
+  there in **371 ms** and approved in **177 ms**, and with the owner's app
+  killed the same call ended `owner_unreachable` with nothing submitted. Both
+  windows were driven through macOS's accessibility API — buttons clicked,
+  fields typed — and both transcripts below are read back out of the windows'
+  own panes.
+
+  ```
+  agent app                                  owner app  (a different process)
+  12:53:57.627 → invoke(wallet.send,
+     {"recipient":"Public/Dxh7…","amount":"250"})
+                                             12:53:58.200 <= over Logos Messaging:
+                                                {"arrived":1,"frames":1,"pending":[{"id":
+                                                "spend-1786877637631","seed_verified":true,…}]}
+                                             12:54:08.304 → invoke(owner.answer,
+                                                {"decision":"deny","id":"spend-1786877637631"})
+  12:54:08.675 <- invoke(wallet.send): {"outcome":"denied","attempts":1,
+     "submitted":false,"waited_ms":11043}
+  12:54:21.683 → invoke(wallet.send, …)
+                                             12:54:24.803 → invoke(owner.answer,
+                                                {"decision":"approve","id":"spend-1786877661687"})
+  12:54:24.980 <- invoke(wallet.send): {"outcome":"approved","approved":true,
+     "attempts":1,"submitted":false,"waited_ms":3292}
+  ```
+
+  **The control, because a node receives its own published messages.** With the
+  owner's app process killed, the same call returns
+  `{"outcome":"owner_unreachable","attempts":2,"submitted":false,"waited_ms":15009}`
+  — and the agent's own `meta.status` ends the run at
+  `{"channel_decoded":2,"channel_seen":2,"relay_seen":6}`: six of its own request
+  frames came back to it off the public relays and produced no approval, while
+  the only two channel frames it decoded are the owner's two answers. The
+  headless form of the same three runs is
+  `./scripts/delivery-in-plugin.sh two-modules` (exit 0), whose first run has
+  nobody watching.
+
+  **What was missing was never the transport.** It was that nothing on the
+  OWNER's side could be reached through a module method table, so a second
+  Basecamp had a window and nothing to say with it. `invoke()` is the only thing
+  a `ui` plugin can call across the plugin boundary, so the owner's end is three
+  skills — `owner.watch`, `owner.pending`, `owner.answer`
+  (`module/src/owner_skills.cpp`) — and the window polls `owner.pending` once a
+  second, which is why a request minted in the other app appears without anybody
+  pressing anything.
+
+  Two more things this run established, both by measurement:
+
+  - **The owner's app must open the channel before the agent's first request on
+    it.** Done the other way round, the owner's node *receives the frames* — its
+    log carries them on the right content topic — and the reliable channel never
+    delivers them: `{"relay_seen":2,"channel_seen":0}`. A channel opened
+    mid-stream does not get the backlog, and it reads exactly like a network
+    carrying nothing.
+  - **This transport hands a node its own relay messages and not its own
+    reliable-channel frames.** So the rule that refuses a self-authored *request*
+    cannot be exercised live; it is exercised in
+    `module/tests/owner_skills_test.cpp` against a frame written for the purpose,
+    with the falsification beside it — the same bytes authored by the other
+    account, which must be accepted.
+
+  **What this does not claim.** The owner's app is bound to the owner's
+  *account*; it does not sign the reply, and no key is exercised. That is what
+  the channel is — sender ids on it are self-declared — and the authority over an
+  above-threshold spend is the approval account on chain, which only the owner's
+  signature on `approve_spend` can create. The prize's Architecture wording is
+  "any Logos app instance **that holds the owner's keys**"; what is demonstrated
+  here is reach, correlation and real time, not key custody.
+
+  The record, with the environment and the failure modes, is
+  [`docs/basecamp.md`](docs/basecamp.md) §"Two Basecamps, and the owner in the
+  second one".
+
+  Everything below is the evidence that was already here for the other three
+  clauses, and it still stands on its own.
 
   **Using Logos Messaging, no intermediary server, in real time — demonstrated,
   from a module Logos Core loads.** `./scripts/delivery-in-plugin.sh approval`
@@ -672,10 +757,12 @@ one of them — `meta.skills` — was documented in three headers before it exis
   this is the proof the agent cannot settle its own request), and an owner
   answering `251` where `250` was asked (`{"verdict":"refused","altered":6}`).
 
-  **From a separate Logos app instance — no, and that is the whole of what is
-  left.** The owner in every run above is `module/tests/owner_responder.cpp`, a
-  program written for the purpose with its own Delivery node, and the agent end is
-  a harness rather than Basecamp. Two Logos apps have not talked to each other.
+  **From a separate Logos app instance.** The owner in every run *above* is
+  `module/tests/owner_responder.cpp`, a program written for the purpose with its
+  own Delivery node, and the agent end is a harness rather than Basecamp — which
+  is why those runs, on their own, never closed this box. Two Logos apps have
+  now talked to each other, and the transcript of it is at the top of this
+  entry.
 
   It is worth being exact about why a purpose-written responder does not count,
   because the temptation to read "a separate Logos app instance" as "a separate
@@ -689,15 +776,14 @@ one of them — `meta.skills` — was documented in three headers before it exis
   of. A binary this repository wrote and starts is not that, however real its
   Delivery node is.
 
-  `[NOT BUILT]`, and the parts are already on the shelf. The `app/` console
-  exists, is loaded by Basecamp, and completes an owner approval round trip today
-  — over Logos Core's own transport, which is the *other* criterion, below. The
-  module has been shown opening its own Delivery node on the far side of the
-  plugin boundary. And Basecamp 0.2.2 has been launched twice on one machine
-  against two `LOGOS_USER_DIR` bases (`docs/basecamp.md`). What has not been done
-  is giving the `app/` console a Delivery-backed owner channel and pointing two
-  instances at each other. Nothing measured here says that cannot be done; this
-  document simply must not claim it until it has been.
+  This paragraph used to read `[NOT BUILT]`, and listed the parts on the shelf:
+  the `app/` console loaded by Basecamp, the module opening its own Delivery node
+  on the far side of the plugin boundary, and Basecamp 0.2.2 launched twice
+  against two `LOGOS_USER_DIR` bases. The missing piece it named — "giving the
+  `app/` console a Delivery-backed owner channel and pointing two instances at
+  each other" — is what the transcript at the top of this entry is. The
+  discipline the paragraph ended on is the reason it can now be checked: this
+  document must not claim it until it has been done.
 
 - [x] **MET — The spending threshold holds above-threshold transactions for owner
   approval and executes below-threshold transactions autonomously.**
@@ -777,7 +863,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   All twenty-one are implemented **and registered**, which are different claims:
   thirteen skills were implemented here before anything registered them, and the
   module answered `skills()` with an empty card while looking perfectly healthy.
-  `installBuiltinSkills` registers 25 skills — the prize's twenty-one, plus
+  `installBuiltinSkills` registers 28 skills — the prize's twenty-one, plus
   `agent.evaluate_task`, which the prize does not ask for and which is kept
   because it is the only skill on the pluggable-inference seam a *different*
   criterion requires, plus three the prize does not ask for either and without
@@ -788,6 +874,15 @@ one of them — `meta.skills` — was documented in three headers before it exis
   A2A `TaskStatusUpdateEvent` on the task's topic, the other reads that topic and
   applies a peer's update to this agent's own `TaskStore`, so a task can reach
   `completed` because of what arrived rather than because this process said so.
+
+  The last three are `owner.watch`, `owner.pending` and `owner.answer`, and they
+  are not the agent's skills at all: they are what the OWNER's Logos app calls to
+  hear a spend request and answer it over Logos Messaging. They are skills rather
+  than module methods because `invoke()` is the only thing a `ui` plugin can call
+  across the plugin boundary — which is exactly what stood between this
+  submission and the "separate Logos app instance" criterion above. 21 + 1 + 3 +
+  3 = 28.
+
   `start()` calls `installBuiltinSkills` itself when no host wired the ports, so a
   module loaded as a plugin offers a full card.
 
@@ -805,13 +900,13 @@ one of them — `meta.skills` — was documented in three headers before it exis
   Asserted by execution against the **packaged artefact**, not a rebuild:
   `module/tests/plugin_load_test.cpp` loads the committed `module/agent.lgx`
   through `QPluginLoader` (exit 0) and `./scripts/logos-core-headless.sh` loads it
-  through the installed Basecamp's own `liblogos_core` (exit 0). Both report 25
+  through the installed Basecamp's own `liblogos_core` (exit 0). Both report 28
   entries, each with a parameter schema, `invoke()` dispatching to every one, and
-  `meta.skills` listing all 25 — including itself — over the boundary.
+  `meta.skills` listing all 28 — including itself — over the boundary.
   Documented in [`docs/skills.md`](docs/skills.md), and the count is gated:
   `./scripts/check-docs.py` (exit 0) reports `checked 29 skill-count mention(s)
-  against the 25 the module registers`, and `examples/agent-console/run.sh`
-  asserts `docs/skills.md §7 lists exactly the 25 skills the module registers`.
+  against the 28 the module registers`, and `examples/agent-console/run.sh`
+  asserts `docs/skills.md §7 lists exactly the 28 skills the module registers`.
 
 - [x] **MET — A2A-compatible: cards follow the A2A schema, tasks follow the A2A
   lifecycle, documented as an A2A transport binding over Logos Messaging.**
@@ -1262,7 +1357,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   ok  a second skill of the same name is refused
   ok  the skill answered through the module
   ok  malformed parameters are refused … and the same call afterwards returns the same answer
-  ok  docs/skills.md §7 lists exactly the 25 skills the module registers
+  ok  docs/skills.md §7 lists exactly the 28 skills the module registers
   ok  the digest matches shasum -a 256 of the same input
   ok  and does not match the digest of altered input
   ok  nothing under module/ was modified — the criterion's words, checked
@@ -1287,8 +1382,8 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   **Assets and instructions.** `module/agent.lgx` and `app/agent-ui.lgx` both ship,
   with build and install commands in [`docs/basecamp.md`](docs/basecamp.md) and
   [`app/README.md`](app/README.md). The package is provably the source committed
-  beside it: `./scripts/check-package-fresh.py` (exit 0) reports `29 build
-  input(s) recorded and unchanged` and `every one of the 721 source literals of
+  beside it: `./scripts/check-package-fresh.py` (exit 0) reports `31 build
+  input(s) recorded and unchanged` and `every one of the 750 source literals of
   >= 8 bytes is in the darwin-arm64 binary` — a check that
   exists because the shipped `.lgx` was once two commits stale and produced cards
   the repository's own verifier refused.
@@ -1585,12 +1680,12 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   Checked by looking: there is no `.mp4`, `.mov` or `.webm` under any path here.
   Blocker 1, and the only unchecked box with irreducible work in it.
 
-**Tally: 19 MET, 4 UNMET, of the 23 criteria the prize lists** — Functionality
-9 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-4 of 6. The parts sum to the whole: 9 + 2 + 3 + 1 + 4 = 19, and 2 + 2 = 4.
+**Tally: 20 MET, 3 UNMET, of the 23 criteria the prize lists** — Functionality
+10 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+4 of 6. The parts sum to the whole: 10 + 2 + 3 + 1 + 4 = 20, and 1 + 2 = 3.
 
-One box moved this pass, and it is the one the previous pass had just finished
-arguing was not blocked:
+Two boxes moved this pass, and neither of them moved because a sentence was
+re-read. Both were built and run:
 
 - **Module loads alongside wallet, storage, messaging → MET.** Built and run:
   `logos-storage-module`, `logos-delivery-module` and `logos-wallet-module`
@@ -1603,25 +1698,35 @@ arguing was not blocked:
   of shell; the sentence "no submission can close this against this host" had
   been standing for considerably longer than that.
 
-### The four unchecked boxes, by cause
+- **Owner interacts from a separate Logos app instance → MET.** Also built and
+  run: two Basecamp 0.2.2 instances, each with its own user directory, its own
+  loaded module and its own Delivery node; a spend minted in one appeared in the
+  other's window 573 ms later, was denied from there in 371 ms and approved in
+  177 ms, and with the owner's app killed the same call ended
+  `owner_unreachable` with nothing submitted. This one had also been argued
+  down to a single missing piece rather than a limitation — "give the `app/`
+  console a Delivery-backed owner channel and point two Basecamp instances at
+  each other" — and the piece that was actually missing turned out to be
+  smaller and elsewhere: nothing on the OWNER's side was reachable through a
+  module method table, and `invoke()` is the only thing a `ui` plugin can call.
+
+### The three unchecked boxes, by cause
 
 A reviewer should be able to read this table instead of the prose above and get
 the same answer about what is missing and whose it is.
 
 | Criterion | Cause | What closing it takes |
 |---|---|---|
-| Owner interacts from a separate Logos app instance | `[NOT BUILT]` | Give the `app/` console a Delivery-backed owner channel and point two Basecamp instances at each other. Every part exists separately. |
 | CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
 | Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
 | Single CLI command, on any machine, Logos Core headless | `[NOT BUILT + UPSTREAM]` | The wrapper is writable. "On any machine" is not, from here: `liblogos_core` ships only inside the GUI app, the packages are `darwin-arm64`-only, and the on-chain half needs a faucet. |
 
-**Three of the four are entirely ours, and the fourth is ours in one clause.**
+**Two of the three are entirely ours, and the third is ours in one clause.**
 Nothing on this list is refused by the stack. Two passes ago this checklist said
 one of them was; that correction was recorded rather than made silently, and this
 pass is what came of it — the entry it defended is now built. A wrongly-blamed
 host is how an unbuilt thing stops being anyone's job, and the cost of leaving
 one standing is measurable: it was a criterion.
-
 The breakdown line has twice disagreed with itself here — "Functionality 6 of 11"
 under a header saying 14 over a section holding 5, and "Supportability 3 of 6"
 over a section holding 5 met. Both are noted rather than quietly corrected,

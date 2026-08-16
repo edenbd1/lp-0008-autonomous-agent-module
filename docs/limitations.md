@@ -865,8 +865,49 @@ on a second node — which re-derives the approval marker from the request's own
 terms and refuses to answer one it cannot verify — and the module acts on the
 answer in about 470 ms, approving on one run and denying on the control.
 
-What remains is the *app instance*: the owner end is a program written for the
-purpose, not Basecamp with a person in front of it.
+~~What remains is the *app instance*: the owner end is a program written for the
+purpose, not Basecamp with a person in front of it.~~ **Closed, and by two
+Basecamps rather than by an argument.** Two LogosBasecamp 0.2.2 processes, each
+with its own `LOGOS_USER_DIR`, its own working directory, its own loaded copy of
+the module in its own `logos_host`, and its own Delivery node: a spend minted in
+one appeared in the other's window 573 ms later, was denied from there in 371 ms
+and approved in 177 ms, and with the owner's app killed the same call ended
+`owner_unreachable` with nothing submitted. The record, with the environment and
+the transcripts read out of the two windows, is
+[`docs/basecamp.md`](basecamp.md) §"Two Basecamps, and the owner in the second
+one".
+
+What that took was not a new transport but a way in: `invoke()` is the only
+thing a `ui` plugin can call across the plugin boundary, so the owner's end of
+the channel is now three skills — `owner.watch`, `owner.pending`,
+`owner.answer` — rather than a class only a host that *links* the module could
+construct.
+
+**Two things that run measured differently from expectation, and both are the
+kind that read as a broken network.**
+
+- **A reliable channel opened mid-stream does not receive the backlog.** Run
+  with the agent asking first and the owner's app watching afterwards, the
+  owner's node *receives the frames* — its log carries them on the right content
+  topic — and its module reports `{"relay_seen":2,"channel_seen":0}`: the bytes
+  were in the process and the channel never delivered them. Open the owner's end
+  first and every frame arrives. The runner scripts start the owner two seconds
+  ahead for this reason, and a real deployment has the owner's app up anyway.
+- **This transport hands a node its own relay messages and NOT its own
+  reliable-channel frames.** `agent.discover` reads its own card back off the
+  relay — this repository has assertions built on that — while the owner's
+  `owner.pending` reports `self_refused: 0` with `frames: 1` in every live run.
+  So the rule that refuses a self-authored *request* cannot be exercised against
+  the network; it is exercised in `module/tests/owner_skills_test.cpp`, where a
+  self-authored frame can be put in front of it, with the falsification beside
+  it — the same bytes authored by the other account, which must be accepted.
+
+**And what the second app still does not do: hold a key.** It is bound to the
+owner's *account* and it does not sign the reply. That is what this channel is —
+sender ids on it are self-declared — and the authority over an above-threshold
+spend is the approval account on chain. The prize's Architecture wording is "any
+Logos app instance that holds the owner's keys"; reach, correlation and real
+time are demonstrated, key custody is not.
 
 Two smaller things the run does not claim. Both processes were on one machine,
 so the frames went out to public relays (DigitalOcean, Google Cloud, and others

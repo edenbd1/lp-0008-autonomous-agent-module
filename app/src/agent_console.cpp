@@ -146,6 +146,64 @@ AgentConsole::AgentConsole(LogosAPI *api, QWidget *parent)
     verdictRow->addStretch();
     root->addLayout(verdictRow);
 
+    // ---- the owner channel over Logos Messaging ---------------------------
+    //
+    // The panel above reaches the module that this app instance loaded. This
+    // one reaches an agent in ANOTHER app instance, over Logos Delivery, with
+    // nothing between the two but the public relays. Both instances press
+    // "Join Messaging"; the owner's presses "Watch as owner" as well, and from
+    // then on a request minted in the other app appears here without anybody
+    // pressing anything.
+    auto *deliveryRule = new QFrame(this);
+    deliveryRule->setFrameShape(QFrame::HLine);
+    root->addWidget(deliveryRule);
+
+    auto *messagingTitle =
+        new QLabel(QStringLiteral("Owner channel over Logos Messaging — the other app"), this);
+    messagingTitle->setFont(ownerFont);
+    root->addWidget(messagingTitle);
+
+    auto *accounts = new QGridLayout();
+    accounts->addWidget(new QLabel(QStringLiteral("Owner account"), this), 0, 0);
+    ownerAccountEdit_ =
+        new QLineEdit(QStringLiteral("BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu"), this);
+    accounts->addWidget(ownerAccountEdit_, 0, 1);
+    accounts->addWidget(new QLabel(QStringLiteral("Agent account"), this), 1, 0);
+    agentAccountEdit_ =
+        new QLineEdit(QStringLiteral("5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ"), this);
+    accounts->addWidget(agentAccountEdit_, 1, 1);
+    accounts->setColumnStretch(1, 1);
+    root->addLayout(accounts);
+
+    auto *messagingRow = new QHBoxLayout();
+    auto *joinButton = new QPushButton(QStringLiteral("Join Messaging"), this);
+    watchButton_ = new QPushButton(QStringLiteral("Watch as owner"), this);
+    messagingRow->addWidget(joinButton);
+    messagingRow->addWidget(watchButton_);
+    messagingRow->addStretch();
+    root->addLayout(messagingRow);
+
+    messagingLabel_ = new QLabel(QStringLiteral("no node: this app has joined nothing"), this);
+    messagingLabel_->setWordWrap(true);
+    messagingLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    root->addWidget(messagingLabel_);
+
+    deliveryApprovalLabel_ =
+        new QLabel(QStringLiteral("nothing has arrived over Logos Messaging"), this);
+    deliveryApprovalLabel_->setWordWrap(true);
+    deliveryApprovalLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    root->addWidget(deliveryApprovalLabel_);
+
+    auto *deliveryVerdictRow = new QHBoxLayout();
+    deliveryApproveButton_ = new QPushButton(QStringLiteral("Approve over Delivery"), this);
+    deliveryDenyButton_ = new QPushButton(QStringLiteral("Deny over Delivery"), this);
+    deliveryApproveButton_->setEnabled(false);
+    deliveryDenyButton_->setEnabled(false);
+    deliveryVerdictRow->addWidget(deliveryApproveButton_);
+    deliveryVerdictRow->addWidget(deliveryDenyButton_);
+    deliveryVerdictRow->addStretch();
+    root->addLayout(deliveryVerdictRow);
+
     // ---- transcript ------------------------------------------------------
     transcript_ = new QPlainTextEdit(this);
     transcript_->setReadOnly(true);
@@ -162,6 +220,23 @@ AgentConsole::AgentConsole(LogosAPI *api, QWidget *parent)
     connect(invokeButton, &QPushButton::clicked, this, &AgentConsole::onInvoke);
     connect(approveButton_, &QPushButton::clicked, this, &AgentConsole::onApprove);
     connect(denyButton_, &QPushButton::clicked, this, &AgentConsole::onDeny);
+    connect(joinButton, &QPushButton::clicked, this, &AgentConsole::onJoinMessaging);
+    connect(watchButton_, &QPushButton::clicked, this, &AgentConsole::onWatchAsOwner);
+    connect(deliveryApproveButton_, &QPushButton::clicked, this,
+            &AgentConsole::onDeliveryApprove);
+    connect(deliveryDenyButton_, &QPushButton::clicked, this, &AgentConsole::onDeliveryDeny);
+
+    // Two timers, both stopped. The first is the "in real time" half of the
+    // criterion: once this window is watching, a request minted in the other
+    // app appears here on its own. The second exists because joining the public
+    // network takes tens of seconds, and a window that says nothing for those
+    // seconds reads as one that did nothing.
+    ownerPollTimer_ = new QTimer(this);
+    ownerPollTimer_->setInterval(1000);
+    connect(ownerPollTimer_, &QTimer::timeout, this, &AgentConsole::pollOwnerChannel);
+    deliveryStateTimer_ = new QTimer(this);
+    deliveryStateTimer_->setInterval(2000);
+    connect(deliveryStateTimer_, &QTimer::timeout, this, &AgentConsole::pollDeliveryState);
     // Selecting a skill fills the invoke row from the schema the module itself
     // published for it, so the parameter names in the box are the module's and
     // not this window's idea of them.
@@ -612,6 +687,246 @@ void AgentConsole::onInvoke()
             }
             self->log(QStringLiteral("<- invoke(%1): %2")
                           .arg(name, compact(reply.toString(), 600)));
+        },
+        Timeout(kCallTimeoutMs));
+}
+
+// ---------------------------------------------------------------------------
+// The owner channel over Logos Messaging: the half that reaches another app
+// ---------------------------------------------------------------------------
+
+void AgentConsole::onJoinMessaging()
+{
+    if (!client_) {
+        log(QStringLiteral("!! not connected"));
+        return;
+    }
+    const QString owner = ownerAccountEdit_->text().trimmed();
+    const QString agent = agentAccountEdit_->text().trimmed();
+    if (owner.isEmpty() || agent.isEmpty()) {
+        log(QStringLiteral("!! both accounts are needed: the channel is named after the pair"));
+        return;
+    }
+
+    // Three settings and no more. `owner_channel_account` and `agent_account`
+    // are what the channel id is derived from — on BOTH sides, which is why
+    // nothing is exchanged to agree on it — and `delivery on` is the two
+    // strings that make a loaded module open a node of its own. Everything
+    // after this crosses the plugin boundary as `invoke`, because that is all a
+    // `ui` plugin can do.
+    const QVector<QPair<QString, QString>> settings{
+        {QStringLiteral("owner_channel_account"), owner},
+        {QStringLiteral("agent_account"), agent},
+        {QStringLiteral("delivery"), QStringLiteral("on")},
+    };
+    QPointer<AgentConsole> self(this);
+    for (const auto &kv : settings) {
+        const QString params = QString::fromUtf8(
+            QJsonDocument(QJsonObject{{QStringLiteral("key"), kv.first},
+                                      {QStringLiteral("value"), kv.second}})
+                .toJson(QJsonDocument::Compact));
+        logCall(QStringLiteral("invoke"), QStringLiteral("meta.configure, ") + params);
+        client_->invokeRemoteMethodAsync(
+            QString::fromUtf8(kModule), QStringLiteral("invoke"),
+            QVariantList{QVariant(QStringLiteral("meta.configure")), QVariant(params)},
+            [self, kv](QVariant reply) {
+                if (!self) {
+                    return;
+                }
+                self->log(QStringLiteral("<- meta.configure(%1): %2")
+                              .arg(kv.first, compact(reply.toString(), 200)));
+            },
+            Timeout(kCallTimeoutMs));
+    }
+    messagingLabel_->setText(
+        QStringLiteral("starting this app's own Logos Delivery node — joining the public "
+                       "relays takes tens of seconds"));
+    lastDeliveryState_.clear();
+    deliveryStateTimer_->start();
+    pollDeliveryState();
+}
+
+void AgentConsole::pollDeliveryState()
+{
+    if (!client_) {
+        return;
+    }
+    QPointer<AgentConsole> self(this);
+    client_->invokeRemoteMethodAsync(
+        QString::fromUtf8(kModule), QStringLiteral("invoke"),
+        QVariantList{QVariant(QStringLiteral("meta.status")), QVariant(QStringLiteral("{}"))},
+        [self](QVariant reply) {
+            if (!self) {
+                return;
+            }
+            const QJsonObject status =
+                QJsonDocument::fromJson(reply.toString().toUtf8()).object();
+            const QJsonObject delivery =
+                status.value(QStringLiteral("delivery")).toObject();
+            const QString state = delivery.value(QStringLiteral("state")).toString();
+            const QJsonObject frames = delivery.value(QStringLiteral("frames")).toObject();
+            self->messagingLabel_->setText(
+                QStringLiteral("node: %1 · relay frames %2 · channel frames %3 (decoded %4)%5")
+                    .arg(state.isEmpty() ? QStringLiteral("unknown") : state)
+                    .arg(frames.value(QStringLiteral("relay_seen")).toInt())
+                    .arg(frames.value(QStringLiteral("channel_seen")).toInt())
+                    .arg(frames.value(QStringLiteral("channel_decoded")).toInt())
+                    .arg(delivery.value(QStringLiteral("error")).toString().isEmpty()
+                             ? QString()
+                             : QStringLiteral(" · %1")
+                                   .arg(delivery.value(QStringLiteral("error")).toString())));
+            // Logged on CHANGE only. This runs every two seconds and a
+            // transcript that repeats itself is one nobody reads to the end.
+            if (state != self->lastDeliveryState_) {
+                self->lastDeliveryState_ = state;
+                self->log(QStringLiteral("<- delivery node: %1").arg(state));
+            }
+            if (state == QLatin1String("ready") || state == QLatin1String("failed") ||
+                state == QLatin1String("absent")) {
+                self->deliveryStateTimer_->stop();
+            }
+        },
+        Timeout(kCallTimeoutMs));
+}
+
+void AgentConsole::onWatchAsOwner()
+{
+    if (!client_) {
+        log(QStringLiteral("!! not connected"));
+        return;
+    }
+    logCall(QStringLiteral("invoke"), QStringLiteral("owner.watch, {}"));
+    QPointer<AgentConsole> self(this);
+    client_->invokeRemoteMethodAsync(
+        QString::fromUtf8(kModule), QStringLiteral("invoke"),
+        QVariantList{QVariant(QStringLiteral("owner.watch")), QVariant(QStringLiteral("{}"))},
+        [self](QVariant reply) {
+            if (!self) {
+                return;
+            }
+            const QString text = reply.toString();
+            const QJsonObject answer = QJsonDocument::fromJson(text.toUtf8()).object();
+            self->log(QStringLiteral("<- owner.watch: %1").arg(compact(text, 300)));
+            if (!answer.value(QStringLiteral("ok")).toBool()) {
+                self->deliveryApprovalLabel_->setText(
+                    QStringLiteral("not watching: %1")
+                        .arg(answer.value(QStringLiteral("error")).toString()));
+                return;
+            }
+            self->watching_ = true;
+            self->deliveryApprovalLabel_->setText(
+                QStringLiteral("watching %1 — waiting for the agent in the other app to ask")
+                    .arg(answer.value(QStringLiteral("channel")).toString()));
+            self->log(QStringLiteral("<- this window is the OWNER end of a Logos Messaging "
+                                     "channel; the agent is in another app instance"));
+            self->ownerPollTimer_->start();
+            self->pollOwnerChannel();
+        },
+        Timeout(kCallTimeoutMs));
+}
+
+void AgentConsole::pollOwnerChannel()
+{
+    if (!client_ || !watching_) {
+        return;
+    }
+    QPointer<AgentConsole> self(this);
+    client_->invokeRemoteMethodAsync(
+        QString::fromUtf8(kModule), QStringLiteral("invoke"),
+        QVariantList{QVariant(QStringLiteral("owner.pending")), QVariant(QStringLiteral("{}"))},
+        [self](QVariant reply) {
+            if (!self) {
+                return;
+            }
+            const QString text = reply.toString();
+            const QJsonObject answer = QJsonDocument::fromJson(text.toUtf8()).object();
+            if (!answer.value(QStringLiteral("ok")).toBool()) {
+                self->log(QStringLiteral("<- owner.pending: %1").arg(compact(text, 200)));
+                return;
+            }
+            const QJsonArray waiting = answer.value(QStringLiteral("pending")).toArray();
+            if (waiting.isEmpty()) {
+                self->deliveryRequestId_.clear();
+                self->deliveryApproveButton_->setEnabled(false);
+                self->deliveryDenyButton_->setEnabled(false);
+                return;
+            }
+            const QJsonObject request = waiting.first().toObject();
+            const QString id = request.value(QStringLiteral("id")).toString();
+            self->deliveryRequestId_ = id;
+            self->deliveryApproveButton_->setEnabled(true);
+            self->deliveryDenyButton_->setEnabled(true);
+            self->deliveryApprovalLabel_->setText(
+                QStringLiteral(
+                    "<b>An agent in another Logos app is asking you to approve a spend.</b><br>"
+                    "id: %1<br>agent: %2<br>recipient: %3<br>amount: %4<br>"
+                    "marker seed: %5<br>this app re-derived that seed from the terms: %6")
+                    .arg(id, request.value(QStringLiteral("agent")).toString(),
+                         request.value(QStringLiteral("recipient")).toString(),
+                         request.value(QStringLiteral("amount")).toString(),
+                         request.value(QStringLiteral("marker_seed")).toString(),
+                         request.value(QStringLiteral("seed_verified")).toBool()
+                             ? QStringLiteral("yes")
+                             : QStringLiteral("NO")));
+            // Once per request, not once per second.
+            if (id != self->lastLoggedDeliveryId_) {
+                self->lastLoggedDeliveryId_ = id;
+                self->log(QStringLiteral("<= over Logos Messaging: %1").arg(compact(text, 400)));
+            }
+        },
+        Timeout(kCallTimeoutMs));
+}
+
+void AgentConsole::onDeliveryApprove()
+{
+    answerOverDelivery(QStringLiteral("approve"));
+}
+
+void AgentConsole::onDeliveryDeny()
+{
+    answerOverDelivery(QStringLiteral("deny"));
+}
+
+void AgentConsole::answerOverDelivery(const QString &decision)
+{
+    if (!client_ || deliveryRequestId_.isEmpty()) {
+        log(QStringLiteral("!! nothing has arrived over Logos Messaging to answer"));
+        return;
+    }
+    const QString id = deliveryRequestId_;
+    const QString params = QString::fromUtf8(
+        QJsonDocument(QJsonObject{{QStringLiteral("id"), id},
+                                  {QStringLiteral("decision"), decision}})
+            .toJson(QJsonDocument::Compact));
+    logCall(QStringLiteral("invoke"), QStringLiteral("owner.answer, ") + params);
+
+    // The FIRST connection, deliberately, and this is where the two owner
+    // channels differ. `approveSpend` has to reach a module that is blocked
+    // inside the call it is answering, which is why that one needs a second
+    // socket. Here the module being answered is in ANOTHER PROCESS in ANOTHER
+    // APP: this call only hands a reply to this app's own node, and returns.
+    QPointer<AgentConsole> self(this);
+    client_->invokeRemoteMethodAsync(
+        QString::fromUtf8(kModule), QStringLiteral("invoke"),
+        QVariantList{QVariant(QStringLiteral("owner.answer")), QVariant(params)},
+        [self, id, decision](QVariant reply) {
+            if (!self) {
+                return;
+            }
+            const QString text = reply.toString();
+            const QJsonObject answer = QJsonDocument::fromJson(text.toUtf8()).object();
+            self->log(QStringLiteral("<- owner.answer(%1, %2): %3")
+                          .arg(id, decision, compact(text, 300)));
+            if (!answer.value(QStringLiteral("ok")).toBool()) {
+                return;
+            }
+            self->deliveryRequestId_.clear();
+            self->deliveryApproveButton_->setEnabled(false);
+            self->deliveryDenyButton_->setEnabled(false);
+            self->deliveryApprovalLabel_->setText(
+                QStringLiteral("answered '%1' for %2 over Logos Messaging — the agent is in "
+                               "another app instance and there is no server between them")
+                    .arg(decision, id));
         },
         Timeout(kCallTimeoutMs));
 }

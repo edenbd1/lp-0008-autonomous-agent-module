@@ -6,6 +6,7 @@
 #   ./scripts/delivery-in-plugin.sh            # both single-process harnesses
 #   ./scripts/delivery-in-plugin.sh peers      # two loaded modules, two nodes
 #   ./scripts/delivery-in-plugin.sh approval   # an owner approves, then denies
+#   ./scripts/delivery-in-plugin.sh two-modules # and the owner is a module too
 #   ./scripts/delivery-in-plugin.sh signers    # the envelope and the signer, no chain
 #   ./scripts/delivery-in-plugin.sh settle     # discover, serve and PAY, one flow
 #
@@ -196,6 +197,72 @@ if [ "$MODE" = "approval" ]; then
     echo "A loaded module published an above-threshold spend to an owner on another"
     echo "node, over the public network, and acted on the answer — approved once and"
     echo "denied once, and nothing was submitted either time."
+    exit 0
+fi
+
+if [ "$MODE" = "two-modules" ]; then
+    # THE OWNER'S END IS A LOADED MODULE TOO.
+    #
+    # `approval` above answers the agent with `module/tests/owner_responder.cpp`,
+    # a program that links the Delivery library directly. That proves the
+    # transport and it cannot prove the criterion, which asks for "a separate
+    # Logos app instance": a test binary is not an app, and the only thing an
+    # app can do with a core module is `invoke()` it. So both ends here are the
+    # SAME package, loaded twice, driven only through `invoke` — the agent
+    # through `wallet.send`, the owner through `owner.watch`, `owner.pending`
+    # and `owner.answer`. What `app/`'s window does on a click, this does on a
+    # line, against the artefact a reviewer downloads.
+    #
+    # THREE RUNS, AND THE FIRST ONE IS THE POINT.
+    #
+    # A Waku node receives what it publishes, so the agent's own request comes
+    # back to its own node. Run 1 has nobody watching and must end in
+    # `owner_unreachable` — if it does not, every "the owner approved" below is
+    # one process talking to itself. Runs 2 and 3 are approve and deny, because
+    # a channel reporting "approved" for whatever came back would pass run 2 and
+    # only run 2.
+    A="${LP0008_AGENT:-5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ}"
+    O="${LP0008_OWNER:-BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu}"
+    PAYEE="${LP0008_PAYEE:-Dxh7ZLHFmhKdNVE69XWayqLrquMk9iLfFVpmiJdfpEwD}"
+
+    rc=0
+    say "[3/4] run 1 of 3 — the control: nobody is watching the owner channel"
+    rm -rf "$WORK/alone"; mkdir -p "$WORK/alone"
+    ( cd "$WORK/alone" && LP0008_EXPECT_UNREACHABLE=1 LP0008_APPROVAL_TIMEOUT_MS=45000 \
+        "$WORK/bin/plugin_delivery_test" "$MODDIR/agent_plugin.dylib" approval \
+        "$A" "$O" "$PAYEE" 250 > "$WORK/alone.log" 2>&1; echo $? > "$WORK/alone.rc" )
+    filter < "$WORK/alone.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
+    rc=$(( rc + $(cat "$WORK/alone.rc") ))
+
+    for run in approve deny; do
+        say "[3/4] the owner's app will $run, and it is a loaded module"
+        expect=""
+        [ "$run" = "deny" ] && expect="LP0008_EXPECT_DENY=1"
+        # Each process in a directory of its own: a Delivery node keeps its
+        # reliable-channel state in the CWD, and two nodes sharing one is an
+        # unreliable network that is not the network's fault.
+        rm -rf "$WORK/$run-ownermod" "$WORK/$run-agentmod"
+        mkdir -p "$WORK/$run-ownermod" "$WORK/$run-agentmod"
+        ( cd "$WORK/$run-ownermod" && "$WORK/bin/plugin_delivery_test" \
+            "$MODDIR/agent_plugin.dylib" owner "$O" "$A" "$run" 200 \
+            > "$WORK/$run-ownermod.log" 2>&1; echo $? > "$WORK/$run-ownermod.rc" ) &
+        sleep 2
+        ( cd "$WORK/$run-agentmod" && env $expect "$WORK/bin/plugin_delivery_test" \
+            "$MODDIR/agent_plugin.dylib" approval "$A" "$O" "$PAYEE" 250 \
+            > "$WORK/$run-agentmod.log" 2>&1; echo $? > "$WORK/$run-agentmod.rc" ) &
+        wait
+        echo "  --- the owner's module ---"
+        filter < "$WORK/$run-ownermod.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
+        echo "  --- the agent's module ---"
+        filter < "$WORK/$run-agentmod.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
+        rc=$(( rc + $(cat "$WORK/$run-ownermod.rc") + $(cat "$WORK/$run-agentmod.rc") ))
+    done
+    say "[4/4] result"
+    [ "$rc" -eq 0 ] || { echo "FAILED — logs in $WORK" >&2; exit 1; }
+    echo "Two loaded modules, two Delivery nodes, two working directories: one held an"
+    echo "above-threshold spend and published it to its owner over the public network,"
+    echo "the other read it, re-derived the approval marker from the terms, and answered"
+    echo "— approved once, denied once, and unreachable when nobody was listening."
     exit 0
 fi
 

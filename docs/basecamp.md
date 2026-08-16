@@ -33,13 +33,13 @@ method table and asserts on the module's real behaviour:
   ok    a second configure is refused — the binding is the agent's identity
   ok    before start, skills() is an error rather than an empty card
   ok    status reflects the running agent
-  <-    skills(): 25 entries: storage.list, program.deploy, meta.configure, …
+  <-    skills(): 28 entries: agent.card, messaging.create_group, owner.watch, …
   ok    every skill the module ships with is listed: missing none
-  ok    the card has exactly 25 entries, and 25 distinct names
+  ok    the card has exactly 28 entries, and 28 distinct names
   ok    each carries a parameter schema: all present
   ok    invoke() dispatches to every one of them: undispatched none
-  <-    invoke(meta.skills): {"count":25,"ok":true,"skills":[{"name":"agent.cancel", …
-  ok    meta.skills lists all 25 skills over the boundary, and counts them
+  <-    invoke(meta.skills): {"count":28,"ok":true,"skills":[{"name":"agent.cancel", …
+  ok    meta.skills lists all 28 skills over the boundary, and counts them
   ok    and every one of them carries the parameter schema skills() published for it
   ok    including itself: it is a registered skill, not a special case in invoke()
   ok    an unwired skill refuses as itself, not as a name nobody registered
@@ -92,12 +92,12 @@ module, which the runtime runs in its own `logos_host` process:
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
   ok    skills() answers with a JSON array, not an error object: [{"name":"agent.cancel", …
-  <-    skills(): 25 entries
-  ok    the loaded module lists all 25 documented skills
-  ok    it lists exactly 25 — no more, no fewer (got 25)
-  ok    every listed skill carries a parameter schema (25 checked)
+  <-    skills(): 28 entries
+  ok    the loaded module lists all 28 documented skills
+  ok    it lists exactly 28 — no more, no fewer (got 28)
+  ok    every listed skill carries a parameter schema (28 checked)
   ok    and it answered as a running agent, not as a stopped one
-  ok    invoke() dispatches to every one of the 25
+  ok    invoke() dispatches to every one of the 28
   <-    meta.status durability: {"path":".../agent-persistence/agent/a45bddb77136/tasks.json","recovered_active":0,"recovered_tasks":0,"recovery":"absent","recovery_ran":true,"settled_payments":0,"uncertain_payments":0}
   ok    the loaded module reports a durability record, not null: it was given a persistence directory and opened a task snapshot in it
   ok    and the snapshot lives under the persistence base the host set
@@ -424,6 +424,45 @@ And an above-envelope *task* price is refused immediately with
 and `agent.task` does not, because on this chain the owner who anchored a policy
 cannot approve under it (one program transaction per public signer), so wiring
 it would add a two-minute wait that can never succeed.
+
+**6. And the OWNER is a loaded module too**
+(`module/tests/plugin_delivery_test.cpp`, `owner` mode; run it with
+`./scripts/delivery-in-plugin.sh two-modules`). Harness 5's owner is
+`module/tests/owner_responder.cpp`, which links the Delivery library directly
+and is not a Logos app. This one is the same package loaded twice, driven only
+through `invoke()` — the agent through `wallet.send`, the owner through
+`owner.watch`, `owner.pending` and `owner.answer` — which is the only thing a
+`ui` plugin in a second Basecamp can do, and is therefore the headless form of
+§"Two Basecamps" below.
+
+Three runs, and the first is the one that makes the other two mean anything:
+
+```
+run 1 — nobody watching
+  <-  wallet.send: {"outcome":"owner_unreachable","attempts":6,"submitted":false,
+      "waited_ms":45000, …}
+  <-  meta.status delivery: {"frames":{"channel_decoded":0,"channel_seen":0,"relay_seen":6}}
+  ok  with nobody on the other end, the agent's own node handed its own request back
+      and no approval came of it
+  ok  its own 6 request(s) came back to it off the network (6 relay frame(s) seen)
+      and none of them was an answer
+
+run 2 — the owner's module approves        run 3 — and denies
+  ok  owner.watch opened the reliable channel      (the same, then)
+  ok  and its id is the one the agent derives from the same two accounts
+  ok  an agent asked this owner to approve a spend, within the time allowed
+  ok  this app derived the approval marker from the terms and got the seed the
+      agent named — two independent derivations
+  ok  the owner's approval went out on the channel  ok  … the owner's denial …
+  ok  one payment, one answer                      ok  and an id nobody asked
+                                                       about is refused
+  <-  859 ms                                       <-  670 ms
+  ok  and approved these exact terms: approved     ok  the owner's DENIAL came
+                                                       back as a denial: denied
+```
+
+`SCRIPT_EXIT=0`, three processes' worth of assertions, no failures. The two
+apps in §"Two Basecamps" do the same thing with a person clicking.
 
 **The negative control, which is what makes the four transcripts above mean
 anything.** Build without `-DLOGOS_DELIVERY_ROOT` — the default — and run the
@@ -820,7 +859,7 @@ $LGX manifest module/agent.lgx    # type: core, main: agent_plugin.dylib
 ```
 
 That prints root hash
-`424c9f7151e5dee98924b5ac08be0bc858f3b1b32eb691336a06959e8d15fd45`. Rebuilding
+`ca74731277f0ec7392a8fb445a21e165288c2e70e1ec68e8768a6a34652564d2`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -868,7 +907,7 @@ redistribution — see below.
 
 **Leaving it out is survivable, and that is the point.** The plugin does not
 link the library; it opens it with `dlopen` when a node is first asked for. A
-module directory missing it still loads, still registers all 25 skills, and
+module directory missing it still loads, still registers all 28 skills, and
 answers `meta.status` with the file it wanted and every path it tried:
 
 ```json
@@ -902,7 +941,15 @@ same reason and with the same shape:
 ./scripts/delivery-in-plugin.sh peers    # 4: two loaded modules, two nodes
 ./scripts/delivery-in-plugin.sh signers  # what the two delegates say, free
 ./scripts/delivery-in-plugin.sh settle   # 5: discover, serve and pay, one flow
+./scripts/delivery-in-plugin.sh approval # an owner on another node answers
+./scripts/delivery-in-plugin.sh two-modules  # …and that owner is a module too
 ```
+
+`two-modules` is the headless form of §"Two Basecamps" above: both ends are the
+same package loaded twice and driven only through `invoke`, the owner's end
+through `owner.watch` / `owner.pending` / `owner.answer`. It runs three times —
+nobody watching, then approve, then deny — and the first run is the one that
+makes the other two mean anything.
 
 `signers` needs nothing but the package and a network for the node. `settle`
 needs a funded agent wallet and moves real testnet LEZ, so it is the one to
@@ -1116,12 +1163,167 @@ Before `app/` existed the same command returned that list without its first
 entry. That is the criterion's "accessible from the Logos app", read out of the
 app itself.
 
-What the window then does — bind the agent, start it, list its 25 skills,
+What the window then does — bind the agent, start it, list its 28 skills,
 invoke any of them, and answer the spends it asks the owner to approve — is in
 `app/README.md`, with the transcript of a completed approval round trip. The
 two module-side facts that round trip depends on are in
 `docs/limitations.md` §"The owner channel inside Basecamp"; both were found by
 measurement and one of them changed `module/src`.
+
+## Two Basecamps, and the owner in the second one
+
+The criterion, verbatim: *"The owner can interact with the agent in real time
+from a separate Logos app instance using Logos Messaging, with no intermediary
+server."* Three of its four clauses were closed before this section existed —
+`scripts/delivery-in-plugin.sh approval` completes a correlated approval round
+trip between two processes on two Delivery nodes over the public relays. The
+clause that was open is **"a separate Logos app instance"**: the owner in that
+exercise is `module/tests/owner_responder.cpp`, a program this repository wrote,
+and the prize glosses the phrase itself — its Usability criterion says
+"accessible from the Logos app (Basecamp)" and its Architecture section says
+"any Logos app instance that holds the owner's keys".
+
+So: two LogosBasecamp 0.2.2 processes, the same installed bundle, each with its
+own `LOGOS_USER_DIR`, its own working directory, its own module and plugin
+directories, and its own Logos Delivery node. Both were driven through macOS's
+accessibility API — the buttons are clicked, the text fields are typed into, and
+the transcripts below are read back out of each window's own text pane, so
+every line here is the app's, not this document's.
+
+**Three things had to be true before any of it, and each could have ended it.**
+
+1. **Two instances run at all.** They do. Each prints its own base data
+   directory and each mints its own transport registry — `local:logos_
+   capability_module_0b89831138ba` in one and `local:logos_capability_module_
+   85c62059ec7c` in the other, per instance rather than per module name, so
+   the two runtimes do not collide on a socket.
+2. **Each opens its own window with the module's tile in it.** `System Events`
+   reports two processes named `LogosBasecamp.bin`, each with a window "Logos
+   Basecamp", each listing `LP-0008 Agent` among its buttons.
+3. **Each loads its own copy of the module.** Two `logos_host` processes, one
+   per app, each `--path`ed at that app's own copy of the plugin, under that
+   app's own modules directory,
+   and `--instance-persistence-path`ed under that app's own base — and each
+   inheriting its app's working directory, which is not tidiness: **a Delivery
+   node keeps its reliable-channel state in the current working directory**, and
+   two nodes started from one directory share it silently. Launch each app from
+   a directory of its own.
+
+### What the two windows printed
+
+One machine, one clock. The agent's app on the left, the owner's on the right;
+both transcripts are quoted from the windows.
+
+```
+agent app                                     owner app
+12:53:22.792 <- delivery node: starting       12:53:26.243 <- meta.configure(delivery): "on"
+12:53:26.699 <- delivery node: ready          12:53:30.201 <- delivery node: ready
+                                              12:53:44.068 → invoke(owner.watch, {})
+                                              12:53:44.101 <- owner.watch: {"channel":
+                                                 "/lp-0008/1/owner-channel/BzYks91a…/5Sa13NyN…",
+                                                 "topic":"/lp-0008/1/owner-BzYks91a…/json","ok":true}
+12:53:57.627 → invoke(wallet.send,
+   {"recipient":"Public/Dxh7…","amount":"250"})
+                                              12:53:58.200 <= over Logos Messaging:
+                                                 {"arrived":1,"frames":1,"pending":[{"id":
+                                                 "spend-1786877637631","seed_verified":true,…}]}
+                                              12:54:08.304 → invoke(owner.answer,
+                                                 {"decision":"deny","id":"spend-1786877637631"})
+12:54:08.675 <- invoke(wallet.send): {"outcome":"denied","attempts":1,
+   "error":"the owner denied this spend, so it was not submitted",
+   "submitted":false,"waited_ms":11043}
+12:54:21.683 → invoke(wallet.send, …)
+                                              12:54:24.803 → invoke(owner.answer,
+                                                 {"decision":"approve","id":"spend-1786877661687"})
+12:54:24.980 <- invoke(wallet.send): {"outcome":"approved","approved":true,
+   "attempts":1,"submitted":false,"waited_ms":3292}
+```
+
+Three numbers out of that, and they are what "in real time" means here: the
+request was visible in the *other app's window* **573 ms** after the agent was
+asked to spend; the owner's denial reached the agent **371 ms** after the button
+was pressed, and the approval **177 ms** after. Nothing was submitted either
+time — an approval unlocks the `spend_approved` path, it does not move money,
+and this module wires no wallet.
+
+Both windows are the same `ui` plugin, `app/agent-ui.lgx`, and both talk to the
+same `core` module, `module/agent.lgx`. The owner's half is three skills the
+module registers in every build — `owner.watch`, `owner.pending`,
+`owner.answer` (`module/src/owner_skills.cpp`) — reached the only way a `ui`
+plugin can reach a core module, which is `invoke()`. The window polls
+`owner.pending` once a second; that poll is why a request minted in the other
+app appears without anybody pressing anything.
+
+### The control, which is the reason to believe the rest
+
+**A node receives its own published messages.** So "the owner answered" is an
+assertion one process can satisfy alone, and this whole exercise would prove
+nothing without watching it fail. The owner's app was killed — the process, not
+the window — and the same call made again:
+
+```
+12:54:43.333 → invoke(wallet.send, {"recipient":"Public/Dxh7…","amount":"250"})
+12:54:58.347 <- invoke(wallet.send): {"outcome":"owner_unreachable","attempts":2,
+   "error":"the owner did not answer within 15000ms: 2 notification attempt(s),
+    2 of which the channel accepted; the spend was not submitted",
+   "submitted":false,"waited_ms":15009}
+```
+
+and the agent's own `meta.status` at the end of the run says why that is not a
+network failure being read as a control:
+
+```
+"delivery":{"frames":{"channel_decoded":2,"channel_seen":2,"relay_seen":6},"state":"ready"}
+```
+
+**Six** relay frames came back to the agent's own node — its own six requests,
+off the public relays, exactly the self-satisfying case — and produced no
+approval. **Two** channel frames were decoded, and they are the owner's two
+answers, one deny and one approve. The same control runs headless in
+`./scripts/delivery-in-plugin.sh two-modules`, whose first of three runs has
+nobody watching and asserts the terminal outcome.
+
+The authorship rule that refuses a self-authored *request* cannot be exercised
+this way, and the reason is worth recording because it is the opposite of what
+was expected: this transport hands a node its own **relay** messages and does
+**not** hand it its own **reliable-channel** frames. Measured on both sides —
+the owner's `owner.pending` reports `self_refused: 0` with `frames: 1` in every
+live run. So the rule is exercised where a self-authored frame can be put in
+front of it, in `module/tests/owner_skills_test.cpp`, with the falsification
+beside it: the same bytes with the other account as the author, which must be
+accepted.
+
+### The one ordering that does not work, measured
+
+**The owner's app must open the channel before the agent's first request on
+it.** The first attempt at this exercise did it the other way round: the agent
+published two requests at 12:49:46 and 12:49:54, and the owner watched at
+12:50:14. The agent went on asking, the owner's node *received the frames* —
+its log carries `received relay message … contentTopic=/lp-0008/1/owner-
+BzYks91a…/json` at 12:50:23 and 12:50:38 — and the owner's module reported
+
+```
+"delivery":{"frames":{"channel_decoded":0,"channel_seen":0,"relay_seen":2},"state":"ready"}
+```
+
+The bytes were in the process and the reliable channel never delivered them: a
+channel opened mid-stream does not receive the backlog, and this reads exactly
+like a network that is not carrying anything. With the owner watching first,
+every frame arrives. That is also the order the runner script uses — it starts
+the owner two seconds ahead — and it is the order the real deployment has
+anyway, since an owner's app is running before an agent needs it.
+
+### What this does not claim
+
+The owner's app is bound to the owner's **account**; it does not sign the reply,
+and no key is exercised anywhere in this run. That is not an accident of the
+demonstration, it is what the channel is: sender ids on it are self-declared,
+`owner_channel.h` says so at length, and the authority that decides whether an
+above-threshold spend can happen is the approval account on chain, which only
+the owner's own signature on `approve_spend` can create. What the second app
+demonstrates is reach and correlation — the owner is somewhere else, the terms
+that came back are the terms that went out, and there is nothing between the two
+apps but the public relays.
 
 ## What still has to be built for the criterion to be met
 
@@ -1129,7 +1331,7 @@ Honest list, in the order that matters:
 
 1. The skills need their ports wired from inside the loaded module. This item
    has been rewritten twice and is now mostly done. It first read "the plugin
-   has to construct and register the skill objects"; it does, and all 25
+   has to construct and register the skill objects"; it does, and all 28
    dispatch. It then read "`registerBuiltinSkills` takes `std::function` ports
    that cannot cross a plugin boundary", which was the wrong conclusion from a
    right premise — a host cannot pass a closure, and a module can build one. The
@@ -1208,27 +1410,31 @@ Honest list, in the order that matters:
    arrived and been read, and it was the *responder* that was wrong, sending
    `{"approve": true}` where `checkReply` reads `decision`.
 
-   Still open: the **second app instance**. The owner end is a program written
-   for the purpose, not Basecamp with a person in front of it.
+   ~~Still open: the **second app instance**. The owner end is a program written
+   for the purpose, not Basecamp with a person in front of it.~~ **Closed**, and
+   the record is §"Two Basecamps, and the owner in the second one" above: two
+   LogosBasecamp 0.2.2 processes, each with its own user directory, its own
+   working directory, its own loaded module and its own Delivery node; a spend
+   minted in one, visible in the other's window 573 ms later, denied from there
+   in 371 ms and approved in 177 ms, with the owner's app killed for the control
+   and the outcome then `owner_unreachable` with nothing submitted.
 
-   What *has* since been settled is the other side of that sentence: the class
-   the plugin cannot be handed a port for now runs over the public network,
-   outside Basecamp. `./scripts/owner-channel-live.sh` puts two processes on two
-   Delivery nodes, one running `OwnerChannel` unmodified and one acting as the
-   owner from its own node, and completes a correlated approval round trip on
-   the owner content topic in **312 ms, on the first attempt**. So the
-   transport half of "using Logos Messaging, with no intermediary server" is
-   demonstrated and the *host* half is what is left: the owner in that exercise
-   is a Delivery node this repository starts, not a second Basecamp. Keep the
-   two apart when reading this list — item 2 is a plugin-boundary problem, and
-   the live exercise does not make it go away.
-   One line of item 2 is now closed inside Basecamp and it is worth separating
-   from the rest: the owner really does answer a real spend from a window in the
-   app, and the agent acts on the answer. `app/README.md` has the transcript.
-   What that does *not* close is the criterion's wording — "from a separate
-   Logos app instance using Logos Messaging" — because the owner in that round
-   trip is a window in the *same* instance, reached over Logos Core's transport
-   and not over Delivery.
+   What that took was not a new transport. `./scripts/owner-channel-live.sh` had
+   already put two processes on two Delivery nodes and completed a correlated
+   round trip in **312 ms on the first attempt**; what was missing is that
+   nothing on the OWNER's side could be reached through a module method table,
+   so a second Basecamp had a window and nothing to say with it. Three skills
+   fixed that — `owner.watch`, `owner.pending`, `owner.answer`, in
+   `module/src/owner_skills.cpp` — because `invoke()` is the only thing a `ui`
+   plugin can call, and it is now enough.
+
+   The line that closed *before* this one is still worth separating from it: the
+   owner can also answer from a window in the *same* instance, over Logos Core's
+   transport rather than Delivery (`app/README.md` has that transcript). That
+   one is the Usability criterion's "accessible from the Logos app"; this one is
+   the Architecture criterion's "any Logos app instance that holds the owner's
+   keys", minus the keys — see the last subsection above for exactly what the
+   second app is bound to and what it does not sign.
 3. A `linux-amd64` variant of **both** packages, since a reviewer may be on
    Linux and a package with only `darwin-arm64` is unopenable for them.
 4. ~~A Basecamp `ui` app for the owner console.~~ Built: `app/`. It is a Qt
@@ -1332,6 +1538,22 @@ condition — the file's absence, not the revision — and puts the locked revis
 in place before building. This is a dependency of the *library*; nothing in the
 three module checkouts is touched by it, and the check below would catch it if
 it were.
+
+**And one break in this script's own assumptions, found by running it on a
+second machine.** It staged `library/generated/logosdelivery.h` out of the
+delivery checkout and *died* without one — which meant it could not complete
+against the very revision it pins. That header is a build artefact and not a
+tracked file, and `make liblogosdelivery` at `f8b0365` does not write one:
+`git cat-file -e f8b0365:library/generated/logosdelivery.h` reports the path
+"exists on disk, but not in" that commit in a checkout that has it, and a clean
+clone at `f8b0365` built here has no `library/generated` at all. It is also not
+needed: `logos-delivery-module` includes `<liblogosdelivery.h>` and nothing else
+(`src/api_call_handler.h:14`, `src/delivery_module_plugin.cpp:18`), and its
+`metadata.json` puts `lib` on the include path, not `lib/generated`. So the
+header is staged when the library's build produced one and its absence is
+reported and carried on from — and the claim that it was not needed is the
+downstream one, which is the strong form: the module compiled, packaged, loaded,
+and answered `getPluginMethods` across the transport without it.
 
 ### What the runtime prints
 

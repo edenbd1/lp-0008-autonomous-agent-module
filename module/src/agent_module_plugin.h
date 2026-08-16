@@ -15,6 +15,7 @@
 #include "inference.h"
 #include "messaging_skills.h"
 #include "owner_channel.h"
+#include "owner_skills.h"
 #include "program_skills.h"
 #include "storage_skills.h"
 #include "task_persistence.h"
@@ -209,7 +210,7 @@ public:
     /// the registration.
     StdLogosResult registerSkill(std::shared_ptr<logos::agent::ISkill> skill);
 
-    /// Register the twenty-five skills this module ships with, wired to `ports`.
+    /// Register the twenty-eight skills this module ships with, wired to `ports`.
     ///
     /// Before @ref start, and once. A host that has transports wires them here;
     /// a host that does not gets the same set from @ref start with nothing
@@ -549,4 +550,13 @@ private:
     /// from `wallet.send` is one more attempt on the wire and not a second
     /// channel wait for the same payment.
     std::map<std::string, std::shared_ptr<std::thread>> ownerWaits_;
+
+    /// The OTHER end of that channel, for the app instance the owner is sitting
+    /// in front of. `ownerChannel_` above asks and waits; this one reads what
+    /// arrives and answers it, and the three `owner.*` skills are its only
+    /// callers. Held by the module rather than by the skills so that a second
+    /// `registerBuiltinSkills` — a host re-registering with different ports —
+    /// does not leave two apps watching one channel and answering each other's
+    /// requests.
+    std::shared_ptr<logos::agent::OwnerResponder> ownerResponder_;
 };

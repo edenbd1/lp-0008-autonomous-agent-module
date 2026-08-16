@@ -90,11 +90,11 @@ Three rules, all enforced rather than documented:
   hypothetical, and silent replacement is how it would happen.
 - **A third party wins a contested name.** If a third-party skill registers
   `wallet.send` first, `registerBuiltinSkills` skips that built-in, reports a
-  failure naming it, and registers the other twenty-four. The registry keeps exactly
+  failure naming it, and registers the other twenty-seven. The registry keeps exactly
   one skill per name, so the card cannot advertise anything `invoke()` will not
   dispatch. Whichever skill holds the name answers for it.
 
-The module's own twenty-five arrive the same way, through
+The module's own twenty-eight arrive the same way, through
 `registerBuiltinSkills(SkillPorts)`, which is a convenience over `registerSkill`
 and not a privileged path.
 
@@ -308,7 +308,7 @@ Two further boundaries, for completeness:
 
 ## 7. Reference: the registered skills
 
-The module registers **25** skills; each `--skill` library adds one more. This
+The module registers **28** skills; each `--skill` library adds one more. This
 table is a snapshot. **The module is the authority**, and it prints itself:
 
 ```sh
@@ -397,6 +397,34 @@ claim, not a credential: task traffic is unsigned, and
 | `meta.status` | — | balance, storage usage, active tasks, and what the module is bound to |
 | `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks`, `approval_timeout_ms`, `approval_resend_ms`, `delivery`, `agent_account`, `agent_name`, `pay_account`, `card_signer`, `pay_signer`, `policy_source`, `owner_channel_account` — **`value`** string | whether the setting took effect |
 
+### The owner's end of the approval channel
+
+Three skills that are not for the agent at all: they are what a **second** Logos
+app — the owner's — calls to hear a spend request and answer it over Logos
+Messaging. `module/src/owner_skills.cpp`, and the reason they are skills rather
+than module methods is that `invoke()` is the only thing a `ui` plugin can call
+across the plugin boundary.
+
+| Skill | Parameters | Answers |
+|---|---|---|
+| `owner.watch` | `owner`, `agent` — both default to the configured `owner_channel_account` / `agent_account` | opens the reliable channel from the owner's end: `{"ok":true,"channel":…,"topic":…}`. Both ends derive the same channel id from the same two accounts, so nothing is exchanged to agree on it |
+| `owner.pending` | — | what has arrived and is waiting for an answer, with `frames`, `self_refused`, `ignored` and `unverifiable` counts beside it |
+| `owner.answer` | **`id`**, **`decision`** (`approve` or `deny`), `reason` | puts the reply on the channel, echoing every term it was asked about |
+
+Three refusals are the point of them, and each has a test in
+`module/tests/owner_skills_test.cpp` with the falsification beside it:
+
+- **A frame this app published itself is refused on authorship, before its type
+  is read.** A node receives its own messages, and an owner app without that
+  rule could answer a request it wrote. The falsifying pair is the same bytes
+  with the other account as the author, which must be accepted.
+- **A request whose approval marker these terms do not derive is not offered for
+  approval at all.** The seed is re-derived here from the request's own agent,
+  recipient, amount and nonce — an owner that echoed back whatever seed arrived
+  would leave the agent checking its own arithmetic.
+- **One payment, one answer.** A second `owner.answer` for a request already
+  answered is refused, and so is an id nobody asked about.
+
 `meta.configure` reports `"effective":false` when no config port is wired,
 rather than storing a value nothing reads. Note what it cannot do: writing
 `per_tx` here changes what this process bothers asking the owner about and
@@ -441,7 +469,7 @@ for the same key, and it is the premise the anchored policy exists to bound.
 It is registered because the module ships a pluggable inference seam and this is
 what sits behind it — see [Pluggable inference](#pluggable-inference). It is
 *not* the demonstration that the skill interface works: it is built by
-`installBuiltinSkills` in `agent_module_plugin.cpp` like the other twenty-four, so it
+`installBuiltinSkills` in `agent_module_plugin.cpp` like the other twenty-seven, so it
 is a built-in that happens not to be on the prize's list. §4 above is the
 demonstration, and it is external, separately compiled, and self-checking.
 

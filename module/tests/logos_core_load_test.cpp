@@ -156,6 +156,11 @@ const char *const kSkills[] = {
     "agent.poll",          "agent.cancel",
     "meta.status",         "meta.configure",   "meta.skills",
     "agent.evaluate_task",
+    // The owner's end of the approval channel, which a SECOND Logos app calls
+    // to hear a spend request and answer it over Logos Messaging. Registered in
+    // every build, node or no node, so that the registry is not a fact about
+    // how the binary was compiled.
+    "owner.watch",         "owner.pending",    "owner.answer",
 };
 constexpr int kSkillCount = int(sizeof(kSkills) / sizeof(kSkills[0]));
 

@@ -418,7 +418,7 @@ policy    <its policy account, from the manifest>
   ok    the module is in the runtime's loaded set
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
-  ok    the loaded module lists all 25 documented skills
+  ok    the loaded module lists all 28 documented skills
   ok    the running module reports itself configured
   ok    and bound to the owner it was configured with
   ok    and to the policy account it was configured with
@@ -459,7 +459,7 @@ revision CI uses) and `nlohmann/json.hpp`. No node, no keys, no Logos install.
 Three commands, and the first is how you find the other two's arguments:
 
 ```sh
-$OUT/agent-console skills | python3 -m json.tool   # 25 skills, each with a JSON Schema
+$OUT/agent-console skills | python3 -m json.tool   # 28 skills, each with a JSON Schema
 $OUT/agent-console status
 $OUT/agent-console invoke <name> '<json>'
 ```
@@ -527,7 +527,7 @@ to an already-installed `agent.lgx`.** `registerSkill` takes a
 Objects in a separate process, and there is no wire format for a C++ object — so
 skills are added by a host that *links* the module, which is what
 `agent-console` is. The full interface specification, the loader convention, the
-parameters of all 25 built-in skills, and what would have to change for the
+parameters of all 28 built-in skills, and what would have to change for the
 plugin path are in [`docs/skills.md`](docs/skills.md).
 
 ## 6. Run an A2A task and settle it in LEZ
@@ -669,10 +669,17 @@ published messages, so that is the proof it cannot settle its own request; and
 an owner answering `251` where `250` was asked yields
 `{"verdict":"refused","altered":6}` and exit 1.
 
-What this does **not** claim: the owner here is a Delivery node this repository
-starts, not a second Basecamp. "From a separate Logos app instance" is still
-open, and it is a host problem now rather than a transport one —
-[`docs/basecamp.md`](docs/basecamp.md) keeps the two apart.
+What this exercise does **not** claim: the owner here is a Delivery node this
+repository starts, not a second Basecamp. That clause — "from a separate Logos
+app instance" — is closed elsewhere and by something else: **two LogosBasecamp
+0.2.2 processes**, each with its own user directory, its own loaded module and
+its own Delivery node, one of them minting a spend and the other answering it
+573 ms later from its own window. The transcripts, the latencies, the control
+(the owner's app killed, and `owner_unreachable` with nothing submitted) and the
+one ordering that does not work are in
+[`docs/basecamp.md`](docs/basecamp.md) §"Two Basecamps, and the owner in the
+second one". Keep the two apart when reading: this section is the transport, that
+one is the host.
 
 ## 8. Load the module in the Logos app (Basecamp)
 
@@ -687,7 +694,7 @@ nothing but `python3`:
 
 ```sh
 ./scripts/check-package-fresh.py
-#   ok    all 25 build inputs hash exactly as they did when the package was made
+#   ok    all 31 build inputs hash exactly as they did when the package was made
 #   ok    every one of the 654 source literals of >= 8 bytes is in the darwin-arm64 binary
 ```
 
@@ -738,7 +745,7 @@ That document also carries the two load harnesses and their recorded output:
 `logos_core_load_test` `dlopen`s the real `liblogos_core` out of the installed
 `LogosBasecamp.app`, loads the module through the same C API in the same order
 as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
-own transport: 25 skills listed, each with a parameter schema, `invoke()`
+own transport: 28 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
 The loaded module also **opens its own Logos Delivery node**. That sentence used
@@ -838,7 +845,7 @@ mint the plugin a token for it, and only then calls `createWidget(LogosAPI*)`.
 So `"dependencies": ["agent"]` in `app/metadata.json` is what turns a click on a
 tile into a loaded module.
 
-From that window an owner binds the agent, starts it, reads its 25-skill card,
+From that window an owner binds the agent, starts it, reads its 28-skill card,
 invokes any of them, and — the part the criterion is about — answers the spends
 the agent asks it to approve. A `wallet.send` above the envelope published
 `ownerApprovalRequested` to the window in **7 ms**, and the owner's `approved`
@@ -887,6 +894,53 @@ asserted, by `git status --porcelain` against each upstream checkout, the same
 way [`examples/agent-console/run.sh`](examples/agent-console/run.sh) checks
 `module/`. [`docs/basecamp.md`](docs/basecamp.md) carries the build recipe and
 the one upstream ABI break it has to route around.
+
+### And the owner in a *second* Basecamp
+
+That round trip is one app: the owner answers over Logos Core's own transport,
+which reaches whatever loaded the module and never touches a network. The
+criterion asks for something else — "the owner can interact with the agent in
+real time from a **separate Logos app instance** using Logos Messaging, with no
+intermediary server" — so:
+
+```sh
+# two bases, two working directories, the same two packages installed in each
+mkdir -p /tmp/lp8/{agent,owner} /tmp/lp8/cwd-agent /tmp/lp8/cwd-owner
+# …unpack module/agent.lgx into <base>/modules/agent and app/agent-ui.lgx into
+#   <base>/plugins/agent-ui, per §8 above, for BOTH bases…
+( cd /tmp/lp8/cwd-agent && LOGOS_USER_DIR=/tmp/lp8/agent \
+    /Applications/LogosBasecamp.app/Contents/MacOS/LogosBasecamp & )
+( cd /tmp/lp8/cwd-owner && LOGOS_USER_DIR=/tmp/lp8/owner \
+    /Applications/LogosBasecamp.app/Contents/MacOS/LogosBasecamp & )
+```
+
+Two windows, two tiles, two loaded modules, two Delivery nodes. In **both**:
+*Configure*, *Start*, *Join Messaging*. In the **owner's**: *Watch as owner* —
+and do that before the agent's first request, because a reliable channel opened
+mid-stream does not receive the backlog. Then invoke `wallet.send` in the
+agent's window with an amount outside its envelope. The request appears in the
+other app's window on its own; *Approve over Delivery* or *Deny over Delivery*
+answers it.
+
+Measured, with both transcripts read out of the two windows:
+
+| | |
+|---|---|
+| call → request visible in the other app | **573 ms** |
+| *Deny* pressed → verdict at the agent | **371 ms** |
+| *Approve* pressed → verdict at the agent | **177 ms** |
+| owner's app **killed**, same call | `owner_unreachable`, 2 attempts, nothing submitted |
+
+The last row is the control, and it is the one that matters: a node receives its
+own published messages, so the agent's own six request frames came back to it
+off the public relays (`"relay_seen":6`) and produced no approval, while the two
+channel frames it decoded are the owner's two answers. Headless, the same three
+runs are `./scripts/delivery-in-plugin.sh two-modules`.
+
+The whole record — environment, what could have stopped it, the ordering that
+does not work, and what the second app still does not do (it holds the owner's
+account, not a key) — is [`docs/basecamp.md`](docs/basecamp.md) §"Two Basecamps,
+and the owner in the second one".
 
 ## 9. The owner channel
 
@@ -1042,8 +1096,8 @@ clang++ -std=c++17 -I_external/logos-cpp-sdk/cpp -I/opt/homebrew/include \
   module/tests/skills_test.cpp module/src/*.cpp -o skills_test && ./skills_test
 ```
 
-The other six suites (`inference`, `wallet_skills`, `program_skills`,
-`agent_skills`, `owner_channel`, `task_persistence`) each compile against their
+The other seven suites (`inference`, `wallet_skills`, `program_skills`,
+`agent_skills`, `owner_channel`, `owner_skills`, `task_persistence`) each compile against their
 own translation unit; [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 carries every line, one step per suite so a red X names the suite that broke,
 and accounts for every file under `module/tests/` so that a suite absent from
@@ -1090,6 +1144,8 @@ module/src                        the Logos Core module: skill registry, owner
                                   through
 module/tests                      the suites, plus the two load harnesses and
                                   the C node drivers
+module/src/owner_skills.cpp       the OWNER's end of the approval channel, which
+                                  is what lets a second Logos app answer a spend
 module/agent.lgx                  the loadable package (darwin-arm64)
 module/agent.lgx.sources          what that package was built from, written by
                                   package-basecamp.sh and checked by CI
@@ -1135,7 +1191,7 @@ docs/                             see the reading order below
 |---|---|
 | [`architecture.md`](docs/architecture.md) | the shape of the module, and where each decision is made |
 | [`security-model.md`](docs/security-model.md) | what the agent may do alone, and what it may not — the "They can" / "They cannot" lists |
-| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 25 built-ins. Also which are wired to a running node and which are only compiled |
+| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 28 built-ins. Also which are wired to a running node and which are only compiled |
 | [`a2a-binding.md`](docs/a2a-binding.md) | the A2A transport binding over Logos Messaging — the Agent Card schema, the task lifecycle, and a conformance table against A2A §11.1, including where this implementation does not conform |
 | [`use-cases.md`](docs/use-cases.md) | the prize's illustrative use cases, and which of them this repository demonstrates |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | what is live, how it got there, and how to reproduce it |

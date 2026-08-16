@@ -12,11 +12,24 @@
 // The owner channel is the pair at the bottom of that list, and it is the
 // reason this window exists rather than a CLI: the module publishes
 // `ownerApprovalRequested` every time a spend falls outside its anchored
-// envelope, and answers `approveSpend(requestId, verdict)`. A plugin cannot be
-// handed a `std::function` port across the boundary — that is why the module's
-// Delivery-backed `OwnerChannel` is unreachable from here — so the channel a
-// loaded plugin has is the runtime's own: an event out, a method back. This
-// window is the owner end of it.
+// envelope, and answers `approveSpend(requestId, verdict)`. That channel is the
+// RUNTIME's — an event out, a method back — and it reaches whatever loaded the
+// module, which is this same app instance.
+//
+// The second panel is the one the criterion is actually about, and it is not
+// that channel. "The owner can interact with the agent in real time from a
+// separate Logos app instance using Logos Messaging, with no intermediary
+// server": two Basecamps, each with its own user directory, its own loaded
+// module and its own Logos Delivery node, talking over the public relays. The
+// header of this file used to say the module's Delivery-backed `OwnerChannel`
+// was "unreachable from here, because a plugin cannot be handed a
+// `std::function` port across the boundary". The premise is right and the
+// conclusion was wrong for the same reason it was wrong three times elsewhere
+// in this repository: a module that cannot be HANDED a port can BUILD one.
+// `module/src/delivery_runtime.cpp` builds it, `module/src/owner_skills.cpp`
+// puts the owner's end of the channel behind three ordinary skills, and this
+// window calls them with `invoke` like any other — which is all a `ui` plugin
+// can do, and now all it needs.
 
 #pragma once
 
@@ -30,6 +43,7 @@ class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
+class QTimer;
 class QVBoxLayout;
 
 class LogosAPI;
@@ -55,6 +69,21 @@ private slots:
     void onApprove();
     void onDeny();
 
+    /// Bind this module to the two accounts the owner channel is named after
+    /// and start its own Logos Delivery node: three `meta.configure` calls, and
+    /// then a poll until the node reports `ready`. Pressed on BOTH instances —
+    /// the agent's and the owner's — because the channel id is derived from the
+    /// same pair on both sides and nothing is exchanged to agree on it.
+    void onJoinMessaging();
+    /// `owner.watch` — become the owner end of that channel. Pressed on the
+    /// owner's instance only; the agent's end is opened by the module itself
+    /// when a spend needs approving.
+    void onWatchAsOwner();
+    /// `owner.answer` — approve or deny over Logos Messaging, which on the
+    /// owner's instance is the only route to the agent that exists at all.
+    void onDeliveryApprove();
+    void onDeliveryDeny();
+
 private:
     /// Append one line to the transcript. Every call and every answer goes
     /// through here, so what the window shows is auditable against Basecamp's
@@ -74,6 +103,21 @@ private:
     /// Answer the pending approval with `verdict`. Shared by Approve and Deny
     /// so the two cannot drift apart.
     void answerApproval(const QString &verdict);
+
+    /// `owner.answer` with `decision`. Shared by the two Delivery buttons, for
+    /// the same reason.
+    void answerOverDelivery(const QString &decision);
+
+    /// One `owner.pending` call. Driven by a one-second timer once this window
+    /// is watching, which is what makes the arrival of a request from the other
+    /// app visible without anybody pressing anything — the "in real time" half
+    /// of the criterion.
+    void pollOwnerChannel();
+
+    /// `meta.status`'s delivery block, polled while the node is coming up.
+    /// Joining the public network takes tens of seconds and a window that said
+    /// nothing for those seconds would read as a window that did nothing.
+    void pollDeliveryState();
 
     /// A JSON skeleton for `skill`, built from the parameter schema the module
     /// published for it — so what lands in the box is the module's own idea of
@@ -120,6 +164,24 @@ private:
     QPlainTextEdit *transcript_ = nullptr;
     QPushButton *approveButton_ = nullptr;
     QPushButton *denyButton_ = nullptr;
+
+    // ---- the second app's half -------------------------------------------
+    QLineEdit *ownerAccountEdit_ = nullptr;
+    QLineEdit *agentAccountEdit_ = nullptr;
+    QLabel *messagingLabel_ = nullptr;
+    QLabel *deliveryApprovalLabel_ = nullptr;
+    QPushButton *watchButton_ = nullptr;
+    QPushButton *deliveryApproveButton_ = nullptr;
+    QPushButton *deliveryDenyButton_ = nullptr;
+    QTimer *ownerPollTimer_ = nullptr;
+    QTimer *deliveryStateTimer_ = nullptr;
+    /// The request id `owner.pending` last offered for an answer, and the last
+    /// one this window reported — so a poll running once a second says
+    /// something when the answer changes and nothing when it does not.
+    QString deliveryRequestId_;
+    QString lastLoggedDeliveryId_;
+    QString lastDeliveryState_;
+    bool watching_ = false;
 
     /// The request id of the approval the owner is currently being asked
     /// about, and the whole request as the module published it. Empty when

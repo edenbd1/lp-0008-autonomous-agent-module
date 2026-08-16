@@ -113,6 +113,7 @@ echo "[2/5] compile agent-console, linking the agent module unmodified"
     "$repo/module/src/program_skills.cpp" \
     "$repo/module/src/agent_skills.cpp" \
     "$repo/module/src/owner_channel.cpp" \
+    "$repo/module/src/owner_skills.cpp" \
     "$repo/module/src/task_persistence.cpp" \
     -o "$OUT/agent-console"
 echo "  ok    $OUT/agent-console"

@@ -781,6 +781,28 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     }
     DeliveryRuntime *node = delivery_.get();
 
+    // ---- the owner's end of the same channel ------------------------------
+    //
+    // Built here and not gated on anything, because the three `owner.*` skills
+    // have to EXIST in every build for the registry to be the same registry:
+    // a module that registers a different number of skills depending on how it
+    // was compiled is one whose Agent Card is a fact about a build machine. The
+    // skills refuse with `"delivery node is not started"` until a node is up,
+    // which is the same refusal every other skill on the wire gives and is true
+    // the whole time it is given.
+    //
+    // This is what makes the owner's end reachable from a SECOND Logos app:
+    // that app can call `invoke()` on a loaded module and nothing else, so an
+    // owner console with no skills to call is a window onto an agent it can
+    // watch and cannot answer.
+    if (!ownerResponder_) {
+        OwnerResponderPort responderPort;
+        responderPort.channel = node->ownerChannelPort();
+        responderPort.ownerAccount = [this] { return setting("owner_channel_account"); };
+        responderPort.agentAccount = [this] { return setting("agent_account"); };
+        ownerResponder_ = std::make_shared<OwnerResponder>(std::move(responderPort));
+    }
+
     // A caller that wired its own transport keeps it. `ready` is the field to
     // test on: it is the one every wire skill consults first, so a port with
     // anything in it at all has a `ready`, and one with nothing in it has none.
@@ -1079,6 +1101,13 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
         std::make_shared<UpdateSkill>(ports.task),
         std::make_shared<PollSkill>(ports.task, tasks),
         std::make_shared<CancelSkill>(ports.task, tasks),
+        // The owner's end of the approval channel, for the app instance the
+        // owner is sitting in front of. `wallet.send` above asks; these three
+        // are what an owner's Logos app calls to hear the question and answer
+        // it, over the same reliable channel and with no server between them.
+        std::make_shared<OwnerWatchSkill>(ownerResponder_),
+        std::make_shared<OwnerPendingSkill>(ownerResponder_),
+        std::make_shared<OwnerAnswerSkill>(ownerResponder_),
         // The module's own three. `meta.skills` is the catalogue the prize asks
         // for by name; it is registered like any other skill rather than
         // special-cased in `invoke()`, so it appears in its own listing and in

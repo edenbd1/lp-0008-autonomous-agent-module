@@ -325,8 +325,30 @@ cp -f "$DELIVERY_DYLIB" "$DM/lib/" || die "no built liblogosdelivery"
 cp -f "$DELIVERY_LIB_SRC/library/liblogosdelivery.h" \
       "$DELIVERY_LIB_SRC/library/liblogosdelivery_kernel.h" "$DM/lib/" \
   || die "no liblogosdelivery headers"
-cp -f "$DELIVERY_LIB_SRC/library/generated/logosdelivery.h" "$DM/lib/generated/" \
-  || die "no generated logosdelivery.h — that one is written by the library's own build"
+# `library/generated/logosdelivery.h` is a BUILD ARTEFACT, not a tracked file,
+# and at the revision this script pins — `f8b0365`, which is the module's own
+# `flake.lock` pin — `make liblogosdelivery` does not write one. Checked twice:
+# `git cat-file -e f8b0365:library/generated/logosdelivery.h` says the path
+# "exists on disk, but not in" that commit in a checkout that has it, and a
+# clean clone at f8b0365 built here has no `library/generated` at all.
+#
+# This step used to `die` on that, which made the script unable to complete on a
+# machine whose delivery checkout is at the revision the script itself pins. It
+# is not fatal, and the reason is checkable rather than argued: the module
+# includes `<liblogosdelivery.h>` and nothing else — `src/api_call_handler.h:14`,
+# `src/delivery_module_plugin.cpp:18` — and its `metadata.json` adds `lib` to the
+# include path, not `lib/generated`. So the header is staged when the library's
+# build produced one, and its absence is reported and carried on from. The
+# assertion that it was not needed is downstream and is the strong one: the
+# module compiles, packages, loads into `liblogos_core`, and answers
+# `getPluginMethods` across the transport.
+if [ -f "$DELIVERY_LIB_SRC/library/generated/logosdelivery.h" ]; then
+  cp -f "$DELIVERY_LIB_SRC/library/generated/logosdelivery.h" "$DM/lib/generated/"
+else
+  echo "  note: this liblogosdelivery build wrote no library/generated/logosdelivery.h."
+  echo "        The module includes <liblogosdelivery.h> only, so nothing here needs it;"
+  echo "        if the build below fails on a missing header, that is where to look."
+fi
 if [ "$(uname -s)" = Darwin ]; then
   install_name_tool -id "@rpath/liblogosdelivery.$SO" "$DM/lib/liblogosdelivery.$SO"
 fi

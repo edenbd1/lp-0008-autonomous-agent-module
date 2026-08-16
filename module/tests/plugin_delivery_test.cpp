@@ -887,8 +887,14 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
         {"agent_account", me},
         {"owner_channel_account", owner},
         // Long enough that a node still finding peers is not read as an owner
-        // who said nothing, short enough that a broken run ends.
-        {"approval_timeout_ms", QStringLiteral("180000")},
+        // who said nothing, short enough that a broken run ends. Overridable
+        // because the negative control — nobody watching — is a wait that is
+        // MEANT to run out, and three minutes of it is three minutes nobody
+        // will spend twice.
+        {"approval_timeout_ms",
+         qEnvironmentVariableIsSet("LP0008_APPROVAL_TIMEOUT_MS")
+             ? qEnvironmentVariable("LP0008_APPROVAL_TIMEOUT_MS")
+             : QStringLiteral("180000")},
         {"approval_resend_ms", QStringLiteral("8000")},
     };
     for (const auto &kv : settings) {
@@ -945,6 +951,46 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
     note("outcome: " + outcome + ", approved: " + (approved ? "true" : "false") +
          ", attempts: " + QString::number(sent.value("attempts").toInt()) +
          ", waited: " + QString::number(sent.value("waited_ms").toInt()) + " ms");
+    const bool expectUnreachable = qEnvironmentVariableIsSet("LP0008_EXPECT_UNREACHABLE");
+    if (expectUnreachable) {
+        // THE CONTROL, AND IT IS THE ONE THIS CRITERION NEEDS MOST.
+        //
+        // A Waku node receives its own published messages. This process puts an
+        // approval request on the owner's content topic and its own node hands
+        // it straight back — so "the owner answered" is an assertion one
+        // process can satisfy alone unless something refuses self-authored
+        // frames. Run with nobody watching, the agent must therefore end in the
+        // terminal owner-unreachable outcome having asked repeatedly, and NOT
+        // in an approval it wrote itself.
+        check(outcome == QLatin1String("owner_unreachable") && !approved,
+              "with nobody on the other end, the agent's own node handed its own request "
+              "back and no approval came of it: " + outcome);
+        check(sent.value("attempts").toInt() >= 2,
+              "and it retried before timing out, which is the reliability half of the same "
+              "criterion");
+        check(!sent.value("submitted").toBool(),
+              "nothing was submitted: an unreachable owner is terminal, never a fallback to "
+              "acting alone");
+        // And the counter that shows the control was not vacuous. `relay_seen`
+        // is what this node's own event thread handed back, and with nobody
+        // else on the topic every one of those frames is this process's own
+        // request. So the self-satisfying case is not hypothetical here: the
+        // request really did come back, and it really did not become an
+        // approval.
+        const int relaySeen = deliveryStatus(p)
+                                  .value("frames").toObject()
+                                  .value("relay_seen").toInt();
+        check(relaySeen >= sent.value("attempts").toInt(),
+              QStringLiteral("its own %1 request(s) came back to it off the network (%2 relay "
+                             "frame(s) seen) and none of them was an answer")
+                  .arg(sent.value("attempts").toInt())
+                  .arg(relaySeen));
+        std::fprintf(stderr, "\n%s (%d failure(s))\n",
+                     failures ? "FAILED"
+                              : "with no owner listening, one process could not answer itself",
+                     failures);
+        return failures ? 1 : 0;
+    }
     check(outcome != QLatin1String("owner_unreachable"),
           "the owner was reached — the assertion that was impossible while the module sent "
           "an empty marker seed");
@@ -971,6 +1017,182 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
     return failures ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// owner: the OTHER end of that channel, in a loaded module of its own
+// ---------------------------------------------------------------------------
+
+/// The owner's app, when the owner's app is a Logos module rather than a
+/// program written for the purpose.
+///
+/// `approval` above runs against `module/tests/owner_responder.cpp`, which links
+/// `liblogosdelivery` directly and drives the channel in C. That answers the
+/// transport question and it cannot answer the criterion's, because the prize
+/// asks for "a separate Logos app instance" and glosses it as one "that holds
+/// the owner's keys" — and a test binary is neither. This mode is the owner end
+/// reached the way a second Basecamp reaches it: `invoke()` on a loaded module,
+/// three skills, nothing else. What the `ui` plugin in `app/` does on a click,
+/// this does on a line, against the same package.
+int runOwner(const QString &path, const QString &owner, const QString &agent,
+             const QString &decision, int seconds)
+{
+    LogosProviderObject *p = bringUpModule(path);
+    if (!p) return 1;
+
+    step("1. this app answers as the owner, and listens to one agent");
+    const std::pair<const char *, QString> settings[] = {
+        {"owner_channel_account", owner},
+        {"agent_account", agent},
+    };
+    for (const auto &kv : settings) {
+        const QJsonObject r =
+            call(p, "meta.configure", QStringLiteral(R"({"key":"%1","value":"%2"})")
+                                          .arg(QString::fromUtf8(kv.first), kv.second));
+        check(r.value("ok").toBool(),
+              QStringLiteral("meta.configure %1").arg(QString::fromUtf8(kv.first)));
+    }
+
+    step("2. the owner skills refuse before there is a node, in the words they always use");
+    QJsonObject r = call(p, "owner.watch", QStringLiteral("{}"));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString() == QLatin1String("delivery node is not started"),
+          "owner.watch refuses without a node: " + r.value("error").toString());
+    r = call(p, "owner.pending", QStringLiteral("{}"));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("owner.watch first")),
+          "and owner.pending refuses to report on a channel nobody opened: " +
+              r.value("error").toString());
+
+    step("3. start this app's own Delivery node");
+    check(call(p, "meta.configure", QStringLiteral(R"({"key":"delivery","value":"on"})"))
+              .value("ok").toBool(),
+          "meta.configure('delivery','on')");
+    const bool up = waitReady(p, 240);
+    check(up, "the owner app's own Delivery node came up");
+    if (!up) return 1;
+
+    step("4. open the owner's end of the channel");
+    r = call(p, "owner.watch", QStringLiteral("{}"));
+    check(r.value("ok").toBool(), "owner.watch opened the reliable channel");
+    note("channel " + r.value("channel").toString());
+    note("topic   " + r.value("topic").toString());
+    // Derived, not exchanged. Both ends compute this string from the two
+    // account ids, which is what makes "no intermediary server" true of the
+    // rendezvous as well as of the messages.
+    check(r.value("channel").toString() ==
+              QStringLiteral("/lp-0008/1/owner-channel/%1/%2").arg(owner, agent),
+          "and its id is the one the agent derives from the same two accounts");
+    check(!r.value("rewatched").toBool(), "nothing was replaced: this is the first watch");
+
+    step("5. wait for an agent to ask");
+    QJsonObject asked;
+    QString id;
+    for (int i = 0; i < seconds * 2 && id.isEmpty(); ++i) {
+        r = call(p, "owner.pending", QStringLiteral("{}"));
+        const QJsonArray waiting = r.value("pending").toArray();
+        if (!waiting.isEmpty()) {
+            asked = waiting.first().toObject();
+            id = asked.value("id").toString();
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    check(!id.isEmpty(), "an agent asked this owner to approve a spend, within the time allowed");
+    if (id.isEmpty()) {
+        note("owner.pending: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)));
+        std::fprintf(stderr, "\nFAILED (%d failure(s))\n", failures);
+        return 1;
+    }
+    note("the agent asks: " +
+         QString::fromUtf8(QJsonDocument(asked).toJson(QJsonDocument::Compact)));
+    check(asked.value("agent").toString() == agent,
+          "and it comes from the agent this owner is watching, not from this app itself");
+    // The check that makes this an owner rather than a rubber stamp, and it is
+    // the module's own: `owner.pending` never lists a request whose marker seed
+    // it could not derive for itself from the request's own terms.
+    check(asked.value("seed_verified").toBool(),
+          "this app derived the approval marker from the terms and got the seed the agent "
+          "named — two independent derivations of the account `spend_approved` looks for");
+    check(!asked.value("marker_seed").toString().isEmpty() &&
+              !asked.value("recipient").toString().isEmpty(),
+          "the terms are all here: recipient, amount, nonce, policy and marker");
+
+    step("6. answer it, over Logos Messaging");
+    r = call(p, "owner.answer",
+             QStringLiteral(R"({"id":"%1","decision":"%2"})").arg(id, decision));
+    note("owner.answer: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)));
+    check(r.value("ok").toBool(), "the owner's " +
+                                      QString(decision == QLatin1String("deny") ? "denial"
+                                                                                : "approval") +
+                                      " went out on the channel");
+    check(r.value("marker_seed").toString() == asked.value("marker_seed").toString(),
+          "and it echoes the exact terms it was asked about");
+
+    step("7. what this app refuses, which is what makes step 6 mean anything");
+    r = call(p, "owner.answer",
+             QStringLiteral(R"({"id":"%1","decision":"approve"})").arg(id));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("already answered")),
+          "one payment, one answer: " + r.value("error").toString());
+    r = call(p, "owner.answer",
+             QStringLiteral(R"({"id":"spend-nobody-asked","decision":"approve"})"));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("nothing here to answer")),
+          "and an id nobody asked about is refused rather than sent: " +
+              r.value("error").toString());
+    r = call(p, "owner.answer", QStringLiteral(R"({"id":"%1","decision":"yes"})").arg(id));
+    check(!r.value("ok").toBool() &&
+              r.value("error").toString().contains(QLatin1String("'approve' or 'deny'")),
+          "and a word that is not one of the two is not read as consent: " +
+              r.value("error").toString());
+
+    step("8. the frames this app read, and the ones it refused to read");
+    // Stay up long enough for the reply to propagate before anything is torn
+    // down: a channel send accepted locally and then losing its node has not
+    // been delivered.
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    r = call(p, "owner.pending", QStringLiteral("{}"));
+    note("owner.pending: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)));
+    check(r.value("pending").toArray().isEmpty(),
+          "nothing is waiting for an answer any more");
+    check(r.value("answered").toArray().size() == 1,
+          "and the one that was answered is recorded as answered");
+    note(QStringLiteral("frames %1, self-authored and refused %2, ignored %3")
+             .arg(r.value("frames").toInt())
+             .arg(r.value("self_refused").toInt())
+             .arg(r.value("ignored").toInt()));
+    // MEASURED, AND NOT WHAT WAS EXPECTED. A node receives its own RELAY
+    // messages — `agent.discover` reads its own card back, and this repository
+    // has built assertions around that — and it does NOT receive its own
+    // reliable-channel frames. Every run of this mode reports `frames: 1`,
+    // which is the agent's request and nothing else, and `self_refused: 0` for
+    // want of anything to refuse. So the authorship rule cannot be exercised
+    // from inside one process here, and asserting it would be asserting a
+    // property of the transport rather than of this module. It is exercised
+    // where a self-authored frame can be put in front of it:
+    // `module/tests/owner_skills_test.cpp`, with the falsification beside it —
+    // the same bytes with the other account as the author, which must be
+    // accepted.
+    //
+    // What discriminates HERE is run 1 of the runner script: with nobody
+    // watching, the agent's own node hands its own request back and no
+    // approval comes of it.
+    check(r.value("frames").toInt() >= 1,
+          "the channel handed this app at least the agent's own request");
+    check(r.value("self_refused").toInt() == 0,
+          "and none of its own frames: this transport does not echo reliable-channel sends "
+          "back to their sender, which is why the authorship rule is exercised in "
+          "owner_skills_test.cpp and not here");
+    check(r.value("unverifiable").toArray().isEmpty(),
+          "and nothing arrived whose terms this app could not verify");
+
+    std::fprintf(stderr, "\n%s (%d failure(s))\n",
+                 failures ? "FAILED"
+                          : "a loaded module, driven the way a second Logos app drives it, was "
+                            "the owner on the other end of the channel",
+                 failures);
+    return failures ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -981,8 +1203,9 @@ int main(int argc, char **argv)
                      "usage: %s <plugin> probe\n"
                      "       %s <plugin> peer <run-id> <me> <signer-cmd> <other>\n"
                      "       %s <plugin> approval <me> <owner> <recipient> <amount>\n"
+                     "       %s <plugin> owner <owner> <agent> <approve|deny> [seconds]\n"
                      "       %s <plugin> signers <me>\n",
-                     argv[0], argv[0], argv[0], argv[0]);
+                     argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     const QString path = QString::fromUtf8(argv[1]);
@@ -1002,6 +1225,15 @@ int main(int argc, char **argv)
         }
         return runApproval(path, QString::fromUtf8(argv[3]), QString::fromUtf8(argv[4]),
                            QString::fromUtf8(argv[5]), QString::fromUtf8(argv[6]));
+    }
+    if (mode == QLatin1String("owner")) {
+        if (argc < 6) {
+            std::fprintf(stderr, "owner needs <owner> <agent> <approve|deny>\n");
+            return 2;
+        }
+        const int seconds = argc > 6 ? QString::fromUtf8(argv[6]).toInt() : 240;
+        return runOwner(path, QString::fromUtf8(argv[3]), QString::fromUtf8(argv[4]),
+                        QString::fromUtf8(argv[5]), seconds > 0 ? seconds : 240);
     }
     if (mode == QLatin1String("peer")) {
         if (argc < 7) {

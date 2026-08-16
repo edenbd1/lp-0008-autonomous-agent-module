@@ -427,6 +427,7 @@ jobs:
             module/src/program_skills.cpp \
             module/src/agent_skills.cpp \
             module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
             module/src/task_persistence.cpp \
             -o skills_test
           ./skills_test | tee skills_test.out
@@ -463,6 +464,7 @@ jobs:
             module/src/program_skills.cpp \
             module/src/agent_skills.cpp \
             module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
             module/src/task_persistence.cpp \
             -o module_recovery_test
           ./module_recovery_test
@@ -492,6 +494,7 @@ jobs:
             module/src/program_skills.cpp \
             module/src/agent_skills.cpp \
             module/src/owner_channel.cpp \
+            module/src/owner_skills.cpp \
             module/src/task_persistence.cpp \
             -o broken_recovery_test
           set +e
@@ -588,6 +591,35 @@ jobs:
             echo "owner_channel_test reported SKIPPED"; exit 1
           fi
           rm -f owner_channel_test.out
+
+      # The OTHER end of that channel: the three skills a second Logos app calls
+      # to hear a spend request and answer it. Two things are decided here that
+      # a live run cannot decide, and both are named in the file's header — the
+      # authorship rule, because this transport does not hand a node its own
+      # reliable-channel frames, so a self-authored frame can only be put in
+      # front of it here; and that the reply this owner writes is read as an
+      # approval by the AGENT's own `checkReply`, with a reply altered in flight
+      # refused. Two writers of one wire format is the defect that once made an
+      # owner who answered look exactly like an owner who never did.
+      - name: Exercise the owner's end of the channel
+        run: |
+          clang++ -std=c++17 -Wall -Wextra module/tests/owner_skills_test.cpp \
+            module/src/owner_skills.cpp module/src/owner_channel.cpp \
+            module/src/messaging_skills.cpp module/src/spend_marker.cpp \
+            -o owner_skills_test
+          ./owner_skills_test | tee owner_skills_test.out
+          grep -qF "answers what the agent's own checker accepts" owner_skills_test.out \
+            || { echo "owner_skills_test exited 0 without reporting a full pass"; exit 1; }
+          if grep -q SKIPPED owner_skills_test.out; then
+            echo "owner_skills_test reported SKIPPED"; exit 1
+          fi
+          # The count, because a suite that stopped running its cases exits 0
+          # too. This is a floor, not an equality: cases come and go.
+          passed=$(grep -c "^  ok  " owner_skills_test.out)
+          echo "owner-skill assertions that ran and passed: $passed"
+          [ "$passed" -ge 25 ] \
+            || { echo "only $passed assertion(s) ran"; exit 1; }
+          rm -f owner_skills_test.out
 
       # The dangerous window is not the crash, it is between the wallet
       # returning a hash and the task recording it: the money moved, and a

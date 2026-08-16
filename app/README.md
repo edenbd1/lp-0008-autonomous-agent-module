@@ -13,6 +13,13 @@ transport — `configure`, `start`, `stop`, `skills`, `status`, `invoke`,
 `approveSpend` — the same method table `module/tests/logos_core_load_test.cpp`
 drives. Nothing here is computed twice.
 
+It is also the **owner's** app, and not by having a second build: install the
+same two packages into a second Basecamp with its own user directory, press
+*Join Messaging* and *Watch as owner* there, and that instance is the owner end
+of a Logos Messaging channel whose agent end is in the first one. Which role a
+window is playing is a matter of which buttons are pressed, not of which binary
+was installed. See §"The second panel" below.
+
 ## What it does, and what that proves
 
 Launched from a terminal so its stderr can be read, Basecamp 0.2.2 with this
@@ -80,6 +87,41 @@ the answer — 7.2 s from the call to the verdict, well inside a 60 s wait.
 Two things had to be fixed in the module to get that round trip, and both were
 found by measuring rather than reading. See `docs/limitations.md` §"The owner
 channel inside Basecamp" for the measurements and what is still bounded.
+
+## The second panel, which is the one the criterion is about
+
+Everything above reaches the module *this* app loaded. The panel below the rule
+— **Owner channel over Logos Messaging — the other app** — reaches an agent in
+a **different Basecamp**, over Logos Delivery, with nothing between them but
+the public relays. Four buttons and two fields, and every one of them is still
+one `invoke` on the loaded module:
+
+| Button | The call | What it is for |
+|---|---|---|
+| Join Messaging | `meta.configure` ×3: `owner_channel_account`, `agent_account`, `delivery=on` | Pressed on **both** instances. The channel id is derived from the two accounts on both sides, so nothing is exchanged to agree on it |
+| Watch as owner | `owner.watch` | Pressed on the **owner's** instance. The agent's end is opened by the module itself when a spend needs approving |
+| Approve over Delivery | `owner.answer {"decision":"approve"}` | The reply goes on the reliable channel; the agent is in another process |
+| Deny over Delivery | `owner.answer {"decision":"deny"}` | The control, and a completed exchange rather than a failure of one |
+
+Once watching, the window polls `owner.pending` once a second. That poll is the
+"in real time" half: a spend minted in the other app appears here without
+anybody pressing anything, and it appears with the terms and with this app's own
+verdict on them — `owner.pending` never lists a request whose approval marker it
+could not re-derive from the request's own recipient, amount and nonce, so what
+the window shows is a payment it checked and not a payment it was told about.
+
+The transcript of one such exchange, read out of the two windows, is in
+[`docs/basecamp.md`](../docs/basecamp.md) §"Two Basecamps, and the owner in the
+second one" — 573 ms from the call to the request appearing in the other app,
+371 ms from the Deny button to the verdict, 177 ms from Approve, and
+`owner_unreachable` with the owner's app killed.
+
+**The two owner panels answer through different doors, and that is deliberate.**
+`approveSpend` (top panel) has to reach a module that is blocked inside the very
+call it is answering — which is why this window opens a *second* connection for
+it, see the note on `answerApi_` in the header. `owner.answer` (bottom panel)
+does not: it hands a reply to this app's own Delivery node and returns, and the
+module it is answering is in another process on the other side of a relay.
 
 ## Building it
 
