@@ -8,6 +8,13 @@
     "If CI says module/agent.lgx is stale, the fix is to rebuild and repackage",
     "(docs/basecamp.md), not to update the hashes here.",
     "",
+    "One package can carry several platform variants, so this record does too.",
+    "Packaging one variant MERGES it into whatever is already here; a variant",
+    "already recorded is kept only if the bytes still in the package are the",
+    "bytes it was recorded for AND those bytes still contain every string",
+    "literal of the source being recorded. A stale sibling therefore cannot",
+    "ride along on a fresh variant's repackaging.",
+    "",
     "package_root_hash is the manifest's content-derived root, not the",
     "archive's sha256: gzip records a timestamp, so repackaging identical",
     "contents produces a different file. variants[].sha256 is the load-bearing",
@@ -15,7 +22,7 @@
     "name, type or author."
   ],
   "built_from": {
-    "module/CMakeLists.txt": "07deb1b9906f65d697fd985d21c542a9fb394c7547a86a6f2330162b721edde5",
+    "module/CMakeLists.txt": "d74285614227498d2af10b1a25c4952fb7f5600ffd670a1f8de128c590e3e849",
     "module/agent_module_plugin_export.h": "149a9597119d18ff7630b1bac939e1051d6c975129e17c4f33513a1dada85aa9",
     "module/generated_code/agent_dispatch.cpp": "26140ef3be69032b4006d43939843ad37ffd0660707d6f83d57cb1b27d88c2a1",
     "module/generated_code/agent_events.cpp": "544722ac079d102aa47c3613b458c7b559644b263727712cc9286f65ce9f93c2",
@@ -47,19 +54,33 @@
     "module/src/wallet_skills.cpp": "882ad5e54ef681c377f49e0b378c9f205e81ba90422e67a3ac406e6333f5568e",
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
+  "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
   "package": "module/agent.lgx",
-  "package_root_hash": "ca74731277f0ec7392a8fb445a21e165288c2e70e1ec68e8768a6a34652564d2",
-  "toolchain": {
-    "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
-    "host": "darwin-arm64",
-    "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
-    "qt": "6.9.2"
-  },
+  "package_root_hash": "fdafdde1c228959c65ba3cbe8824487a22e05b6b871df228b43e0eff1bda8924",
   "variants": {
     "darwin-arm64": {
-      "bytes": 4440784,
+      "bytes": 4441216,
+      "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
+      "delivery": null,
       "main": "agent_plugin.dylib",
-      "sha256": "5b4def6a0e23b0a07bec35ecbc9045d271f3ab53acf1de985963b9ead3bab0b4"
+      "qt": "6.9.2",
+      "sha256": "9ae13e4310b74b1538e074f26bb3747fe8cd145d84384b59c93bb3ab791e7cf3"
+    },
+    "linux-amd64": {
+      "bytes": 6951104,
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "delivery": null,
+      "main": "agent_plugin.so",
+      "qt": null,
+      "sha256": "08c7dd9a433edbf3d6917300f9e2cec5be9a69294cdb943becd3108a97b384e3"
+    },
+    "linux-arm64": {
+      "bytes": 7032848,
+      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "delivery": null,
+      "main": "agent_plugin.so",
+      "qt": null,
+      "sha256": "fd55db35f44279f900f3c1978a5ba325a7b669fd7ba70f2242e6238be99eb34c"
     }
   }
 }

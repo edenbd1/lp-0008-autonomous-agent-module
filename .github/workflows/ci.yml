@@ -754,12 +754,16 @@ jobs:
   # WHY THERE IS NO REBUILD HERE, named rather than implied, because "prefer
   # failing loudly to guessing" applies to the workflow as much as to the script:
   #
-  #   - The package ships one variant and it is darwin-arm64. ubuntu-latest
-  #     cannot emit a Mach-O arm64 dylib: that needs the macOS SDK, which is not
-  #     redistributable and is not on this runner. So the rebuild-and-compare
-  #     that would settle the question outright is not available in this job at
-  #     any price, and pretending otherwise by comparing a linux-amd64 .so
-  #     against a darwin-arm64 dylib would be a check in the shape of a check.
+  #   - The package ships three variants and one of them is darwin-arm64.
+  #     ubuntu-latest cannot emit a Mach-O arm64 dylib: that needs the macOS SDK,
+  #     which is not redistributable and is not on this runner. So a
+  #     rebuild-and-compare that settled the question for the WHOLE package is
+  #     not available in this job at any price, and pretending otherwise by
+  #     rebuilding the linux-amd64 .so and calling the package checked would be a
+  #     check in the shape of a check. (The `linux-headless` job below does
+  #     exercise the linux-amd64 variant, but by RUNNING it in a real Logos Core
+  #     rather than by comparing bytes — a different property, and the one a
+  #     reviewer on Linux actually cares about.)
   #
   #   - macos-14 is arm64 and could do it — aqtinstall for the pinned Qt 6.9.2,
   #     the three logos checkouts docs/basecamp.md pins, brew nlohmann-json, and
@@ -890,31 +894,41 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import io, tarfile
+          import io, json, tarfile
           src = tarfile.open("module/agent.lgx", "r:gz")
           members = [(m, src.extractfile(m).read() if m.isfile() else None)
                      for m in src.getmembers()]
+          manifest = json.loads(dict((m.name, d) for m, d in members)["manifest.json"])
+          want = len(manifest["main"])
           hit = 0
           out = tarfile.open("module/agent.lgx", "w:gz", format=tarfile.GNU_FORMAT)
           for m, data in members:
-              # The PLUGIN specifically, not any shared library in the package.
-              # This used to match every .dylib, which was true until the
-              # package started carrying liblogosdelivery beside the plugin --
-              # and then the assertion below died on two hits before the control
-              # ever ran, leaving "a swapped binary is detected" unverified
-              # rather than merely untested. A control that stops working when
-              # the thing it guards grows is worse than no control, because it
-              # goes red for a reason that is not the property.
-              if data is not None and m.name.endswith(("agent_plugin.dylib",
-                                                       "agent_plugin.so")):
-                  # One byte, deep in __TEXT. Same length, so the size and the
-                  # manifest's own idea of the file are untouched.
+              # The PLUGINS specifically, not any shared library in the package,
+              # and EVERY variant's rather than one.
+              #
+              # This has now been wrong twice in the same way. It first matched
+              # every .dylib, which was true until the package started carrying
+              # liblogosdelivery beside the plugin; the fix pinned it to exactly
+              # one agent_plugin, which was true until the package gained a
+              # second and a third variant. Both times the assertion would have
+              # died before the control ever ran, leaving "a swapped binary is
+              # detected" unverified rather than merely untested -- which is the
+              # failure its own comment warned about. So the count is taken from
+              # the manifest instead of written down, and every variant is
+              # corrupted, because the property is "a swapped binary is caught"
+              # and there are three binaries to swap.
+              if data is not None and m.name.startswith("variants/") and \
+                 m.name.endswith(("/agent_plugin.dylib", "/agent_plugin.so")):
+                  # One byte, deep in the text segment. Same length, so the size
+                  # and the manifest's own idea of the file are untouched.
                   data = data[:0x40000] + bytes([data[0x40000] ^ 0xFF]) + data[0x40001:]
                   hit += 1
               out.addfile(m, io.BytesIO(data)) if data is not None else out.addfile(m)
           out.close()
-          assert hit == 1, "expected exactly one agent_plugin binary in the package, found %d" % hit
-          print("one byte flipped in the packaged plugin; the archive is otherwise identical")
+          assert hit == want, \
+              "the manifest declares %d variant(s) and %d plugin(s) were found" % (want, hit)
+          print("one byte flipped in each of the %d packaged plugins; "
+                "the archive is otherwise identical" % hit)
           PY
           set +e
           ./scripts/check-package-fresh.py > swapped.out 2>&1; rc=$?
@@ -1038,6 +1052,173 @@ jobs:
           set -e
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "the manifest assertion cannot fail"; exit 1; }
+
+  linux-headless:
+    name: Logos Core loads and configures the shipped module, headless, on Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # WHY THIS JOB EXISTS
+      #
+      # `docs/limitations.md` said for the whole life of this submission that
+      # the deployment criterion's "on any machine" clause was `[UPSTREAM]`,
+      # because "liblogos_core ships inside the app and there is no headless
+      # distribution of it to fetch". That was checked against the macOS .dmg
+      # and never against the Linux build, which is an AppImage — a SquashFS
+      # image behind an ELF runtime, on the same release page, unpackable with
+      # no installer, no root, no FUSE and no display. So the claim was wrong,
+      # and the only way it stays wrong is if something runs the Linux path.
+      #
+      # The `binaries` job already asserts the REFUSAL of this same script on an
+      # unprepared runner. This job asserts the other half — that a prepared one
+      # gets all the way to a configured, started module — and it uses the
+      # COMMITTED package rather than rebuilding, because the committed package
+      # is what a reviewer downloads.
+      - name: What a bare runner does not have
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            --no-install-recommends squashfs-tools nlohmann-json3-dev
+
+      # `icu` is not optional. Official Qt for Linux links ICU 73 by soname and
+      # no runner image ships that, so without the archive every link ends in
+      # `undefined reference to ucnv_open_73` — inside the cpp-generator
+      # sub-build, which makes it look like a generator problem.
+      - name: Qt 6.9.2, the version Basecamp bundles
+        run: |
+          set -euo pipefail
+          python3 -m venv /opt/aqt
+          /opt/aqt/bin/pip -q install aqtinstall
+          /opt/aqt/bin/python -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 \
+            -m qtremoteobjects --archives qtbase icu --outputdir /opt/Qt
+          ls /opt/Qt/6.9.2/gcc_64/lib/cmake/Qt6/Qt6Config.cmake
+          ls /opt/Qt/6.9.2/gcc_64/libexec/moc
+
+      - name: The logos-cpp-sdk checkout, pinned at the revision docs/basecamp.md names
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/logos-co/logos-cpp-sdk /opt/logos-cpp-sdk
+          git -C /opt/logos-cpp-sdk checkout -q c87f343
+
+      - name: The Logos Core runtime, as upstream published it
+        run: ./scripts/fetch-logos-core.sh
+
+      # The pin is the whole difference between "we downloaded something" and
+      # "we downloaded this", and a release asset is mutable. Truncate the image
+      # and require a refusal BEFORE anything is unpacked — a checksum checked
+      # after the extraction is a checksum of a decision already taken.
+      - name: Negative control — the pinned checksum is load-bearing
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/badcore
+          head -c 2000000 \
+            _external/logos-core/LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage \
+            > /tmp/badcore/LogosBasecamp-Desktop-v0.2.2-d41a72-x86_64.AppImage
+          set +e
+          ./scripts/fetch-logos-core.sh /tmp/badcore > bad.out 2>&1; rc=$?
+          set -e
+          cat bad.out
+          [ "$rc" -ne 0 ] || { echo "a corrupted AppImage was accepted"; exit 1; }
+          grep -q "does not match the pinned sha256" bad.out \
+            || { echo "it went red for some other reason"; exit 1; }
+          [ ! -d /tmp/badcore/squashfs-root ] \
+            || { echo "it unpacked the image anyway"; exit 1; }
+          rm -f bad.out
+
+      # Listed to a file, not piped into `grep -q`. Under `set -o pipefail` grep
+      # exits at the first match, tar dies of SIGPIPE, the pipeline reports 141,
+      # and the check reads as "no linux-amd64 variant" on a package that has
+      # one. This repository documents that failure twice and it was still the
+      # first thing this job got wrong.
+      - name: The committed package carries a linux-amd64 variant
+        run: |
+          set -euo pipefail
+          tar tzf module/agent.lgx > pkg.list
+          grep -qxF 'variants/linux-amd64/agent_plugin.so' pkg.list \
+            || { echo "module/agent.lgx has no linux-amd64 plugin"; cat pkg.list; exit 1; }
+          rm -f pkg.list
+
+      # This step passes by RUNNING. The runner has no display, no Logos app and
+      # no Basecamp install; what it has is an unpacked AppImage, a Qt and an
+      # SDK checkout, which is exactly what docs/limitations.md lists as
+      # "prepared".
+      - name: Logos Core loads, configures and starts it, headless
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+          LOGOS_CPP_SDK_ROOT: /opt/logos-cpp-sdk
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/logos-core-headless.sh storage > headless.out 2>&1; rc=$?
+          set -e
+          tail -80 headless.out
+          [ "$rc" -eq 0 ] || { echo "the headless run exited $rc"; exit 1; }
+          if grep -q SKIPPED headless.out; then
+            echo "logos-core-headless.sh reported SKIPPED"; exit 1
+          fi
+          # The exit code is not the whole assertion: name what it did.
+          grep -q "variant linux-amd64" headless.out \
+            || { echo "it did not install the linux-amd64 variant"; exit 1; }
+          grep -q "all steps confirmed (0 failure(s))" headless.out \
+            || { echo "no confirmation banner"; exit 1; }
+          grep -q "the loaded module lists all 28 documented skills" headless.out \
+            || { echo "the module loaded and never listed its skills"; exit 1; }
+          grep -q "and to the policy account it was configured with" headless.out \
+            || { echo "it never read the envelope back out of meta.status"; exit 1; }
+
+      # The variant is chosen, not stumbled into. Before this guard the script
+      # took the first variant in the archive, so the first Linux run after
+      # linux-amd64 was added installed the DYLIB. There is no fallback: a
+      # module directory holding another platform's binary looks complete and
+      # can never load.
+      - name: Negative control — a variant this machine cannot use is refused, before anything is installed
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+          LOGOS_CPP_SDK_ROOT: /opt/logos-cpp-sdk
+        run: |
+          set -euo pipefail
+          set +e
+          LGX_VARIANT=windows-x64 ./scripts/logos-core-headless.sh storage \
+            > wrong.out 2>&1; rc=$?
+          set -e
+          cat wrong.out
+          [ "$rc" -ne 0 ] || { echo "a windows variant was accepted on Linux"; exit 1; }
+          grep -q "has no 'windows-x64' variant" wrong.out \
+            || { echo "it went red for some other reason"; exit 1; }
+          if grep -qE "^install |installed, main=" wrong.out; then
+            echo "it installed something anyway"; exit 1
+          fi
+          rm -f wrong.out
+
+      # And the control that makes the green above mean something: ask the
+      # runtime for a module that is not there. Without this the whole job is a
+      # script that exits 0, which is the failure the `use-cases` job below was
+      # written to close.
+      - name: Negative control — the green above is falsifiable
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+          LOGOS_CPP_SDK_ROOT: /opt/logos-cpp-sdk
+        run: |
+          set -euo pipefail
+          # Bounded, because the harness deliberately does NOT stop at the first
+          # failure — it carries on and every call across a transport nobody is
+          # serving costs a 20-second timeout, so an unbounded run of this
+          # control takes twenty minutes to tell us what its third line already
+          # said. `timeout` exits non-zero too, which is why the exit code alone
+          # is not the assertion.
+          set +e
+          timeout 300 env MODULE_NAME=agent-not-installed \
+            ./scripts/logos-core-headless.sh storage > absent.out 2>&1; rc=$?
+          set -e
+          head -40 absent.out
+          [ "$rc" -ne 0 ] \
+            || { echo "loading a module that is not there passed"; exit 1; }
+          grep -q "FAIL  logos_core_load_module() reports success" absent.out \
+            || { echo "it went red without failing the load"; exit 1; }
+          rm -f absent.out headless.out
 
   use-cases:
     name: The illustrative use cases verify against the public testnet

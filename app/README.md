@@ -182,7 +182,47 @@ loads nowhere:
   ok    all 7 undefined Logos symbol(s) are exported by the host's liblogos_core
   ok    type: ui — Basecamp installs this into its plugins directory
   ok    main[darwin-arm64] = agent_ui.dylib is in the package
+  ok    main[linux-amd64] = agent_ui.so is in the package
+  ok    main[linux-arm64] = agent_ui.so is in the package
 ```
+
+`app/agent-ui.lgx` carries **three** variants — `darwin-arm64`, `linux-amd64`
+and `linux-arm64`, one per platform the Logos app is published for. The Linux
+ones are built the same way, in a container, against the same official Qt
+6.9.2 (`linux_gcc_64` and `linux_gcc_arm64` respectively) — see
+[`../docs/basecamp.md`](../docs/basecamp.md), "Linux, and the `linux-amd64`
+variant", which covers the whole toolchain once for both packages:
+
+```sh
+cmake -S app -B build-ui -DCMAKE_PREFIX_PATH=$QT_ROOT \
+      -DLOGOS_CPP_SDK_ROOT=$LOGOS_CPP_SDK_ROOT
+cmake --build build-ui -j"$(nproc)"
+app/package-ui.sh build-ui linux-amd64
+```
+
+and `package-ui.sh` asks ELF the same three questions it asks Mach-O, in ELF's
+own terms:
+
+```
+  ok    Qt is referenced by soname (libQt6Widgets.so.6 libQt6Gui.so.6
+        libQt6Core.so.6 ) with RUNPATH $ORIGIN, built against 6.9
+  ok    all 7 undefined Logos symbol(s) are exported by the host's liblogos_core
+```
+
+There is no `@rpath` on ELF, so the portability question is asked of
+`DT_RUNPATH` — which CMake sets to the **build machine's Qt directory** unless
+told otherwise, and which `app/CMakeLists.txt` now sets to `$ORIGIN`. And the Qt
+version has to be read out of the plugin's own metadata note rather than
+inferred from a hardcoded path, because a distribution Qt hardcodes nothing and
+a 6.11 plugin would otherwise pass every check and then time out on every call.
+
+The undefined-symbol check on Linux reads `liblogos_core.so` out of the unpacked
+AppImage (`./scripts/fetch-logos-core.sh`), and if that is not there it says so
+rather than passing: five of the seven symbols were reported missing from a
+library that exports all seven the first time it ran, because `printf | grep -q`
+under `set -o pipefail` returns 141 for every symbol grep finds early. The macOS
+branch carries a comment about exactly that, written years of debugging ago, and
+the Linux branch reproduced it anyway.
 
 `lgx` is not on `PATH` after building `logos-package`; it stays in that
 checkout's `build/`, which is where the script looks.
@@ -207,6 +247,13 @@ mv variants/darwin-arm64/* . && rm -rf variants
 printf 'darwin-arm64' > variant
 ls   # agent_ui.dylib  manifest.json  metadata.json  variant
 ```
+
+On Linux the directory is `~/.local/share/Logos/LogosBasecamp/plugins` and the
+variant is `linux-amd64` or `linux-arm64` — either way `agent_ui.so`, and they
+are not interchangeable. Flatten the variant you need, not the
+first one in the archive: a plugin directory holding the other platform's binary
+looks complete and can never load, and Basecamp reports a plugin that fails to
+load to nobody.
 
 Install `module/agent.lgx` too, per `docs/basecamp.md` — this window is a
 window onto that module, and without it the console reports

@@ -116,6 +116,74 @@ if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
         [ "$missing" -eq 0 ] || exit 1
         echo "  ok    all $checked undefined Logos symbol(s) are exported by the host's liblogos_core"
     fi
+elif [ "$(uname -s)" = "Linux" ] && command -v readelf >/dev/null 2>&1; then
+    # The same three questions in ELF's own terms. The reasoning is written out
+    # once, in module/package-basecamp.sh; the short version is that there is no
+    # `@rpath` here, DT_RUNPATH is the search path, and a distribution Qt gives
+    # nothing away by hardcoding a path — so the version has to be read out of
+    # the plugin's own Qt metadata note rather than inferred.
+    qtneeded="$(readelf -d "$plugin" 2>/dev/null | sed -n 's/.*Shared library: \[\(libQt6[^]]*\)\].*/\1/p')"
+    if [ -z "$qtneeded" ]; then
+        echo "  FAIL  the plugin references no Qt libraries at all" >&2
+        exit 1
+    fi
+    runpath="$(readelf -d "$plugin" 2>/dev/null | sed -n 's/.*R\(UN\)\?PATH.*\[\(.*\)\].*/\2/p')"
+    case ":${runpath}:" in
+        *:/*) echo "  FAIL  the plugin's RUNPATH names an absolute directory, so it" >&2
+              echo "        resolves only on the machine that built it: $runpath" >&2
+              exit 1 ;;
+    esac
+    qtnote="$(readelf -n "$plugin" 2>/dev/null |
+              sed -n 's/^ *description data: *\([0-9a-f]\{2\}\) \([0-9a-f]\{2\}\) \([0-9a-f]\{2\}\).*/\1 \2 \3/p' |
+              head -n1)"
+    qtfmt="$(printf '%s' "$qtnote" | cut -d' ' -f1)"
+    qtmajhex="$(printf '%s' "$qtnote" | cut -d' ' -f2)"
+    qtminhex="$(printf '%s' "$qtnote" | cut -d' ' -f3)"
+    if [ "$qtfmt" != "01" ] || [ -z "$qtminhex" ]; then
+        echo "  FAIL  the plugin carries no readable Qt plugin-metadata note, so" >&2
+        echo "        the Qt it was built against cannot be checked against the" >&2
+        echo "        6.9.2 Basecamp bundles." >&2
+        exit 1
+    fi
+    qtmaj=$((16#$qtmajhex)); qtmin=$((16#$qtminhex))
+    if [ "$qtmaj" -ne 6 ] || [ "$qtmin" -gt 9 ]; then
+        echo "  FAIL  built against Qt $qtmaj.$qtmin. Basecamp 0.2.2 bundles 6.9.2" >&2
+        echo "        and Qt refuses any plugin whose minor version exceeds the" >&2
+        echo "        host's — see docs/basecamp.md." >&2
+        exit 1
+    fi
+    echo "  ok    Qt is referenced by soname ($(printf '%s ' $qtneeded)) with" \
+         "RUNPATH ${runpath:-(none)}, built against $qtmaj.$qtmin"
+
+    # And the same undefined-symbol check, against the ELF runtime. `nm -D`
+    # reads the dynamic table; `--undefined-only` and `--defined-only` are the
+    # GNU spellings of `nm -u` and `nm -gU`.
+    core="${LOGOS_CORE_LIB:-$here/../_external/logos-core/squashfs-root/usr/lib/liblogos_core.so}"
+    if [ -f "$core" ]; then
+        core_syms="$(nm -D --defined-only "$core" | awk '{print $NF}')"
+        undefined="$(nm -D --undefined-only "$plugin" | awk '{print $NF}' | grep -i logos || true)"
+        missing=0
+        checked=0
+        for sym in $undefined; do
+            checked=$((checked + 1))
+            # A here-string, not a pipe. `printf … | grep -q` is wrong under
+            # `set -o pipefail` for the reason the macOS branch above records,
+            # and this branch reproduced it exactly on the first run: grep exits
+            # at the first match, printf dies of SIGPIPE, the pipeline reports
+            # 141, and every symbol found EARLY reads as missing while one found
+            # late reads as present. Five of the seven were reported absent from
+            # a library that exports all seven.
+            if ! grep -qxF -- "$sym" <<<"$core_syms"; then
+                echo "  FAIL  $sym is undefined here and not exported by liblogos_core" >&2
+                missing=1
+            fi
+        done
+        [ "$missing" -eq 0 ] || exit 1
+        echo "  ok    all $checked undefined Logos symbol(s) are exported by the host's liblogos_core"
+    else
+        echo "  <-    no liblogos_core at $core, so the undefined Logos symbols in"
+        echo "        this plugin are unchecked: ./scripts/fetch-logos-core.sh"
+    fi
 fi
 
 stage="$(mktemp -d)"
@@ -124,8 +192,17 @@ mkdir -p "$stage/$variant"
 cp "$plugin" "$stage/$variant/"
 cp "$here/metadata.json" "$stage/$variant/"
 
-rm -f "$out"
-( cd "$(dirname "$out")" && "$lgx" create "$(basename "${out%.lgx}")" >/dev/null )
+# Added to, not replaced — see the same note in module/package-basecamp.sh. One
+# machine cannot build both variants, so recreating the package here would
+# silently drop whichever one it did not build.
+if [ -f "$out" ] && [ "${LGX_FRESH:-0}" != "1" ]; then
+    had="$("$lgx" manifest "$out" 2>/dev/null | awk -F': *' '/^Variants:/ {print $2}')"
+    echo "  <-    adding $variant to the existing package (has: ${had:-none});"
+    echo "        LGX_FRESH=1 to start a new one instead"
+else
+    rm -f "$out"
+    ( cd "$(dirname "$out")" && "$lgx" create "$(basename "${out%.lgx}")" >/dev/null )
+fi
 "$lgx" add "$out" --variant "$variant" --files "$stage/$variant" \
     --main "$(basename "$plugin")" -y >/dev/null
 
@@ -203,4 +280,10 @@ PY
 "$lgx" verify "$out"
 "$lgx" manifest "$out"
 echo
-echo "sha256  $(shasum -a 256 "$out" | cut -d' ' -f1)"
+# `shasum` is the macOS name and `sha256sum` the GNU one; a packaging script
+# that only knows one of them cannot be run on the platform it is packaging for.
+if command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256  $(sha256sum "$out" | cut -d' ' -f1)"
+else
+    echo "sha256  $(shasum -a 256 "$out" | cut -d' ' -f1)"
+fi

@@ -19,6 +19,11 @@ artifacts/agents/
 artifacts/signers.tsv
 _external/
 build-basecamp/
+# The linux-amd64 build tree, from the container build in docs/basecamp.md.
+build-linux/
+build-linux-arm64/
+build-ui-linux/
+build-ui-arm64/
 # scripts/logos-core-headless.sh builds the headless harness and keeps the
 # module's persistence base here.
 build-headless/
@@ -34,3 +39,7 @@ build-delivery/
 # checkouts, their build trees, the .lgx packages, and the isolated modules
 # directory `logos-core-headless.sh --alongside` installs all four into.
 build-companions/
+
+# Byte-compiled Python, from scripts that import each other rather than
+# duplicating a definition (write-package-record.py loads check-package-fresh.py).
+__pycache__/

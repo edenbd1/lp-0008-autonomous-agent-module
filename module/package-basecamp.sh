@@ -106,6 +106,73 @@ if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
     fi
     echo "  ok    Qt is referenced through @rpath, version(s):" \
          "$(printf '%s\n' "$qtrefs" | tr -d ')' | awk '{print $NF}' | sort -u | tr '\n' ' ')"
+elif [ "$(uname -s)" = "Linux" ] && command -v readelf >/dev/null 2>&1; then
+    # The same two questions, asked the way ELF answers them, plus one the Mach-O
+    # check gets for free and this one does not.
+    #
+    # There is no `@rpath` on ELF: a DT_NEEDED entry is a bare soname and the
+    # search path is DT_RUNPATH. So the analogue of "referenced by absolute path"
+    # is a RUNPATH naming the build machine's Qt — `/opt/Qt/6.9.2/gcc_64/lib`
+    # resolves in the container that built it and nowhere else. `$ORIGIN` is what
+    # `@loader_path` is, and it is what LogosModule.cmake sets.
+    #
+    # And the version. On macOS a Homebrew Qt gives itself away by hardcoding
+    # `/opt/homebrew/...`, so the absolute-path rule catches it; a distribution
+    # Qt on Linux hardcodes nothing, so a 6.11 plugin would pass every check
+    # above and then do the thing docs/basecamp.md measures — load "successfully"
+    # and time out on every call. Qt writes the version it was compiled against
+    # into a `.qtversion` section as patch, minor, major; that is the number the
+    # host compares with its own before it will hand the plugin a `logos_host`.
+    qtneeded="$(readelf -d "$plugin" 2>/dev/null | sed -n 's/.*Shared library: \[\(libQt6[^]]*\)\].*/\1/p')"
+    if [ -z "$qtneeded" ]; then
+        echo "  FAIL  the plugin references no Qt libraries at all" >&2
+        exit 1
+    fi
+    runpath="$(readelf -d "$plugin" 2>/dev/null | sed -n 's/.*R\(UN\)\?PATH.*\[\(.*\)\].*/\2/p')"
+    case ":${runpath}:" in
+        *:/*) echo "  FAIL  the plugin's RUNPATH names an absolute directory, so it" >&2
+              echo "        resolves only on the machine that built it: $runpath" >&2
+              exit 1 ;;
+    esac
+    # Out of the `.note.qt.metadata` note, whose first three bytes are the
+    # metadata format version and then Qt's own major and minor — the two
+    # numbers `qt_plugin_query_metadata` compares against the host's before it
+    # will accept the plugin. Not out of `.qtversion`, which carries the patch
+    # level as well and is padding-dependent; it is read below only to print.
+    qtnote="$(readelf -n "$plugin" 2>/dev/null |
+              sed -n 's/^ *description data: *\([0-9a-f]\{2\}\) \([0-9a-f]\{2\}\) \([0-9a-f]\{2\}\).*/\1 \2 \3/p' |
+              head -n1)"
+    qtfmt="$(printf '%s' "$qtnote" | cut -d' ' -f1)"
+    qtmajhex="$(printf '%s' "$qtnote" | cut -d' ' -f2)"
+    qtminhex="$(printf '%s' "$qtnote" | cut -d' ' -f3)"
+    if [ "$qtfmt" != "01" ] || [ -z "$qtminhex" ]; then
+        echo "  FAIL  the plugin carries no readable Qt plugin-metadata note, so" >&2
+        echo "        the Qt it was built against cannot be checked against the" >&2
+        echo "        6.9.2 Basecamp bundles — and a plugin built against a newer" >&2
+        echo "        Qt reports a successful load and then times out." >&2
+        exit 1
+    fi
+    qtmaj=$((16#$qtmajhex)); qtmin=$((16#$qtminhex))
+    # `.qtversion` is patch, minor, major, little-endian. Used only to print the
+    # patch level, and only when its own minor and major agree with the note —
+    # otherwise the two disagree and the note is the one that decides loads.
+    qtpat="$(readelf -x .qtversion "$plugin" 2>/dev/null |
+             awk '/^ *0x/ {print $4; exit}')"
+    if [ "${#qtpat}" -eq 8 ] && [ "${qtpat:2:2}" = "$qtminhex" ] \
+       && [ "${qtpat:4:2}" = "$qtmajhex" ]; then
+        qtver="$qtmaj.$qtmin.$((16#${qtpat:0:2}))"
+    else
+        qtver="$qtmaj.$qtmin"
+    fi
+    if [ "$qtmaj" -ne 6 ] || [ "$qtmin" -gt 9 ]; then
+        echo "  FAIL  built against Qt $qtver. Basecamp 0.2.2 bundles 6.9.2 and Qt" >&2
+        echo "        refuses any plugin whose minor version exceeds the host's —" >&2
+        echo "        see docs/basecamp.md, which measures what that then looks" >&2
+        echo "        like (a load that reports success and times out)." >&2
+        exit 1
+    fi
+    echo "  ok    Qt is referenced by soname ($(printf '%s ' $qtneeded)) with" \
+         "RUNPATH ${runpath:-(none)}, built against $qtver"
 fi
 
 stage="$(mktemp -d)"
@@ -163,7 +230,7 @@ done
 # be in the package.
 missing=""
 for wanted in liblogosdelivery.dylib liblogosdelivery.so libstorage.dylib libstorage.so; do
-    strings - "$plugin" 2>/dev/null | grep -qxF "$wanted" || continue
+    strings -a "$plugin" 2>/dev/null | grep -qxF "$wanted" || continue
     [ -f "$stage/$variant/$wanted" ] || missing="$missing $wanted"
 done
 if [ -n "$missing" ]; then
@@ -174,8 +241,30 @@ if [ -n "$missing" ]; then
 fi
 echo "  ok    every library the plugin opens by name at run time is in the package"
 
-rm -f "$out"
-( cd "$(dirname "$out")" && "$lgx" create "$(basename "${out%.lgx}")" >/dev/null )
+# ONE PACKAGE, ONE VARIANT PER PLATFORM — and only one of them is ever built on
+# the machine doing the packaging. So an existing package is ADDED TO, not
+# replaced: `lgx add` replaces the variant named and leaves the others alone,
+# which is how `module/agent.lgx` comes to carry both `darwin-arm64` and
+# `linux-amd64` when neither machine can build the other's binary.
+#
+# The obvious hazard is the one this repository has already shipped twice under
+# a different name: a sibling variant left behind by later commits, riding along
+# on a fresh variant's repackaging and inheriting its provenance.
+# scripts/write-package-record.py refuses that below — a variant is carried
+# forward in the record only if the bytes still in the package are the bytes it
+# was recorded for AND they still contain every string literal of the source
+# being recorded.
+#
+# LGX_FRESH=1 starts a new package instead, for the case where the old one is
+# genuinely to be discarded.
+if [ -f "$out" ] && [ "${LGX_FRESH:-0}" != "1" ]; then
+    had="$("$lgx" manifest "$out" 2>/dev/null | awk -F': *' '/^Variants:/ {print $2}')"
+    echo "  <-    adding $variant to the existing package (has: ${had:-none});"
+    echo "        LGX_FRESH=1 to start a new one instead"
+else
+    rm -f "$out"
+    ( cd "$(dirname "$out")" && "$lgx" create "$(basename "${out%.lgx}")" >/dev/null )
+fi
 "$lgx" add "$out" --variant "$variant" --files "$stage/$variant" \
     --main "$(basename "$plugin")" -y >/dev/null
 
@@ -284,4 +373,10 @@ fi
 "$lgx" verify "$out"
 "$lgx" manifest "$out"
 echo
-echo "sha256  $(shasum -a 256 "$out" | cut -d' ' -f1)"
+# `shasum` is the macOS name and `sha256sum` the GNU one; a packaging script
+# that only knows one of them cannot be run on the platform it is packaging for.
+if command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256  $(sha256sum "$out" | cut -d' ' -f1)"
+else
+    echo "sha256  $(shasum -a 256 "$out" | cut -d' ' -f1)"
+fi
