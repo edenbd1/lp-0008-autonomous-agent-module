@@ -1593,8 +1593,16 @@ Honest list, in the order that matters:
    the Architecture criterion's "any Logos app instance that holds the owner's
    keys", minus the keys — see the last subsection above for exactly what the
    second app is bound to and what it does not sign.
-3. A `linux-amd64` variant of **both** packages, since a reviewer may be on
-   Linux and a package with only `darwin-arm64` is unopenable for them.
+3. ~~A `linux-amd64` variant of **both** packages, since a reviewer may be on
+   Linux and a package with only `darwin-arm64` is unopenable for them.~~
+   Built. Both packages carry `darwin-arm64` and `linux-amd64`, and Logos Core
+   loads, configures and starts the module out of the committed package on
+   x86-64 Linux — see "Linux, and the `linux-amd64` variant" above, which also
+   records the three defects that had to be fixed first and the one capability
+   the Linux variant does not have (no `liblogosdelivery.so` exists to ship).
+   What is left of this item is `linux-arm64`: Basecamp publishes an aarch64
+   AppImage, its sha256 is already pinned in `scripts/fetch-logos-core.sh`, and
+   the variant is not built.
 4. ~~A Basecamp `ui` app for the owner console.~~ Built: `app/`. It is a Qt
    Widgets plugin implementing `IComponent`, packaged `type: ui`, and it drives
    the loaded module through its published method table — no second
