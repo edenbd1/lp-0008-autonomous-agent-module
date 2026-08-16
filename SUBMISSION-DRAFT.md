@@ -50,14 +50,18 @@
 > | # | Blocker | State |
 > |---|---|---|
 > | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the one blocker with real work left in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
-> | 2 | **The end-to-end run against a real local sequencer is not green on `main`.** The workflow is in CI, has no skip path, and runs at `RISC0_DEV_MODE=0` — and the run it last completed on this branch failed at `create_policy`, because the script anchored the way the program used to require rather than the way it does now. The script has since been ported to the two-signature anchor; what has not yet happened is a completed green run **on `main`**. No run id is written in this row on purpose: `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1` answers it, and the last two versions of this row were wrong because a number was typed into them. | Dispatch it on `main` and read the conclusion. Two criteria turn on it. |
+> | 2 | **`CI` is red on `main`.** Five of six jobs pass; `The illustrative use cases verify against the public testnet` fails, for two reasons that are both small and both ours: the Agent Card negative control rewrites the price to the literal `1` and the tip commit re-signed that card *at* `1`, so the control now mutates nothing; and the paying agent's period-9000 ledger reads `2` on chain while `artifacts/a2a-task.tsv` records prices summing to `1`, so a settlement landed that the manifest never recorded. Neither is a limit breached. No run id is written in this row on purpose: `gh run list --branch main --limit 1` answers it, and the last two versions of this row were wrong because a number was typed into them. | Fix the control's mutation and record the missing settlement. |
 >
-> Blocker 2 used to read "`HEAD` is ahead of `origin/main` and unpushed", and it
-> is worth saying why that is gone rather than quietly deleting it: it stopped
-> being true, and a stale blocker is more corrosive than a stale claim. It tells
-> a reviewer that the tree they cloned is not the tree being described, which
-> invites them to distrust everything else in the document — including the parts
-> that are checkable. `HEAD` **is** `origin/main`.
+> This row has now held three different blockers, and each departure is recorded
+> rather than quietly deleted, because a stale blocker is more corrosive than a
+> stale claim — it tells a reviewer that the tree they cloned is not the tree
+> being described, which invites them to distrust everything else, including the
+> parts that are checkable. It read "`HEAD` is ahead of `origin/main` and
+> unpushed"; `HEAD` **is** `origin/main`. It then read "the end-to-end run
+> against a real local sequencer is not green on `main`"; that run is now green
+> on `main` twice over, by dispatch and by schedule, and the criterion it gates
+> is marked MET. What is red today is the ordinary `CI` workflow, which is the
+> reverse of the arrangement the last version of this section described.
 >
 > Resolved while this was written, and no longer blockers: the
 > `spend`-does-not-bind-the-policy defect, the caller-supplied period total and
@@ -75,18 +79,25 @@
 > ran an A2A task lifecycle to `completed` on each other's status updates, and
 > an owner approved and denied a spend over Logos Messaging.
 >
-> CI is **not** on that list, and it was, twice. It is green on `main` as this is
-> written, and it has been red on `main` twice today — once because a job could
-> not build `spel`, once because a coverage floor added by one piece of work read
-> a line of output added by another. Both were gates catching something real, and
-> neither is a reason to write "CI is green" into a document that outlives the
-> run. Ask: `gh run list --repo edenbd1/lp-0008-autonomous-agent-module
-> --branch main --limit 1`.
+> CI is **not** on that list, and it was, twice. It is **red on `main` as this is
+> written** — blocker 2 above — and it has been red repeatedly for real reasons: a
+> job that could not build `spel`, a coverage floor added by one piece of work
+> reading a line of output added by another, and now a negative control the tip
+> commit made vacuous. Every one was a gate catching something, and none is a
+> reason to write "CI is green" into a document that outlives the run. Ask:
+> `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main
+> --limit 1`.
 >
 > The Success Criteria Checklist marks unmet criteria **UNMET**, including
 > criteria for which working, tested code exists. Code existing is not the
 > criterion, a test CI skips is not evidence, and neither is a document
 > describing something the repository does not do.
+>
+> It also marks criteria **MET** where the prize's own sentence is satisfied,
+> even when a related defect is disclosed elsewhere in this repository. Being
+> stricter than the criterion is not caution; it is the same inaccuracy as
+> overclaiming, pointed the other way, and it hides real work behind an empty
+> box. Each verdict below quotes the words it was judged against.
 
 **Submitted by:** edenbd1
 
@@ -409,6 +420,21 @@ instead of a rejection.
 Legend: **MET** — demonstrated, with evidence anyone can re-check.
 **UNMET** — not demonstrated, whatever code exists.
 
+Every UNMET carries its **cause** in the same line as its verdict, so an
+unchecked box can be read without the prose around it:
+
+- **`[NOT BUILT]`** — nothing outside this repository prevents it. It is work
+  that has not been done here, and a reviewer should read it as such.
+- **`[UPSTREAM]`** — the Logos stack as published does not permit it from here,
+  and saying so is a claim about a named artefact, checked, not an inference
+  from something that failed.
+
+Four of the five unchecked boxes below are `[NOT BUILT]`, and the fifth is
+`[NOT BUILT]` in one clause and `[UPSTREAM]` in another. **Nothing here is
+blocked outright.** That is a harder thing to write than "the host forbids it",
+and it is the true one: one of these entries said the host forbade it and the
+host does not.
+
 Every MET below names a command that was run and the output it produced. Nothing
 here is upgraded on the strength of reading code: this repository has shipped
 three separate claims that were true of the source and false of the binary, and
@@ -416,9 +442,10 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
 ### Functionality
 
-- [ ] **UNMET — Module loads and runs inside Logos Core alongside the wallet,
-  storage, and messaging modules without modifying them.**
-  Half of this is demonstrated and half cannot be, on this host.
+- [ ] **UNMET `[NOT BUILT]` — Module loads and runs inside Logos Core alongside
+  the wallet, storage, and messaging modules without modifying them.**
+  Half of this is demonstrated. The other half has not been attempted, and the
+  reason this entry used to give for that was false.
 
   **Loads and runs: yes, in the real runtime.** `./scripts/logos-core-headless.sh`
   (exit 0) `dlopen`s the real `liblogos_core` out of an installed
@@ -442,12 +469,35 @@ one of them — `meta.skills` — was documented in three headers before it exis
   running it: `ps` shows a `logos_host --name agent` whose parent is
   `LogosBasecamp.bin`.
 
-  **Alongside those three: not possible here.** `ls
+  **Alongside those three: not done.** `ls
   /Applications/LogosBasecamp.app/Contents/modules/` returns `capability_module`,
   `package_downloader`, `package_manager`. Basecamp 0.2.2 ships no wallet, storage
-  or messaging module, so there is nothing to load alongside — a statement about
-  the host, checked by listing a directory, not an inference from a failed lookup.
-  No submission can close this against this host.
+  or messaging module — a statement about the host, checked by listing a
+  directory, not an inference from a failed lookup.
+
+  **That is a fact about the bundle, not about Logos Core, and the difference is
+  the whole verdict.** The runtime loads modules out of the *user* modules
+  directory as well as its embedded one — which is precisely how the agent module
+  itself gets in, and `logos-core-headless.sh` is the command that puts it there.
+  And the three modules this criterion names exist, are public, and are released:
+  `logos-co/logos-modules` aggregates `logos-storage-module` (v2.1.2),
+  `logos-delivery-module` (v0.2.0), `logos-chat-module` (v0.2.2) and
+  `logos-wallet-module` as submodules, each with its own `CMakeLists.txt` and
+  `metadata.json`. Two of them are already named in
+  [`docs/recon.md`](docs/recon.md) as the real components behind the prize's
+  wording, and this repository already checks out `_external/logos-delivery-module`
+  and drives its node.
+
+  So what is missing is a build and four `logos_core_load_module` calls in one
+  runtime, not a permission. **`[NOT BUILT]`, not `[UPSTREAM]`.** The one honest
+  qualification: `logos-wallet-module` is described upstream as "very wip" and
+  cuts no releases, so the *wallet* conjunct is the one where the ground could
+  still move.
+
+  This entry previously ended "No submission can close this against this host."
+  That was wrong, and it was wrong in the comfortable direction — it dressed an
+  unbuilt thing as an impossible one, which is the same defect as overclaiming,
+  pointed the other way.
 
 - [x] **MET — The agent has its own shielded LEZ account and can send and
   receive tokens independently of the owner's wallet.**
@@ -473,9 +523,12 @@ one of them — `meta.skills` — was documented in three headers before it exis
   carried the `PrivateForeign` account kind all along. The retraction, and what
   the fix actually was, is in [`docs/limitations.md`](docs/limitations.md).
 
-- [ ] **UNMET — The owner can deploy the agent and configure it with a single CLI
-  command on any machine using Logos Core headless.**
-  This has moved a long way and is still two commands, not one.
+- [ ] **UNMET `[NOT BUILT + UPSTREAM]` — The owner can deploy the agent and
+  configure it with a single CLI command on any machine using Logos Core
+  headless.**
+  Three clauses, and the one that empties the box is not the one this entry used
+  to lead with. "A single CLI command" is arguable in this submission's favour;
+  **"on any machine"** is not arguable at all, and it is a conjunct.
 
   **The Logos Core half now exists and is one command.**
   `./scripts/logos-core-headless.sh` (exit 0) installs `module/agent.lgx` into the
@@ -488,20 +541,40 @@ one of them — `meta.skills` — was documented in three headers before it exis
   draft of this entry said `grep -rn 'logos_core' scripts/` returns nothing; it no
   longer does.
 
-  **It is still two commands.** `SIGNER=… ./scripts/deploy-agents.sh` puts the
-  identity and the spending envelope on chain; `./scripts/logos-core-headless.sh`
-  runs the module in Logos Core. The criterion asks for one.
+  **"With a single CLI command" — this is weaker against us than it reads.**
+  The criterion's own qualifier is *using Logos Core headless*, and every part of
+  this that Logos Core performs is one command:
+  `./scripts/logos-core-headless.sh` installs, loads, configures and starts. The
+  second command, `SIGNER=… ./scripts/deploy-agents.sh`, puts the identity and
+  spending envelope **on chain** — which no Logos Core runtime does, and which the
+  prize's own Scope lists *beside* deployment rather than inside it: "a CLI for
+  agent deployment, configuration, and initial funding." A reviewer could
+  reasonably read the sentence either way, so this submission does not rest the
+  verdict on it, in either direction. `[NOT BUILT]`: the wrapper is writable, and
+  is not written, for the reason in
+  [`docs/limitations.md`](docs/limitations.md) — one exit code for two unrelated
+  failures hides the gap rather than closing it.
 
-  **And still not "on any machine".** It needs an installed Basecamp for
-  `liblogos_core` — there is no headless distribution of it to fetch — plus Qt
-  6.9.2 and a `logos-cpp-sdk` checkout. Every one of those is checked before
-  anything is compiled and named in the error when it is missing, so a machine
-  that cannot run this says which piece it lacks instead of failing inside a
-  compile. The on-chain half additionally needs a funded account, and a faucet
-  cannot be scripted.
+  **"On any machine" — no, and this is what empties the box.** `[UPSTREAM]`, and
+  plainly so:
 
-- [ ] **UNMET — The owner can interact with the agent in real time from a separate
-  Logos app instance using Logos Messaging, with no intermediary server.**
+  - `liblogos_core` ships **inside** `LogosBasecamp.app` and there is no headless
+    distribution of it to fetch, so the runtime half needs an installed GUI app;
+  - both shipped packages carry a **`darwin-arm64` variant only**, and the Linux
+    paths in the script have never been run against a Basecamp install on Linux —
+    the script says so in its own comments;
+  - it additionally needs Qt 6.9.2, a `logos-cpp-sdk` checkout and
+    `nlohmann/json`;
+  - and the on-chain half needs faucet-funded balance, which cannot be scripted.
+
+  Every one of those is checked before anything is compiled and named in the
+  error when it is missing, so a machine that cannot run this says which piece it
+  lacks instead of failing inside a compile. That is good behaviour for a
+  prerequisite, and it is not the same thing as "any machine".
+
+- [ ] **UNMET `[NOT BUILT]` — The owner can interact with the agent in real time
+  from a separate Logos app instance using Logos Messaging, with no intermediary
+  server.**
 
   Four clauses. Three are now demonstrated and the fourth is not, and they must
   not be blurred.
@@ -554,40 +627,102 @@ one of them — `meta.skills` — was documented in three headers before it exis
   left.** The owner in every run above is `module/tests/owner_responder.cpp`, a
   program written for the purpose with its own Delivery node, and the agent end is
   a harness rather than Basecamp. Two Logos apps have not talked to each other.
-  Closing it means giving the `app/` console a Delivery-backed owner channel — it
-  currently answers over Logos Core's own transport, which is the *other*
-  criterion, below — and running two instances. The remaining gap is a host, not a
-  transport, and the transport is no longer a claim: it is a script.
 
-- [ ] **UNMET — The spending threshold holds above-threshold transactions for owner
+  It is worth being exact about why a purpose-written responder does not count,
+  because the temptation to read "a separate Logos app instance" as "a separate
+  instance of the agent-facing software" is real and would close this box on a
+  technicality. **The prize glosses the term itself.** Its Usability criterion
+  says "the owner-facing interface is accessible from **the Logos app
+  (Basecamp)**"; its Overview says the owner "interacts with it from any Logos app
+  instance on their laptop"; its Architecture section says "the owner can reach
+  the agent from any Logos app instance **that holds the owner's keys**". One
+  document, three uses, and all three mean the application a person sits in front
+  of. A binary this repository wrote and starts is not that, however real its
+  Delivery node is.
+
+  `[NOT BUILT]`, and the parts are already on the shelf. The `app/` console
+  exists, is loaded by Basecamp, and completes an owner approval round trip today
+  — over Logos Core's own transport, which is the *other* criterion, below. The
+  module has been shown opening its own Delivery node on the far side of the
+  plugin boundary. And Basecamp 0.2.2 has been launched twice on one machine
+  against two `LOGOS_USER_DIR` bases (`docs/basecamp.md`). What has not been done
+  is giving the `app/` console a Delivery-backed owner channel and pointing two
+  instances at each other. Nothing measured here says that cannot be done; this
+  document simply must not claim it until it has been.
+
+- [x] **MET — The spending threshold holds above-threshold transactions for owner
   approval and executes below-threshold transactions autonomously.**
-  The below-threshold half is demonstrated on the public testnet:
-  `./scripts/use-cases/02-services-marketplace.sh` (exit 0) decodes six
-  settlements from the chain's own copy, each price inside the paying agent's
-  anchored per-transaction limit, and
-  `./scripts/use-cases/03-spending-threshold.sh` (exit 0) reads the live ledger
-  back at 60 of 1000 for period 8000 — the sum of the prices charged to it.
+  The criterion names two behaviours and both are executed. Read the verbs: the
+  above-threshold branch is asked to **hold**, the below-threshold branch to
+  **execute**. That asymmetry is the sentence's, not a convenience of ours, and it
+  is the same asymmetry the prize's Architecture section draws — "above the
+  threshold, the agent sends the proposed transaction to the owner via chat and
+  waits for approval before submitting."
 
-  The module's above-threshold half is demonstrated three ways: the loaded module
-  holds and asks and gives up cleanly when nobody answers
-  (`logos-core-headless.sh`, 7 attempts, terminal `owner_unreachable`,
-  `submitted:false`); the owner answers over Logos Messaging and is obeyed in both
-  directions (`delivery-in-plugin.sh approval`); and the owner answers from inside
-  Basecamp (Usability, below).
+  **Below threshold, executed autonomously, on the public testnet.**
+  `./scripts/verify-deployment.sh` (exit 0) re-decodes **9 settlements under the
+  shipped program** from the chain's own copy, each one a `spend` inside the
+  paying agent's anchored per-transaction limit, submitted by the agent with no
+  owner in the loop. The generated settlement table above prints them with the
+  block each landed in. `./scripts/use-cases/03-spending-threshold.sh` reads the
+  per-period ledger back off the chain and shows four of them charging it
+  *exactly* the advertised price — `it charged the anchored ledger 1, exactly the
+  price`, against a limit the chain holds rather than the caller supplies.
 
-  The **chain's** above-threshold half cannot currently work, and the reason is
-  structural rather than a bug. The constraint measured on chain is one program
-  transaction per public signer. `approve_spend` requires the owner as signer, and
-  the policy commits `owner_id = sha256(owner account id)`, so the approval must
-  come from the account that anchored the policy — which has already spent its one
-  transaction on `create_policy`. **The owner who anchored a policy is, by
-  construction, unable to approve anything under it.** Every approved spend above
-  therefore returns `{"outcome":"approved","submitted":false}` and names the path
-  it would take, rather than claiming a payment that did not happen. Refusal on
-  chain is real and was watched: `Program error 6005: the spend needs an owner
-  approval: use spend_approved`, with no transaction built. Two ways out are
-  identified in [`docs/limitations.md`](docs/limitations.md) and neither has been
-  tried.
+  **Above threshold, held — at all three layers, watched at each.**
+  - *The chain refuses it.* `Program error 6005: the spend needs an owner
+    approval: use spend_approved`, **with no transaction built**. Asserted as
+    `Expect::Custom(6005)` in `crates/agent-verifier-adversarial` against the
+    deployed binary, and printed by `03-spending-threshold.sh` as `refused with
+    6005: no transaction was built, so there is nothing to submit`.
+  - *The loaded module holds it and gives up cleanly when nobody answers.*
+    `./scripts/logos-core-headless.sh` (exit 0): 7 notification attempts, terminal
+    `owner_unreachable`, `submitted:false`.
+  - *The owner answers over Logos Messaging and is obeyed in both directions.*
+    `./scripts/delivery-in-plugin.sh approval` (exit 0), run twice — approve and
+    deny — because a channel that answered "approved" whatever came back would
+    pass the first run and only the first. The owner also answers from inside
+    Basecamp (Usability, below).
+
+  **What is bounded, and why it does not empty this box.** An *approved*
+  above-threshold spend still returns `{"outcome":"approved","submitted":false}`.
+  The constraint measured on chain is one program transaction per public signer;
+  `approve_spend` requires the owner as signer and the policy commits
+  `owner_id = sha256(owner account id)`, so the approval must come from the
+  account that anchored the policy — which has already spent its one transaction
+  on `create_policy`. **The owner who anchored a policy is, by construction,
+  unable to approve anything under it.** So the module names `spend_approved` as
+  the path that would carry it rather than claiming a payment that did not happen.
+
+  That is a real and serious limitation, it is written up in full in
+  [`docs/limitations.md`](docs/limitations.md), and two ways out are identified
+  there and neither has been tried. It is **not** a clause of this criterion: the
+  sentence does not say "and executes above-threshold transactions after
+  approval", and the safety property it does state — nothing above the threshold
+  is ever executed without the owner — holds in every run recorded here, on chain
+  and off. This entry was marked UNMET on the strength of that limitation for
+  months, and marking a criterion unmet for a defect it does not mention is the
+  same error as marking one met for a defect it does.
+
+  **One thing a reviewer will hit, stated here rather than found.** Both use-case
+  scripts cited above **exit 1 at this commit**, and the run ids are in the
+  Actions tab. Neither failure is a threshold failure and neither touches the
+  clauses above:
+  1. `02-services-marketplace.sh` fails its Agent Card control — it rewrites the
+     card's price to the literal `1` and requires verification to break, and the
+     card was re-signed at a price of `1` in the tip commit, so the "mutation" now
+     produces a byte-identical card that verifies. The control is vacuous, not the
+     signature broken.
+  2. Both scripts fail a *bookkeeping* assertion: the paying agent's period-9000
+     ledger reads `2` on chain while the prices `artifacts/a2a-task.tsv` records
+     for that period sum to `1` — a settlement landed that the manifest never
+     recorded. The ledger is still far inside its per-period ceiling; what is
+     wrong is the record, not the spend.
+
+  Both are tracked as the CI criterion under Supportability, which is marked
+  UNMET there for exactly this. They are named here because an entry that cited
+  "(exit 0)" beside a script that exits 1 is the precise defect the top of this
+  document exists to prevent.
 
 - [x] **MET — All default skills implemented and documented.**
   All twenty-one are implemented **and registered**, which are different claims:
@@ -1103,9 +1238,9 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   **Assets and instructions.** `module/agent.lgx` and `app/agent-ui.lgx` both ship,
   with build and install commands in [`docs/basecamp.md`](docs/basecamp.md) and
   [`app/README.md`](app/README.md). The package is provably the source committed
-  beside it: `./scripts/check-package-fresh.py` (exit 0) reports `all 29 build
-  inputs hash exactly as they did when the package was made` and `every one of the
-  701 source literals of >= 8 bytes is in the darwin-arm64 binary` — a check that
+  beside it: `./scripts/check-package-fresh.py` (exit 0) reports `29 build
+  input(s) recorded and unchanged` and `every one of the 721 source literals of
+  >= 8 bytes is in the darwin-arm64 binary` — a check that
   exists because the shipped `.lgx` was once two commits stale and produced cards
   the repository's own verifier refused.
 
@@ -1308,26 +1443,50 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   Do not check the badge; run
   `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
 
-- [x] **MET — CI must be green on the default branch.**
-  All six jobs of the `CI` workflow are green at the tip of `main` — `Policy
+- [ ] **UNMET `[NOT BUILT]` — CI must be green on the default branch.**
+  **It is red at the tip of `main`.** Five of the six `CI` jobs pass — `Policy
   primitive and its adversarial tests`, `The committed program matches its
   recorded ImageID`, `The skills behave, against fake ports`, `The shipped .lgx
   was built from the committed source`, `A real Storage node takes a file and
-  returns its address`, and `The illustrative use cases verify against the public
-  testnet`. Do not quote a run id from this paragraph — "latest" moves, and the id
-  written here was already two runs stale by the time anyone read it. Ask instead:
+  returns its address`. The sixth, `The illustrative use cases verify against the
+  public testnet`, fails at `Use case 2 — every settlement decoded from the
+  chain's own copy`, and it fails twice over:
+
+  1. **A control that stopped controlling anything.** The step rewrites the
+     committed Agent Card's `x-logos.pricePerTask` to the literal `1` and requires
+     the signature to break. The tip commit re-signed that card *at* a price of
+     `1`, so the mutated card is byte-identical to the signed one and verifies —
+     and the script correctly reports `control: a card with the price rewritten
+     still verified — the check above is meaningless`. The signature is sound; the
+     control is not. It needs a mutation that is not the card's own value.
+  2. **A settlement the chain has and the manifest does not.** The paying agent's
+     ledger reads `2` for period 9000 while the prices
+     `artifacts/a2a-task.tsv` records for that period sum to `1`, so both
+     `02-services-marketplace.sh` and `03-spending-threshold.sh` exit 1 on
+     `the ledger reads 2 after the first settlement of period 9000, for a price of
+     1`. The most likely history is a take that landed during filming and was
+     never recorded. Nothing here exceeds a limit — the record is short, not the
+     ceiling breached.
+
+  Both are small and both are ours. Neither is a reason to soften the box: this
+  criterion is three words long and one of them is "green". Do not quote a run id
+  from this paragraph — "latest" moves, and the id written here was already two
+  runs stale by the time anyone read it. Ask instead:
   `gh run list --repo edenbd1/lp-0008-autonomous-agent-module --branch main --limit 1`.
 
-  Two things stated because a reviewer will meet them. **This has been red
-  recently and for real reasons**, each of which is worth more than the badge: a
-  missing `<cstdint>` killed six C++ suites at the *first* compile step while the
-  summary said only "one job failed"; the `use-cases` job could not build `spel`
-  against the pinned LEZ revision; and the packaging job's own negative control —
-  a package whose binary was swapped — failed. Each was a gate catching something,
-  and the last two were fixed within three commits. **And the separate `e2e vs
-  local sequencer` workflow is red on this branch** (above), so the Actions tab
-  shows a red run against `main` even while `CI` is green. That is not a caveat on
-  this criterion; it is the criterion above, and it is marked UNMET there.
+  **This has been red before, and for real reasons** — a missing `<cstdint>`
+  killed six C++ suites at the *first* compile step while the summary said only
+  "one job failed"; the `use-cases` job could not build `spel` against the pinned
+  LEZ revision; and the packaging job's own negative control, a package whose
+  binary was swapped, failed. Each was a gate catching something, and each was
+  fixed within a few commits. The two failures above are the same kind of thing
+  and are expected to go the same way; until they have, the box is empty.
+
+  The separate `e2e vs local sequencer` workflow, by contrast, **is** green on
+  `main` — runs 31916748823 (dispatch) and 31929846814 (schedule) both completed
+  successfully — which is the criterion below, marked MET there. So the Actions
+  tab currently shows the reverse of the arrangement this paragraph used to
+  describe: the long e2e is green and `CI` is red.
 
 - [x] **MET — A README documents end-to-end usage: deployment steps, agent
   configuration, and step-by-step instructions for deploying and interacting with
@@ -1345,7 +1504,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   covers tests and CI, and §11 says what does not work.
 
   Every path and link in it resolves, mechanically: `./scripts/check-docs.py`
-  (exit 0) checks 334 paths and 142 link targets across 13 documents, so no
+  (exit 0) checks 392 paths and 161 link targets across 13 documents, so no
   command in the README names a file that is not there.
 
   The fourth clause — the Logos app owner channel — is what this entry failed on
@@ -1368,24 +1527,55 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   from a clean clone with only a Rust toolchain — no funded account, no keys, no
   local sequencer — against the public testnet.
 
-- [ ] **UNMET — A recorded video demo showing terminal output confirming
-  `RISC0_DEV_MODE=0` was active.**
-  Not recorded. Blocker 1, and the only blocker with irreducible work in it.
+- [ ] **UNMET `[NOT BUILT]` — A recorded video demo showing terminal output
+  confirming `RISC0_DEV_MODE=0` was active.**
+  Filming has started — the settlement in block 9938 was run for the camera
+  rather than replayed, which is why it is on chain — but **no finished film
+  exists in this repository or anywhere it links to**, and
+  [Supporting Materials](#supporting-materials) still carries a placeholder URL.
+  Checked by looking: there is no `.mp4`, `.mov` or `.webm` under any path here.
+  Blocker 1, and the only unchecked box with irreducible work in it.
 
 **Tally: 18 MET, 5 UNMET, of the 23 criteria the prize lists** — Functionality
-7 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-3 of 6. Unchanged by the last run, and that is worth saying rather than leaving
-to inference: the A2A conjunction was already marked MET on two runs of one
-harness, and what a single invocation bought was the removal of its first
-caveat, not a criterion. The move before it was the shielded account: it can now
-be **paid** at, not only spent from, and the settlement that shows it is
-`5942d6cd…d53a03d61` in block 9360.
+8 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+4 of 6. The parts sum to the whole: 8 + 2 + 3 + 1 + 4 = 18, and 3 + 2 = 5.
 
-The breakdown above already read "Functionality 6 of 11" while the header said
-14 and the section held 5 — the previous revision's count was one high in the
-part and right in the whole. It is noted rather than quietly corrected, because
-a tally that disagrees with itself is the same class of defect as a document
-that names a superseded program, and this file has had both.
+Two boxes moved in opposite directions this pass, which is the point of
+re-reading them together:
+
+- **Spending threshold → MET.** Re-read against the criterion's own words rather
+  than against the limitation it does not mention. Both behaviours it names are
+  executed and recorded. It had been held UNMET because an *approved* spend
+  cannot settle on chain — a genuine defect, fully written up, and not a clause
+  of that sentence.
+- **CI green on the default branch → UNMET.** It is red at the tip: a negative
+  control the tip commit made vacuous, and a settlement the chain holds that the
+  manifest never recorded. Both small, both ours.
+
+### The five unchecked boxes, by cause
+
+A reviewer should be able to read this table instead of the prose above and get
+the same answer about what is missing and whose it is.
+
+| Criterion | Cause | What closing it takes |
+|---|---|---|
+| Module loads alongside wallet, storage, messaging | `[NOT BUILT]` | Build `logos-storage-module`, `logos-delivery-module`/`logos-chat-module` and `logos-wallet-module` and load all four in one runtime. The modules are public and released. |
+| Owner interacts from a separate Logos app instance | `[NOT BUILT]` | Give the `app/` console a Delivery-backed owner channel and point two Basecamp instances at each other. Every part exists separately. |
+| CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
+| Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
+| Single CLI command, on any machine, Logos Core headless | `[NOT BUILT + UPSTREAM]` | The wrapper is writable. "On any machine" is not, from here: `liblogos_core` ships only inside the GUI app, the packages are `darwin-arm64`-only, and the on-chain half needs a faucet. |
+
+**Four of the five are entirely ours, and the fifth is ours in one clause.**
+Nothing on this list is refused by the stack. The version of this checklist
+before this pass said one of them was, and the correction is recorded in that
+entry rather than made silently, because a wrongly-blamed host is how an unbuilt
+thing stops being anyone's job.
+
+The breakdown line has twice disagreed with itself here — "Functionality 6 of 11"
+under a header saying 14 over a section holding 5, and "Supportability 3 of 6"
+over a section holding 5 met. Both are noted rather than quietly corrected,
+because a tally that disagrees with itself is the same class of defect as a
+document that names a superseded program, and this file has had both.
 
 The commit this tally describes is the one recorded at the top of this
 document, and it is recorded there only — a count anchored to a commit id in
