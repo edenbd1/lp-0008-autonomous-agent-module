@@ -798,6 +798,21 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     if (!ports.task.subscribe) {
         ports.task.subscribe = [node](const std::string &topic) { return node->subscribe(topic); };
     }
+    // The read half of the task topic, onto the same runtime the messaging
+    // skills read discovery with. `agent.subscribe` has always been able to
+    // listen; nothing could look, so a task this agent opened stayed in
+    // `submitted` no matter what the peer said about it. `agent.poll` looks.
+    if (!ports.task.receive) {
+        ports.task.receive = [node](const std::string &topic) { return node->received(topic); };
+    }
+    // And who this agent is when it publishes a status update — the same
+    // setting `agent.card` builds its identity out of, deliberately, because the
+    // receiving side's only defence against a node reading back its own
+    // publications is that the author of an accepted update is somebody else.
+    // Two answers to "which account is this" would be one too many.
+    if (!ports.task.selfAccount) {
+        ports.task.selfAccount = [this] { return setting("agent_account"); };
+    }
     // ---- the payment half of the A2A lifecycle ----------------------------
     //
     // This block used to be a paragraph saying why it could not exist. It said:
@@ -1057,6 +1072,12 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
         std::make_shared<DiscoverSkill>(ports.discovery),
         std::make_shared<TaskSkill>(ports.task, tasks),
         std::make_shared<SubscribeSkill>(ports.task, tasks),
+        // The two halves of a status update: one publishes the server's event
+        // on the task topic, the other reads a peer's off it and applies it to
+        // the store. Registered together because either alone is the gap they
+        // close — a sender nobody reads, or a reader nobody sends to.
+        std::make_shared<UpdateSkill>(ports.task),
+        std::make_shared<PollSkill>(ports.task, tasks),
         std::make_shared<CancelSkill>(ports.task, tasks),
         // The module's own three. `meta.skills` is the catalogue the prize asks
         // for by name; it is registered like any other skill rather than

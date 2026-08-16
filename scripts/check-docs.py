@@ -315,8 +315,16 @@ SKILL_FILES = DOCS + [
 # misses the one wrong line is worse than no gate, because the number reads as
 # coverage. Adjectival compounds (`22-skill card`, `23-skill registry`) are the
 # same claim with a hyphen in it.
+#
+# The **bold** form is here for the same reason the hyphenated one is, and it was
+# found the same way: `docs/skills.md` §7 opened "The module registers **22**
+# skills" while the module registered 23, and this gate counted 21 other mentions
+# on the same pass without seeing it — markdown emphasis puts `**` between the
+# digits and the word, so `\b22\s+skills\b` never matched. A number a reader sees
+# in bold is the one they are most likely to quote.
 COUNT_SHAPES = re.compile(
     r"\b(\d{2,3})\s+(?:skills|built-in skills|entries|of them)\b"
+    r"|\*\*(\d{2,3})\*\*\s+(?:skills|built-in skills|entries)\b"
     r"|\b(\d{2,3})-skill\b"
     r"|\ball\s+(\d{2,3})\b"
     r"|\bexactly\s+(\d{2,3})\b"

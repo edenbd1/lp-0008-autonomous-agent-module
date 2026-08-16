@@ -33,10 +33,12 @@
 #     module is not in the host's address space, so (1) does not imply (2).
 #  3. `plugin_delivery_test … peer`, twice — two loaded modules, two nodes, two
 #     LEZ accounts, one public topic, each accepting only a card naming the
-#     OTHER account. (1) and (2) cannot be evidence for the discovery criterion:
-#     a Waku node receives its own published messages, so a single process can
-#     satisfy any assertion about "a card arrived" with every other agent on
-#     earth switched off.
+#     OTHER account, and each driving an A2A task to `completed` on status
+#     updates the other one published. (1) and (2) cannot be evidence for the
+#     discovery criterion: a Waku node receives its own published messages, so a
+#     single process can satisfy any assertion about "a card arrived" — or about
+#     "the peer said the task is done" — with every other agent on earth
+#     switched off.
 #
 # THE NEGATIVE CONTROL is not optional and is one line: build without
 # `-DLOGOS_DELIVERY_ROOT` and run harness 1. It reports
@@ -223,8 +225,12 @@ if [ "$MODE" = "peers" ]; then
     say "[4/4] result"
     [ "$rc" -eq 0 ] || { echo "FAILED — logs at $WORK/a.log and $WORK/b.log" >&2; exit 1; }
     echo "Two modules loaded through QPluginLoader, each with its own Delivery"
-    echo "node, published a signed Agent Card on the public network and"
-    echo "discovered the other's. Neither could satisfy its own assertion."
+    echo "node, published a signed Agent Card on the public network, discovered"
+    echo "the other's, opened an A2A task with it, served the one it was asked"
+    echo "for, and carried its OWN task to 'completed' on status updates the"
+    echo "other account published. Neither could satisfy its own assertion: each"
+    echo "put a forged 'completed' for its own task on the topic it reads, and"
+    echo "counted it refused."
     exit 0
 fi
 

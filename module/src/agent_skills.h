@@ -39,7 +39,11 @@
  * 2. **Local state is never a claim about the remote agent.** `agent.task`
  *    leaves a submitted task in `submitted`. It has posted a request; it has
  *    not seen the other agent start work. `working` arrives as a status update
- *    or not at all.
+ *    or not at all — and now it can arrive, because `agent.update` publishes
+ *    one and `agent.poll` reads one off the task topic into the store. It is
+ *    applied only when it names the task's peer as its author: a Delivery node
+ *    receives what it publishes, so an ingest without that rule would let this
+ *    agent's own frame move this agent's own task and read as a peer.
  *
  * 3. **Nothing reports a payment or a refund it does not have a transaction
  *    for.** A cancel whose refund did not settle says so and stays pending;
@@ -172,6 +176,18 @@ public:
     /// `{"taskId":"…","status":{"state":"working","message":"…"}}`.
     /// A `Task` object (`{"id":…,"status":{…}}`) is accepted too. Malformed
     /// JSON, an unknown state and an illegal transition are all refused.
+    ///
+    /// `status.message` is read both ways round: A2A's own shape is a `Message`
+    /// object, whose `parts[]` of `kind:"text"` carry the note, and the bare
+    /// string this store accepted first. `docs/a2a-binding.md` §7.2 recorded the
+    /// object form as accepted-but-with-the-note-silently-dropped, which is the
+    /// worst of the three outcomes: a conforming sender's message vanished and
+    /// nothing said so.
+    ///
+    /// It decides state and nothing else. WHO may move a task is not knowable
+    /// here — this is a store, not a transport — so the author check lives in
+    /// @ref PollSkill, at the point where a frame and the topic it arrived on
+    /// are both in hand.
     bool applyUpdate(const std::string &eventJson, std::string &err);
 
     /// Record a settlement against a task. The amount and the transaction hash
@@ -282,6 +298,33 @@ struct TaskPort {
     std::function<bool()> ready;
     std::function<bool(const std::string &topic, const std::string &json)> send;
     std::function<bool(const std::string &topic)> subscribe;
+    /// Everything received on a task topic since the node came up, oldest
+    /// first, not draining — `DeliveryPort::receive`'s twin, and deliberately
+    /// the same shape rather than a second mechanism.
+    ///
+    /// The half of the lifecycle that had no port. `agent.task` sends a request
+    /// and leaves the task in `submitted`, because "local state is never a
+    /// claim about the remote agent"; `agent.subscribe` subscribes to the topic
+    /// the answer will arrive on. Nothing then READ that topic into the store,
+    /// so `working` and `completed` could only be reached by a caller driving
+    /// `TaskStore` directly — which is this process asserting about itself.
+    /// @ref PollSkill is what reads it, and this is what it reads with.
+    std::function<std::vector<std::string>(const std::string &topic)> receive;
+    /// This agent's own LEZ account: the one its Agent Card names.
+    ///
+    /// Not decoration, and not a parameter either. @ref UpdateSkill stamps it
+    /// into every status update it publishes and @ref PollSkill refuses any
+    /// update carrying it, which is the only thing standing between "the peer
+    /// moved my task" and "a Delivery node received the message it had just
+    /// published". If it were a call parameter, one process could type the
+    /// other's account into it and satisfy the assertion alone; being a port,
+    /// it is whatever the operator configured this agent to BE — the same
+    /// function `CardPort::lezAccount` reads, so an agent whose updates claim
+    /// an account is an agent whose card claims it too.
+    ///
+    /// Empty or unwired is *unknown*, and unknown publishes nothing: an agent
+    /// that cannot say who it is has nothing to sign its claims with.
+    std::function<std::string()> selfAccount;
     /// Pay a price into an account. Returns the settlement transaction hash, or
     /// empty if nothing settled. Anything above the anchored envelope is
     /// refused by the chain, not here.
@@ -444,6 +487,83 @@ class SubscribeSkill final : public ISkill {
 public:
     SubscribeSkill(TaskPort port, TaskStore &tasks) : port_(std::move(port)), tasks_(tasks) {}
     std::string name() const override { return "agent.subscribe"; }
+    std::string parameterSchema() const override;
+    std::string invoke(const std::string &paramsJson) override;
+
+private:
+    TaskPort port_;
+    TaskStore &tasks_;
+};
+
+/// `agent.update(agent_address, task_id, context_id, state)` — publish an A2A
+/// `TaskStatusUpdateEvent` on a task's topic.
+///
+/// The server half of the lifecycle, and the direction the transport table in
+/// `docs/a2a-binding.md` §4.1 always described and nothing emitted: the client
+/// sends `message/send` and the server answers with status updates on the same
+/// topic. Until this existed the answer could not be sent, so a client's task
+/// stayed in `submitted` forever however well it was served.
+///
+/// Three things it does not do, each on purpose:
+///
+/// 1. **It does not touch this agent's own `TaskStore`.** The store holds tasks
+///    this agent OPENED; a task it is serving belongs to the peer that minted
+///    it, and inventing a local record for one would make `meta.status` report
+///    work as ours that is not. So an update is a claim put on the wire, and
+///    the receiving store is where a claim becomes a state.
+/// 2. **It does not refuse to publish about a task this agent opened.** That
+///    would be a client emitting the server's event, which the binding says
+///    nothing legitimate does — but forbidding it here would put the check on
+///    the wrong side. A stranger's module is not ours to configure, so the
+///    receiver has to refuse a self-authored update anyway (@ref PollSkill),
+///    and a harness that cannot PUT such a frame on the wire cannot show that
+///    it is refused. It is left possible so that it can be watched failing.
+/// 3. **It does not sign anything.** `docs/a2a-binding.md` §7.3: task traffic is
+///    not authenticated, and `x-logos.from` is a claim, not a credential. What
+///    it buys is that a frame says which agent published it, so a reader can
+///    tell one process's traffic from two processes' — not that the claim is
+///    true.
+class UpdateSkill final : public ISkill {
+public:
+    explicit UpdateSkill(TaskPort port) : port_(std::move(port)) {}
+    std::string name() const override { return "agent.update"; }
+    std::string parameterSchema() const override;
+    std::string invoke(const std::string &paramsJson) override;
+
+private:
+    TaskPort port_;
+};
+
+/// `agent.poll(agent_address, task_id, since)` — read the status updates a peer
+/// published on a task's topic, and apply them to this agent's own store.
+///
+/// The skill that makes a task advance FROM THE WIRE. `TaskStore::applyUpdate`
+/// has always known how to take an A2A status update; nothing fed it one that
+/// had crossed a network, so `working` and `completed` were states this
+/// repository could only reach by calling its own store — which is not evidence
+/// that two agents ran a lifecycle, it is evidence that one of them can count.
+///
+/// It is a poll rather than a callback because the transport gives no other
+/// option: `DeliveryPort::receive` is a non-draining read of what a topic has
+/// carried, `since`/`next_since` is how a caller says where it got to, and
+/// `messaging.receive` established both. A2A would stream (`message/stream`);
+/// this binding does not, and `docs/a2a-binding.md` §4.5 says so.
+///
+/// WHAT IT REFUSES, WHICH IS THE POINT OF IT
+///
+/// A task topic is a public rendezvous and a Delivery node receives its own
+/// published messages, so *everything* this agent put on that topic comes back
+/// to it — including its own request, and including a status update it
+/// published itself. An ingest that applied what it read would let one process
+/// drive its own task to `completed` and call that an A2A lifecycle between two
+/// agents. So an update is applied only when it names the task's peer as its
+/// author, and every other frame is counted, by reason, rather than dropped
+/// silently: the counts are what a harness asserts on to show the refusals
+/// happened rather than the frames never arriving.
+class PollSkill final : public ISkill {
+public:
+    PollSkill(TaskPort port, TaskStore &tasks) : port_(std::move(port)), tasks_(tasks) {}
+    std::string name() const override { return "agent.poll"; }
     std::string parameterSchema() const override;
     std::string invoke(const std::string &paramsJson) override;
 

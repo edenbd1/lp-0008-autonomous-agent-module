@@ -50,8 +50,14 @@ The window's own transcript, from a run inside the app:
 <- configure accepted: the agent is bound to this owner and this policy anchor
 -> agent.start()
 <- start accepted
-<- skills(): 23 entries parsed, 22 names in 4436 bytes of reply (* = required)
+<- skills(): 23 entries parsed, 22 names in 4436 bytes of reply (* = required)   (count-as-it-was)
 ```
+
+That count is the one this window read on the day it was captured. The module
+registers 25 now — `agent.update` and `agent.poll` were added after this run —
+and the window reads whatever the installed module offers rather than a number
+of its own, so the transcript is left as it was rather than edited to agree with
+a run that did not happen.
 
 and then the owner channel, which is the part the criterion is actually about:
 

@@ -152,7 +152,8 @@ const char *const kSkills[] = {
     "storage.share",       "wallet.balance",   "wallet.send",
     "wallet.history",      "program.query",    "program.call",
     "program.deploy",      "agent.card",       "agent.discover",
-    "agent.task",          "agent.subscribe",  "agent.cancel",
+    "agent.task",          "agent.subscribe",  "agent.update",
+    "agent.poll",          "agent.cancel",
     "meta.status",         "meta.configure",   "meta.skills",
     "agent.evaluate_task",
 };

@@ -22,10 +22,10 @@
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "ea3c26dbbf1b0d99c7a9991257ac0c4e2d67fc56798162339eb2f0a578d2a758",
-    "module/src/agent_module_plugin.h": "9d3816d8e3d8b9f07d218612f874ed2853a16a39f1f33217bf7d944a9b61203c",
-    "module/src/agent_skills.cpp": "4b5fcadd8b7f27c2874760aa44e2ba174319e4d09c63f8acb512967cd2fb4e70",
-    "module/src/agent_skills.h": "06cf76ee24578aa3068494f70611987b772b02285f39a72be566d5aac004a665",
+    "module/src/agent_module_plugin.cpp": "efa30145dd7a99f57199853d9bdee3e92063b6a07efe85d43c31909419e966be",
+    "module/src/agent_module_plugin.h": "0a8624c513f7d7c4d88c634a1b6764d1062e43049247a9478545ba358a58bbf8",
+    "module/src/agent_skills.cpp": "e741574536996fe0f8ae0bebefefa3caa6d5e88a461db6826a590ae182045374",
+    "module/src/agent_skills.h": "d2cc5d784f57603269ac69bccb904f8e1f0115f505398e52b2d19e106ba3820f",
     "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",
     "module/src/delivery_runtime.h": "5cd0c108bdf342f2a260cd6043b22dc1f5ae3d9bc981537878aa7e5a53227892",
     "module/src/inference.cpp": "ecb0d3048ee7c26688f31af1621db7da2bf52437547e16920ea323c82a34c3fa",
@@ -46,7 +46,7 @@
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
   "package": "module/agent.lgx",
-  "package_root_hash": "7240ef68f13b5541f98f8294cc5b6898a9f31cdd7ad8358fa63105dae9f0c123",
+  "package_root_hash": "424c9f7151e5dee98924b5ac08be0bc858f3b1b32eb691336a06959e8d15fd45",
   "toolchain": {
     "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
     "host": "darwin-arm64",
@@ -55,9 +55,9 @@
   },
   "variants": {
     "darwin-arm64": {
-      "bytes": 4177520,
+      "bytes": 4268720,
       "main": "agent_plugin.dylib",
-      "sha256": "e4909b71ed4442af837ae78928fc102e142591c7c6171fe59ddd7fe11fa77340"
+      "sha256": "256c75e73287750f5a2b7b44f4f1db932c9df40707052206cbd50bc9bf2a862a"
     }
   }
 }

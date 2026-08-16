@@ -1302,6 +1302,318 @@ int main()
         check(store.find("t1", t) && !t.subscribed, "with nothing recorded either way");
     }
 
+    // -----------------------------------------------------------------------
+    // agent.update and agent.poll: a task that moves because of what arrived
+    // -----------------------------------------------------------------------
+    //
+    // These two are tested TOGETHER, through one fake wire, and that is the
+    // point of them. Each alone can be made to pass while disagreeing with the
+    // other about the shape of an event — which is exactly what happened to the
+    // card signer and its verifier, where the module emitted one JWS header and
+    // the repository's own script accepted a different one, and both sides had
+    // green tests. So the publisher's output is never typed out here: it is
+    // whatever `agent.update` put on the wire, and `agent.poll` has to take it.
+    std::printf("agent.update / agent.poll\n");
+    {
+        // The wire: a topic to everything published on it, in order, not
+        // draining. `DeliveryRuntime::received` behaves this way and so does the
+        // fake, including the part that matters most — a node receives what it
+        // published itself, so both agents' frames land in the same vector.
+        std::map<std::string, std::vector<std::string>> wire;
+        const auto sendTo = [&wire](const std::string &topic, const std::string &body) {
+            wire[topic].push_back(body);
+            return true;
+        };
+        const auto readFrom = [&wire](const std::string &topic) { return wire[topic]; };
+
+        // Agent A opened the task; agent B is serving it.
+        TaskStore mine;
+        std::string err;
+        check(mine.create("t1", "c1", "agentB", "storage.upload", err),
+              "agent A opens a task with agent B, which is where every wire test below starts");
+
+        TaskPort a;
+        a.ready = [] { return true; };
+        a.send = sendTo;
+        a.receive = readFrom;
+        a.selfAccount = [] { return std::string("agentA"); };
+        PollSkill poll(a, mine);
+        UpdateSkill asA(a); // A, publishing as itself — the decoy, further down.
+
+        TaskPort b;
+        b.ready = [] { return true; };
+        b.send = sendTo;
+        b.receive = readFrom;
+        b.selfAccount = [] { return std::string("agentB"); };
+        UpdateSkill asB(b);
+
+        const std::string topic = taskTopic("agentB", "t1");
+        const std::string pollArgs = R"({"agent_address":"agentB","task_id":"t1"})";
+
+        // Nothing has been published, so nothing has happened. This is asserted
+        // before either agent publishes rather than after, for the reason
+        // `docs/limitations.md` gives about the harness that asserted an empty
+        // inbox where a peer might already have written: an emptiness that is
+        // true by construction, not by timing.
+        const json quiet = jsonOf(poll.invoke(pollArgs));
+        check(quiet.value("ok", false) && quiet.value("count", std::size_t{1}) == 0,
+              "polling a topic nobody has published on applies nothing, and says so");
+        check(quiet.value("state", std::string{}) == "submitted",
+              "and the task is still submitted, which is where agent.task leaves it");
+        check(quiet.value("next_since", std::size_t{99}) == 0, "with nothing read to skip");
+
+        // ---- the peer publishes, and A's own store moves -------------------
+        const json published = jsonOf(asB.invoke(
+            json{{"agent_address", "agentB"}, {"task_id", "t1"}, {"context_id", "c1"},
+                 {"state", "working"}, {"message", "reading the file"}}
+                .dump()));
+        check(published.value("ok", false), "agent B publishes a status update for the task");
+        check(published.value("topic", std::string{}) == topic,
+              "on the task's own topic, which is the one the client sent the request to");
+        check(published.value("from", std::string{}) == "agentB",
+              "attributed to B's configured account rather than to anything it was passed");
+        check(published.value("final", true) == false,
+              "and not final, because `working` is not a terminal state");
+
+        const json frame = jsonOf(wire[topic].at(0));
+        check(frame.value("kind", std::string{}) == "status-update" &&
+                  frame.value("taskId", std::string{}) == "t1" &&
+                  frame.value("contextId", std::string{}) == "c1" &&
+                  frame.contains("final") && frame.contains("status"),
+              "the frame on the wire is an A2A TaskStatusUpdateEvent with every required member");
+        check(frame["status"]["message"].value("kind", std::string{}) == "message" &&
+                  frame["status"]["message"]["parts"][0].value("kind", std::string{}) == "text",
+              "whose note is a Message of TextParts, which is A2A's shape and not the bare "
+              "string this repository used to emit");
+        check(frame["metadata"]["x-logos"].value("from", std::string{}) == "agentB",
+              "and it says which agent published it, because a shared topic has no connection "
+              "to attribute it to");
+
+        json r = jsonOf(poll.invoke(pollArgs));
+        check(r.value("ok", false) && r.value("count", std::size_t{0}) == 1,
+              "agent A polls and applies exactly one update");
+        check(r.value("state", std::string{}) == "working",
+              "AND ITS OWN TaskStore IS NOW `working` — moved by a frame off the wire, which "
+              "is the transition this module could not make");
+        check(r["applied"][0].value("from", std::string{}) == "agentB",
+              "reported as coming from B, which is the other party to this task");
+        check(r.value("note", std::string{}) == "reading the file",
+              "with the peer's note, read out of the Message parts A2A carries it in");
+        std::size_t since = r.value("next_since", std::size_t{0});
+        check(since == 1, "one frame read, and the next poll is told to start after it");
+
+        // ---- the same frame, published by A itself, changes nothing --------
+        //
+        // The load-bearing negative. A Delivery node receives its own
+        // publications, so this frame is on the topic exactly as B's was and is
+        // indistinguishable from it in every respect but its author.
+        check(okOf(asA.invoke(json{{"agent_address", "agentB"}, {"task_id", "t1"},
+                                   {"context_id", "c1"}, {"state", "completed"},
+                                   {"message", "I declare myself served"}}
+                                  .dump())),
+              "agent A publishes a `completed` update about its OWN task, as itself");
+        r = jsonOf(poll.invoke(
+            json{{"agent_address", "agentB"}, {"task_id", "t1"}, {"since", since}}.dump()));
+        check(r.value("count", std::size_t{1}) == 0, "A reads it back and applies nothing");
+        check(r["ignored"].value("self", std::size_t{0}) == 1,
+              "counting it as its own, rather than dropping it silently — the count is what "
+              "shows the frame was there to refuse");
+        check(r.value("state", std::string{}) == "working",
+              "and the task is still `working`: one process cannot complete its own task");
+        check(!wire[topic].at(1).empty() &&
+                  jsonOf(wire[topic].at(1))["status"].value("state", std::string{}) == "completed",
+              "though the frame really was on the wire, claiming exactly what B's would have");
+        since = r.value("next_since", std::size_t{0});
+
+        // ---- and the peer finishes it ---------------------------------------
+        check(okOf(asB.invoke(json{{"agent_address", "agentB"}, {"task_id", "t1"},
+                                   {"context_id", "c1"}, {"state", "completed"},
+                                   {"message", "stored"}}
+                                  .dump())),
+              "agent B publishes the terminal update");
+        r = jsonOf(poll.invoke(
+            json{{"agent_address", "agentB"}, {"task_id", "t1"}, {"since", since}}.dump()));
+        check(r.value("state", std::string{}) == "completed",
+              "and A's task reaches `completed` from the wire");
+        check(r["applied"][0].value("final", false) == true,
+              "on an event marked final, which agent.update derived from the state");
+        check(r["applied"][0].value("from", std::string{}) == "agentB", "published by B");
+        check(r["history"].size() == 3 && r["history"][0] == "submitted" &&
+                  r["history"][1] == "working" && r["history"][2] == "completed",
+              "with the whole walk recorded: submitted -> working -> completed");
+        check(r["ignored"].value("self", std::size_t{1}) == 0,
+              "and `since` skipped the frames already read, so A's own is not counted twice");
+
+        // A terminal task is terminal however loudly the peer says otherwise.
+        check(okOf(asB.invoke(json{{"agent_address", "agentB"}, {"task_id", "t1"},
+                                   {"context_id", "c1"}, {"state", "working"}}
+                                  .dump())),
+              "B publishes a `working` update for a task that has completed");
+        r = jsonOf(poll.invoke(pollArgs));
+        check(r.value("ok", false) && r.value("state", std::string{}) == "completed",
+              "which moves nothing: work that finished cannot be un-finished by a message");
+        check(r["refused"].size() >= 1 &&
+                  mentions(r["refused"][0].value("error", std::string{}), "cannot move"),
+              "and the refusal is reported rather than swallowed, so a peer saying something "
+              "impossible is visible to the caller");
+    }
+    {
+        // Every other frame a public task topic carries, and what each is
+        // counted as. The client's own request is on this topic by
+        // construction — `agent.task` publishes it there — so "a frame that is
+        // not a status update" is not a hypothetical.
+        std::map<std::string, std::vector<std::string>> wire;
+        TaskStore store;
+        std::string err;
+        store.create("t1", "c1", "agentB", "storage.upload", err);
+        const std::string topic = taskTopic("agentB", "t1");
+
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.receive = [&wire](const std::string &t) { return wire[t]; };
+        port.selfAccount = [] { return std::string("agentA"); };
+        PollSkill poll(port, store);
+
+        const auto update = [](const char *task, const char *ctx, const char *state,
+                               const char *from) {
+            json j{{"kind", "status-update"},
+                   {"taskId", task},
+                   {"contextId", ctx},
+                   {"final", false},
+                   {"status", json{{"state", state}}}};
+            if (from) j["metadata"] = json{{"x-logos", json{{"from", from}}}};
+            return j.dump();
+        };
+        wire[topic] = {
+            R"({"jsonrpc":"2.0","id":"9","method":"message/send","params":{}})",
+            R"(not json at all)",
+            std::string("{\"kind\":\"status-update\",\"junk\":") + nested(600) + "}",
+            update("t2", "c1", "working", "agentB"),
+            update("t1", "c9", "working", "agentB"),
+            update("t1", "c1", "working", nullptr),
+            update("t1", "c1", "working", "stranger"),
+            json{{"id", "t1"}, {"status", json{{"state", "working"}}}}.dump(),
+        };
+        const json r = jsonOf(poll.invoke(R"({"agent_address":"agentB","task_id":"t1"})"));
+        check(r.value("ok", false) && r.value("count", std::size_t{1}) == 0,
+              "eight frames on the topic and not one of them moves the task");
+        check(r.value("state", std::string{}) == "submitted", "which is therefore still open");
+        const json &ig = r["ignored"];
+        check(ig.value("not_a_status_update", std::size_t{0}) == 2,
+              "the client's own A2A request is not a status update, and neither is a bare Task "
+              "object: `kind` is what A2A discriminates on");
+        check(ig.value("malformed", std::size_t{0}) == 2,
+              "text that is not JSON, and a document too deep to copy, are both malformed");
+        check(ig.value("other_task", std::size_t{0}) == 1, "an update about another task");
+        check(ig.value("other_context", std::size_t{0}) == 1,
+              "one naming a context this task never had — the id the client minted and only "
+              "something that read the request could know");
+        check(ig.value("unattributed", std::size_t{0}) == 1,
+              "one that does not say who published it");
+        check(ig.value("other_party", std::size_t{0}) == 1,
+              "and one from an account that is neither party to the task");
+        check(r.value("next_since", std::size_t{0}) == 8,
+              "and the caller is told where it got to, so a second poll starts after them");
+    }
+    {
+        // The refusals that keep a poll from being a way to read somebody
+        // else's traffic, or to answer without a transport.
+        TaskStore store;
+        std::string err;
+        store.create("t1", "c1", "agentB", "storage.upload", err);
+        std::vector<std::string> nothing;
+
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.receive = [&](const std::string &) { return nothing; };
+        port.selfAccount = [] { return std::string("agentA"); };
+        PollSkill poll(port, store);
+        check(!okOf(poll.invoke(R"({"agent_address":"agentB","task_id":"t9"})")),
+              "polling a task this agent never opened is refused, not answered emptily");
+        const auto wrong = poll.invoke(R"({"agent_address":"stranger","task_id":"t1"})");
+        check(!okOf(wrong) && mentions(errOf(wrong), "is with agentB"),
+              "and so is polling it as though it were with somebody else");
+        check(!okOf(poll.invoke(R"({"agent_address":"a/b","task_id":"t1"})")),
+              "an agent address that is not a topic identifier names no topic to read");
+        check(!okOf(poll.invoke(R"({"agent_address":"agentB","task_id":"t1","since":-1})")),
+              "a negative `since` is refused rather than becoming 2^64-1");
+        check(!okOf(poll.invoke("not json")), "malformed parameters are refused, not thrown");
+
+        TaskPort down;
+        down.ready = [] { return false; };
+        down.receive = [&](const std::string &) { return nothing; };
+        check(!okOf(PollSkill(down, store).invoke(R"({"agent_address":"agentB","task_id":"t1"})")),
+              "polling refuses while the node is not started");
+        TaskPort unwired;
+        unwired.ready = [] { return true; };
+        const auto noPath =
+            PollSkill(unwired, store).invoke(R"({"agent_address":"agentB","task_id":"t1"})");
+        check(!okOf(noPath) && mentions(errOf(noPath), "no delivery receive path"),
+              "and a build with no read path says so, rather than reporting a quiet topic");
+    }
+    {
+        // agent.update's own refusals. Every one of them must leave the wire
+        // untouched: a status update that was half-published is a claim this
+        // agent cannot take back.
+        std::vector<std::string> sent;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [&](const std::string &, const std::string &body) {
+            sent.push_back(body);
+            return true;
+        };
+        port.selfAccount = [] { return std::string("agentB"); };
+        UpdateSkill update(port);
+        const auto args = [](const char *state) {
+            return json{{"agent_address", "agentB"}, {"task_id", "t1"}, {"context_id", "c1"},
+                        {"state", state}}
+                .dump();
+        };
+        check(!okOf(update.invoke(args("finished"))),
+              "a state A2A does not define is not publishable");
+        check(!okOf(update.invoke(R"({"agent_address":"agentB","task_id":"t1","state":"working"})")),
+              "and neither is an update with no context id, which is how a reader tells an "
+              "answer from a guess");
+        check(!okOf(update.invoke(
+                  R"({"agent_address":"AAA/json","task_id":"t1","context_id":"c1","state":"working"})")),
+              "an agent address that forges a topic segment publishes nowhere");
+        check(!okOf(update.invoke("not json")), "malformed parameters are refused, not thrown");
+        check(sent.empty(), "and none of those four put anything on the wire");
+
+        TaskPort anonymous;
+        anonymous.ready = [] { return true; };
+        anonymous.send = [&](const std::string &, const std::string &b) {
+            sent.push_back(b);
+            return true;
+        };
+        const auto unnamed = UpdateSkill(anonymous).invoke(args("working"));
+        check(!okOf(unnamed) && mentions(errOf(unnamed), "who is publishing"),
+              "an agent with no account of its own cannot publish an update at all: an "
+              "unattributed one is exactly what the receiving side throws away");
+        anonymous.selfAccount = [] { return std::string(); };
+        check(!okOf(UpdateSkill(anonymous).invoke(args("working"))),
+              "and a configured-but-empty account is the same answer");
+        check(sent.empty(), "with nothing published either time");
+
+        TaskPort off;
+        off.ready = [] { return false; };
+        off.send = [&](const std::string &, const std::string &b) {
+            sent.push_back(b);
+            return true;
+        };
+        off.selfAccount = [] { return std::string("agentB"); };
+        check(!okOf(UpdateSkill(off).invoke(args("working"))),
+              "publishing refuses while the node is not started");
+        TaskPort drops;
+        drops.ready = [] { return true; };
+        drops.send = [](const std::string &, const std::string &) { return false; };
+        drops.selfAccount = [] { return std::string("agentB"); };
+        const auto lost = UpdateSkill(drops).invoke(args("working"));
+        check(!okOf(lost) && mentions(errOf(lost), "could not be delivered"),
+              "and an update delivery refused is reported as not sent");
+        check(sent.empty(), "with nothing on the wire from either");
+    }
+
     std::printf("agent.cancel\n");
     {
         TaskStore store;

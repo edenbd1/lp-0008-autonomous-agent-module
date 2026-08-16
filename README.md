@@ -418,7 +418,7 @@ policy    <its policy account, from the manifest>
   ok    the module is in the runtime's loaded set
   ok    configure() is accepted across the transport
   ok    start() is accepted across the transport
-  ok    the loaded module lists all 23 documented skills
+  ok    the loaded module lists all 25 documented skills
   ok    the running module reports itself configured
   ok    and bound to the owner it was configured with
   ok    and to the policy account it was configured with
@@ -459,7 +459,7 @@ revision CI uses) and `nlohmann/json.hpp`. No node, no keys, no Logos install.
 Three commands, and the first is how you find the other two's arguments:
 
 ```sh
-$OUT/agent-console skills | python3 -m json.tool   # 23 skills, each with a JSON Schema
+$OUT/agent-console skills | python3 -m json.tool   # 25 skills, each with a JSON Schema
 $OUT/agent-console status
 $OUT/agent-console invoke <name> '<json>'
 ```
@@ -527,7 +527,7 @@ to an already-installed `agent.lgx`.** `registerSkill` takes a
 Objects in a separate process, and there is no wire format for a C++ object — so
 skills are added by a host that *links* the module, which is what
 `agent-console` is. The full interface specification, the loader convention, the
-parameters of all 23 built-in skills, and what would have to change for the
+parameters of all 25 built-in skills, and what would have to change for the
 plugin path are in [`docs/skills.md`](docs/skills.md).
 
 ## 6. Run an A2A task and settle it in LEZ
@@ -738,7 +738,7 @@ That document also carries the two load harnesses and their recorded output:
 `logos_core_load_test` `dlopen`s the real `liblogos_core` out of the installed
 `LogosBasecamp.app`, loads the module through the same C API in the same order
 as Basecamp's own `main.cpp`, and then calls back into it over the runtime's
-own transport: 23 skills listed, each with a parameter schema, `invoke()`
+own transport: 25 skills listed, each with a parameter schema, `invoke()`
 dispatching to every one.
 
 The loaded module also **opens its own Logos Delivery node**. That sentence used
@@ -749,12 +749,25 @@ the wire refused. The premise is right; the conclusion was not. A host cannot
 `module/src/delivery_runtime.cpp` opens `liblogosdelivery` and
 `meta.configure("delivery","on")` — two strings, which the transport has always
 carried — starts a node inside the module's own `logos_host` process.
-`messaging.*`, `agent.discover`, `agent.task` and `agent.subscribe` then work,
-measured through `QPluginLoader`, through the real runtime out of the installed
-Basecamp, and between two loaded modules that discovered each other's signed
-Agent Cards on the public network: `./scripts/delivery-in-plugin.sh`, and
+`messaging.*`, `agent.discover`, `agent.task`, `agent.subscribe`, `agent.update`
+and `agent.poll` then work, measured through `QPluginLoader`, through the real
+runtime out of the installed Basecamp, and between two loaded modules that
+discovered each other's signed Agent Cards on the public network:
+`./scripts/delivery-in-plugin.sh`, and
 [`docs/basecamp.md`](docs/basecamp.md) for the transcripts and the negative
 control.
+
+Those last two are the return path, and they are what lets a task move because
+of what arrived rather than because this process said so. The server publishes an
+A2A `TaskStatusUpdateEvent` on the task's topic (`agent.update`); the client
+reads that topic and applies what the **peer** published to its own `TaskStore`
+(`agent.poll`), refusing any frame that does not name the peer as its author.
+`./scripts/delivery-in-plugin.sh peers` (exit 0, both processes, nothing spent)
+walks two loaded modules through `submitted → working → completed` that way —
+each of them having first published a forged `completed` for its own task onto
+the very topic it reads, and counted it as refused. A Delivery node receives its
+own publications, so without that rule one process could produce this transcript
+alone.
 
 A loaded module also **pays** for the task it was served, in the same flow and
 the same call. `./scripts/delivery-in-plugin.sh settle` runs the two modules
@@ -820,7 +833,7 @@ mint the plugin a token for it, and only then calls `createWidget(LogosAPI*)`.
 So `"dependencies": ["agent"]` in `app/metadata.json` is what turns a click on a
 tile into a loaded module.
 
-From that window an owner binds the agent, starts it, reads its 23-skill card,
+From that window an owner binds the agent, starts it, reads its 25-skill card,
 invokes any of them, and — the part the criterion is about — answers the spends
 the agent asks it to approve. A `wallet.send` above the envelope published
 `ownerApprovalRequested` to the window in **7 ms**, and the owner's `approved`
@@ -1084,7 +1097,7 @@ docs/                             see the reading order below
 |---|---|
 | [`architecture.md`](docs/architecture.md) | the shape of the module, and where each decision is made |
 | [`security-model.md`](docs/security-model.md) | what the agent may do alone, and what it may not — the "They can" / "They cannot" lists |
-| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 23 built-ins. Also which are wired to a running node and which are only compiled |
+| [`skills.md`](docs/skills.md) | the skill interface spec: the contract, how to add one, and a reference for all 25 built-ins. Also which are wired to a running node and which are only compiled |
 | [`a2a-binding.md`](docs/a2a-binding.md) | the A2A transport binding over Logos Messaging — the Agent Card schema, the task lifecycle, and a conformance table against A2A §11.1, including where this implementation does not conform |
 | [`use-cases.md`](docs/use-cases.md) | the prize's illustrative use cases, and which of them this repository demonstrates |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | what is live, how it got there, and how to reproduce it |
