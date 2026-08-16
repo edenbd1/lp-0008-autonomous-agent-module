@@ -666,8 +666,12 @@ one of them — `meta.skills` — was documented in three headers before it exis
   This is a conjunction, and until today its parts held separately: discovery on
   the public network between two loaded modules, serving between the same two,
   and settlements on chain from a shell script. `./scripts/delivery-in-plugin.sh
-  settle` (exit 0) is the three of them in one flow, in one call. Settlement 7 in
-  the table below — `e2c59e8a…`, block 9373 — is that call's payment.
+  settle` (exit 0) is the three of them in one flow, in one call. Settlement 8 in
+  the table below — `23046b54…`, block 9389 — is that call's payment, made by the
+  committed script run start to finish, `SCRIPT_EXIT=0` with both processes at 0.
+  Settlement 7 is the same flow a run earlier, under a copy of the script that
+  was two lines short of the committed one; it is left in the table because it
+  happened, and `docs/basecamp.md` §5 says why it is not the one cited.
 
   Two modules loaded through `QPluginLoader`, each with its own Delivery node,
   its own LEZ account, its own wallet and its own working directory, on one
@@ -685,8 +689,9 @@ one of them — `meta.skills` — was documented in three headers before it exis
   ok this agent opened an A2A task addressed to the other one
   ok it paid the price the peer's card advertised, 1 LEZ
   ok and settled it on chain, from inside the loaded module, with no owner in
-     the path: e2c59e8a… (block 9373; the proof took 767 s and the signer waited
-     for inclusion before it would print the hash)
+     the path: 23046b54… (block 9389; the proof took 418 s, the module blocked
+     for all of them, and the signer waited for inclusion before it would print
+     the hash at all)
                                               ok the card this agent was handed
                                                  advertises no price, so there is
                                                  nothing to pay
@@ -776,6 +781,7 @@ Every figure in this table is decoded out of the settlement transaction itself. 
 | 5 | [`16df5055…a1ff9dde`](https://explorer.testnet.lez.logos.co/transaction/16df5055d55a6c240c5e6774202c0500fa12e59fe502f6338a36b20ea1ff9dde) | 8939 | 271,471 bytes | `storage.upload` | 5 LEZ | 100 | `7HH46tXh…` at 8,000 / 55 |
 | 6 | [`ffafd2b0…721bb2da`](https://explorer.testnet.lez.logos.co/transaction/ffafd2b0f4ff9c1ca411e8da2dba06052c25790fc5c83e7351fbdee4721bb2da) | 8964 | 271,471 bytes | `storage.upload` | 5 LEZ | 105 | `7HH46tXh…` at 8,000 / 60 |
 | 7 | [`e2c59e8a…c61ef3be`](https://explorer.testnet.lez.logos.co/transaction/e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be) | 9373 | 271,471 bytes | `storage.upload` | 1 LEZ | 1 | `6FscNXjN…` at 9,000 / 1 |
+| 8 | [`23046b54…ce6ca3fc`](https://explorer.testnet.lez.logos.co/transaction/23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc) | 9389 | 271,471 bytes | `storage.upload` | 1 LEZ | 2 | `6FscNXjN…` at 9,000 / 2 |
 
 Settlement 1: the sequencer's bytes hash to `4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1`, which is the hash cited, and those bytes were found inside block 8740 and in neither block 8739 nor 8741. The transaction touches 2 accounts.
   The envelope it charged, `Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM`, is owned by ProgramId `3650484754,2032214328,3036549407,1048473516,3525353185,166458006,2651200166,3637082293`, which is **not** the program this repository ships. **This settlement was made under a superseded deployment.** Its policy account was derived from a different ImageID and no longer exists under the program deployed today. It is a real transaction and it resolves on the explorer, but it is not evidence about the program in this repository.
@@ -791,8 +797,10 @@ Settlement 6: the sequencer's bytes hash to `ffafd2b0f4ff9c1ca411e8da2dba06052c2
   The envelope it charged, `7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
 Settlement 7: the sequencer's bytes hash to `e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be`, which is the hash cited, and those bytes were found inside block 9373 and in neither block 9372 nor 9374. The transaction touches 2 accounts.
   The envelope it charged, `6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
+Settlement 8: the sequencer's bytes hash to `23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc`, which is the hash cited, and those bytes were found inside block 9389 and in neither block 9388 nor 9390. The transaction touches 2 accounts.
+  The envelope it charged, `6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe`, is owned by ProgramId `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647`, which is the program this repository ships. The anchor and the settlement are under the same deployment.
 
-**2 of the 7 settlements above predate the program this repository ships.** They are kept because they are on chain and a reviewer will find them, but the criterion they support is only supported by the 5 made under the current deployment.
+**2 of the 8 settlements above predate the program this repository ships.** They are kept because they are on chain and a reviewer will find them, but the criterion they support is only supported by the 6 made under the current deployment.
 
 What the chain cannot show, stated rather than implied: the payer is a shielded account, so only the credit side of each settlement is publicly readable. `getAccount` answers with a fully-populated default account — zero balance, zero nonce, zero owner — for a shielded address exactly as it does for one that has never existed, so it is not an existence check and no debit is quoted here. The debit is constrained anyway: LEZ rule 8 requires total balance to be preserved across every program in a transaction, so a transaction that credited 25 LEZ debited 25 LEZ.
 

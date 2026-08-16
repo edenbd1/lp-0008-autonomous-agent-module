@@ -681,6 +681,55 @@ program it names. `scripts/demo.sh` reads two of those transactions back on
 every run, because the evidence that a defect was real is a transaction that was
 accepted, not a paragraph saying it would have been.
 
+## An assertion that was right most of the time
+
+A defect worth a section of its own, because it is the hardest kind to catch and
+because this file is otherwise a list of its relatives.
+
+`module/tests/plugin_delivery_test.cpp` peer mode asserted that the first
+`messaging.receive` on an agent's own task topic comes back empty — "nothing has
+been sent yet". It reads as a statement about the skill. It was a statement about
+timing, and on 2026-08-16 it lost.
+
+Nothing was broken. The two peers poll the discovery loop on a three-second
+cadence and leave it up to one poll apart; whichever leaves second opened its
+inbox *after* the other had already published its A2A request, and found it
+waiting. The node's own log interleaves with the checks and says so — the frame
+arrives on that exact content topic on the line above the read that was supposed
+to find nothing:
+
+```
+DBG 01:13:26.376 received relay message  … contentTopic=/lp-0008/1/task-<buyer>-<task>/json
+  ok    messaging.receive answers, and subscribes on first use
+  FAIL  and its first answer is empty, because nothing has been sent yet
+```
+
+**Two things this cost, and both are the point.** It fails rarely, so it carried
+the authority of a green check while proving nothing about the ordering it
+depended on — and a check that is usually right is harder to distrust than one
+that is usually wrong. And it sat four lines in front of `agent.task`, which in
+`settle` mode spends real LEZ on a testnet with no faucet. A flaky assertion in
+front of a step that costs money is worse than no assertion at all: it turns a
+successful run red *after* the money is gone, and a reviewer reading the
+transcript cannot tell that failure from a real one.
+
+**The fix was ordering, not softening the claim.** The inbox is opened before the
+discovery loop rather than after it, where neither agent has minted a task and
+the answer is empty for a reason instead of by luck. What the assertion asserts
+is unchanged.
+
+Two facts behind it that generalise past this harness:
+
+- **A Waku node buffers what its relay shard carries, so "subscribe" is not what
+  gates receipt.** The first read is what subscribes, but the frames were already
+  arriving — `no subscribed peers found` in the node log is about *filter*
+  subscriptions and does not stop relay delivery. So any "the topic was empty
+  before X" assertion is about when you looked, whether or not it was written
+  that way.
+- **In a two-process harness, ask of every assertion whether it would still hold
+  if the other process got there first.** The ones that would not are not
+  assertions about the system; they are assertions about the scheduler.
+
 ## The node runs are local, not CI
 
 Building the Delivery and Storage libraries takes tens of minutes and the runs

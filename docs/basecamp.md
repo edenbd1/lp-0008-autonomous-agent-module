@@ -285,13 +285,15 @@ buyer                                       seller
   ok  the discovered card advertises a price to pay: 1 LEZ
   ok  and a public account to pay it into: Public/BzYks91a…
   ok  this agent opened an A2A task addressed to the other one
+  <-  agent-spend: resyncing ~/.lp0008-agents/storage
+  <-  agent-spend: Synced to block 9382
   <-  agent-spend: 1 LEZ -> Public/BzYks91a…, window 9000, policy 6FscNXjN…
-  <-  agent-spend: spel exited 0 after 767 s
-  <-  agent-spend: submitted e2c59e8a…
-  <-  agent-spend: e2c59e8a… is in block 9373
+  <-  agent-spend: spel exited 0 after 418 s
+  <-  agent-spend: submitted 23046b54…
+  <-  agent-spend: 23046b54… is in block 9389
   ok  it paid the price the peer's card advertised, 1 LEZ
   ok  and settled it on chain, from inside the loaded module, with no owner in
-      the path: e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be
+      the path: 23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc
                                               ok  the card this agent was handed
                                                   advertises no price, so there
                                                   is nothing to pay
@@ -309,14 +311,27 @@ from "the module reports a transaction hash whenever it opens a task".
 decodes the payee's balance out of that transaction's own committed post-state —
 `getAccount` cannot answer it, because this chain has no historical-state RPC —
 and refuses to write anything unless it rose by exactly the price. For this run:
-`hash_ok=1`, block 9373, `recipient_balance=1` where it held 0, and the anchored
-ledger `6FscNXjN…` at `window_start=9000, spent=1`. The per-period total on chain
+`hash_ok=1`, block 9389, `recipient_balance=2` where it held 1, and the anchored
+ledger `6FscNXjN…` at `window_start=9000, spent=2`. The per-period total on chain
 moved by the price, which is the part that says the policy program ran rather
 than that a transfer happened beside it.
 
-The proof took **767 seconds**, and that number is worth having: it is why
-`TaskPort::pay` blocks, why the signer confirms inclusion itself rather than
-handing back a hash to be checked later, and why this harness is not in CI.
+The proof took **418 seconds** and the module blocked for all of them, which is
+worth having as a number: it is why `TaskPort::pay` blocks, why the signer
+confirms inclusion itself rather than handing back a hash to be checked later,
+and why this harness is not in CI. A run the day before took 767 s for the same
+instruction with another proof on the machine — always check the wall clock
+before reading a duration as a property of the work.
+
+**Settlement 7 in the submission's table is the same flow, run once before this
+one, and it is on the page for a reason that is not redundancy.** That run was
+made by a version of `delivery-in-plugin.sh` two lines short of the committed
+one — the file was edited while bash was executing it, so the branch that shipped
+had never been run start to finish. Both lines were exercised separately and both
+were right, and it did not matter: a script whose committed form is not the form
+that was verified is exactly the defect this repository keeps finding, and the
+only way to close it is to run the committed form. Settlement 8 is that run,
+whole, `SCRIPT_EXIT=0` with both processes at 0.
 
 **The refusals are a separate harness, because this one costs money.**
 `./scripts/delivery-in-plugin.sh signers` needs no second agent, no key and no
