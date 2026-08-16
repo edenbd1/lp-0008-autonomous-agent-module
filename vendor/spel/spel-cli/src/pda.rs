@@ -130,8 +130,9 @@ pub fn compute_pda_from_seeds(
     if let Some(_npk) = npk {
         // lez-core v0.2.2 binds a private PDA to a viewing public key (vpk) in
         // addition to the npk; the CLI has no way to obtain the vpk here yet, so
-        // private-PDA computation is unsupported on this path. LP-0003 uses only
-        // public `pda = ...` accounts, so this branch is never reached.
+        // private-PDA computation is unsupported on this path. The program in
+        // this repository uses only public `pda = ...` accounts, so this branch
+        // is never reached.
         Err("private-PDA computation is not supported against LEZ v0.2.2 (needs a viewing public key)".to_string())
     } else {
         Ok(AccountId::for_public_pda(program_id, &pda_seed))

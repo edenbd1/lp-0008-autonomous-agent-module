@@ -24,7 +24,7 @@
 #   - "deploy both programs, commit a distribution" — one program is deployed.
 #     `authenticated_transfer.bin` is checked for existence and passed as
 #     `--bin-auth-transfer`; it is never deployed, and there is no distribution
-#     anywhere in this file. That vocabulary is LP-0003's, not this prize's.
+#     anywhere in this file. That vocabulary belongs to some other program.
 #   - "PRIVACY_PRESERVING_CIRCUIT_ID … the resulting marker PDA" — neither name
 #     occurs in the body. What steps 4 and 5 read back is the policy account.
 #   - "COUNT1 / COUNT2" — neither variable is parsed. The claim count is fixed at
