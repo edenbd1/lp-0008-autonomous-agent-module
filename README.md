@@ -429,7 +429,7 @@ all steps confirmed (0 failure(s))
 **It runs on macOS arm64 and on x86-64 Linux, out of the same package.**
 `module/agent.lgx` carries a `darwin-arm64` variant and a `linux-amd64` one, and
 the script installs the one this machine needs — the transcript above is the
-macOS run; the Linux run makes the same 42 assertions with the same result, and
+macOS run; the Linux run makes the same 36 assertions with the same result, and
 is in [`docs/basecamp.md`](docs/basecamp.md).
 
 **It needs a prepared machine, and it says which piece is missing when it is

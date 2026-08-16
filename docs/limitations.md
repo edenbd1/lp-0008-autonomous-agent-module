@@ -1013,7 +1013,8 @@ Variants:       darwin-arm64, linux-amd64
 
 and `./scripts/logos-core-headless.sh storage` on x86-64 Linux loads,
 configures and starts the module out of that package with **all steps confirmed
-(0 failure(s))** — the same 42 assertions the macOS run makes. The full
+(0 failure(s))** — the same 36 assertions the macOS run makes, differing only
+where they name the variant. The full
 procedure is in [`basecamp.md`](basecamp.md) under "Linux, and the
 `linux-amd64` variant"; the three findings, in the order they cost time:
 

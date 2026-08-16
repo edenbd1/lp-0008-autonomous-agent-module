@@ -833,7 +833,7 @@ all steps confirmed (0 failure(s))
 ```
 
 That run is x86-64 Linux, from the committed `module/agent.lgx`, against
-`liblogos_core.so` out of the published AppImage — the same 42 assertions the
+`liblogos_core.so` out of the published AppImage — the same 36 assertions the
 macOS run makes, in the same order, with the same result. The environment it was
 performed in is recorded in `docs/limitations.md`.
 
