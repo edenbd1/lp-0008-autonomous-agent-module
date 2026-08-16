@@ -8,6 +8,11 @@
 #
 #   ALERTER_SELF_TRIGGER=1 ./scripts/use-cases/05-event-alerter.sh   # both, one process
 #
+# `watch` mints the agent itself when there is nothing prepared, and mints a new
+# one when the prepared agent has already been claimed — a claim account is
+# written once and can never change again, so a claimed agent has no change left
+# to watch for. See "A RUN FILE IS SPENT" below.
+#
 # From the prize's list of illustrative use cases:
 #
 #   "On-chain event alerter: agent monitors a LEZ program or account for state
@@ -113,6 +118,28 @@ d = bytes(r['data'])
 if len(d) != 33 or d[0] != 2:
     sys.exit('%s holds %d bytes, not a claim this program wrote' % (sys.argv[1], len(d)))
 print({'version': d[0], 'owner': d[1:33].hex()}[sys.argv[2]])" "$1" "$2"
+}
+
+# `owner_state <what-owner_of-printed>` — one word for what the chain just said
+# about an account a claim would be written to. THREE answers and not two:
+#
+#   unclaimed   the program owner is eight zeros, which is what this chain
+#               answers with for an address nobody has written yet
+#   claimed     some program owns it, so something has already written it
+#   unreadable  the read did not come back at all
+#
+# The third is the point, and it is why every test below goes through here
+# instead of comparing to the zero string in place. `owner_of` prints nothing
+# when curl times out or the JSON does not parse, and `null` when the RPC
+# answers with no result. Both of those are `!= 0,0,0,0,0,0,0,0`, so both used to
+# land in the same branch as a real claim — a chain that had stopped answering
+# read as an account that had just changed.
+owner_state() {
+  case "$1" in
+    0,0,0,0,0,0,0,0) echo unclaimed ;;
+    ''|null)         echo unreadable ;;
+    *)               echo claimed ;;
+  esac
 }
 
 # `control_a_no_record <ghost-account> <an-account-that-DOES-hold-a-claim>`
@@ -411,6 +438,34 @@ fi
 [ -f "$RUN" ] || die "nothing to watch"
 . "$RUN"
 
+# A RUN FILE IS SPENT ONCE ITS CLAIM ACCOUNT HOLDS A CLAIM. `claim_agent` writes
+# PDA(program, ["agent-owner/v1", agent]) exactly once and no instruction can
+# rewrite it, so an agent that has been claimed can never again show the change
+# this watches for. The file is kept in $TMPDIR and outlives the run that made
+# it, so a second `watch` re-read one, and it did not fail cleanly: section 2
+# read the account, correctly reported it was already owned, and section 3 then
+# announced "program_owner went 0,0,0,0,0,0,0,0 -> ..." about a claim written
+# 1,291 blocks earlier that it had never seen arrive. Both sentences were about
+# the same address; only the second was false.
+#
+# So the file is checked against the CHAIN rather than trusted for existing, and
+# the address it is checked at is DERIVED from the agent id the file records —
+# never the `CLAIM=` line, which is a copy of a derivation and not the derivation.
+# `unreadable` is not `claimed`: a chain that will not answer leaves the file
+# alone and lets section 2 fail loudly, rather than spending a transaction on a
+# fresh agent to replace one that may be perfectly good.
+SPENT_PDA=
+[ -n "${AGENT:-}" ] && SPENT_PDA=$("$SPEL" --idl "$IDL" --program "$PROGRAM" \
+  pda claim --agent "$AGENT" 2>/dev/null | tail -n1 | tr -d '[:space:]')
+if [ -n "$SPENT_PDA" ] && [ "$(owner_state "$(owner_of "$SPENT_PDA")")" = claimed ]; then
+  note "the agent recorded in $RUN has already been claimed. That account can"
+  note "never change again, so there is nothing left to watch on it — minting a"
+  note "fresh agent to watch instead."
+  unset CLAIM_TX
+  prepare
+  . "$RUN"
+fi
+
 rule "1. the account a claim would be written to"
 # Derived from the agent's own id through the published IDL, not copied from
 # anywhere. There is exactly one such address per agent and no argument to vary.
@@ -433,53 +488,86 @@ rule "2. before: the chain says nobody has claimed this agent"
 # with a default account, zero balance and owner all zeros — which is exactly
 # what an unclaimed agent looks like and exactly what is checked for. Without
 # this the alert below would be consistent with a claim that was already there.
+#
+# This check stays a hard failure when the account is NOT unclaimed — that is the
+# whole of its job — and control C in section 6 shows the same reader reaching
+# the opposite verdict, so that "all zeros" here is a reading and not a default.
 BEFORE=$(owner_of "$PDA")
-if [ "$BEFORE" = "0,0,0,0,0,0,0,0" ]; then
-  ok "program_owner is all zeros: no claim exists"
-else
-  bad "that account is already owned by $BEFORE — this run cannot show a change"
-fi
+BEFORE_STATE=$(owner_state "$BEFORE")
+case "$BEFORE_STATE" in
+  unclaimed) ok "program_owner is all zeros: no claim exists" ;;
+  claimed)   bad "that account is already owned by $BEFORE — this run cannot show a change" ;;
+  *)         bad "the chain did not answer for $PDA, so nothing here says it is unclaimed" ;;
+esac
+# THE LOWER END OF THE SEARCH WINDOW section 4 reads, and the only reason it is
+# read here: the claim cannot be in a block earlier than the last one that
+# existed before anything was asked to make it. Read from the chain, not assumed.
 H0=$(chain_height)
-[ -n "$H0" ] || bad "could not read the chain height"
-echo "  watching from block $H0"
+case "$H0" in
+  ''|*[!0-9]*) bad "could not read the chain height to start watching from"; H0= ;;
+esac
+echo "  watching from block ${H0:-<unread>}"
 
 rule "3. watching"
-if [ "$SELF" = "1" ]; then
-  note "ALERTER_SELF_TRIGGER=1 — this process will make the claim itself."
-  note "The default is a separate invocation; this mode exists for CI."
-  ( claim > "$WORK/claim.log" 2>&1 ) &
-  CLAIM_PID=$!
-else
-  echo "  This process will NOT make the claim. In another terminal, run:"
-  echo
-  echo "      $0 claim"
-  echo
-  echo "  Waiting up to $((POLL_SECONDS * POLL_TRIES / 60)) minutes for the account to change."
-  CLAIM_PID=
-fi
 FIRED=0
-for _ in $(seq 1 "$POLL_TRIES"); do
-  NOW_OWNER=$(owner_of "$PDA")
-  if [ "$NOW_OWNER" != "0,0,0,0,0,0,0,0" ] && [ -n "$NOW_OWNER" ] && [ "$NOW_OWNER" != null ]; then
-    FIRED=1; break
+CLAIM_PID=
+NOW_OWNER=
+H1=
+# A CHANGE IS A CHANGE FROM WHAT SECTION 2 READ, and this loop used to test
+# `!= 0,0,0,0,0,0,0,0` — the literal, not the reading. The two are the same thing
+# only when section 2 passed, and when it had not the loop matched on its first
+# poll against a claim made on another day and the line below announced a
+# transition out of a state nobody had ever observed. So section 2's verdict
+# gates the watch, and its reading is what the comparison is against.
+if [ "$BEFORE_STATE" != unclaimed ]; then
+  bad "the watch did not run: section 2 could not establish that this account
+       started unclaimed, and a change out of an unknown state is not a change"
+else
+  if [ "$SELF" = "1" ]; then
+    note "ALERTER_SELF_TRIGGER=1 — this process will make the claim itself."
+    note "The default is a separate invocation; this mode exists for CI."
+    ( claim > "$WORK/claim.log" 2>&1 ) &
+    CLAIM_PID=$!
+  else
+    echo "  This process will NOT make the claim. In another terminal, run:"
+    echo
+    echo "      $0 claim"
+    echo
+    echo "  Waiting up to $((POLL_SECONDS * POLL_TRIES / 60)) minutes for the account to change."
   fi
-  sleep "$POLL_SECONDS"
-done
-[ -n "$CLAIM_PID" ] && wait "$CLAIM_PID" 2>/dev/null
-H1=$(chain_height)
+  for _ in $(seq 1 "$POLL_TRIES"); do
+    NOW_OWNER=$(owner_of "$PDA")
+    if [ "$(owner_state "$NOW_OWNER")" = claimed ] && [ "$NOW_OWNER" != "$BEFORE" ]; then
+      # THE UPPER END OF THE SEARCH WINDOW, read here and nowhere else: the
+      # height at the moment the change was seen. It used to be read after this
+      # loop AND after waiting on the claim subprocess, which is a different
+      # moment and, when the loop matched on its first poll, the same block as
+      # H0 — section 4 then searched a one-block window and the transaction was
+      # 1,291 blocks outside it. Both ends of the window are now the two heights
+      # this process read itself, around the change it saw.
+      H1=$(chain_height)
+      case "$H1" in ''|*[!0-9]*) bad "could not read the chain height at the moment of the change"; H1= ;; esac
+      FIRED=1; break
+    fi
+    sleep "$POLL_SECONDS"
+  done
+  [ -n "$CLAIM_PID" ] && wait "$CLAIM_PID" 2>/dev/null
+fi
 if [ "$FIRED" = "1" ]; then
-  ok "the account changed: program_owner went 0,0,0,0,0,0,0,0 -> $NOW_OWNER"
+  ok "the account changed: program_owner went $BEFORE -> $NOW_OWNER"
   if [ "$NOW_OWNER" = "$PID" ]; then
     ok "and that is this repository's policy program, so a claim wrote it"
   else
     bad "it is owned by $NOW_OWNER, not $PID"
   fi
-else
+elif [ "$BEFORE_STATE" = unclaimed ]; then
   bad "nothing claimed $AGENT within the watch window"
 fi
 
 rule "4. what changed, decoded, and the transaction that did it"
 CLAIMED_OWNER=
+EV_BLOCK=
+EV_TX=
 if [ "$FIRED" = "1" ]; then
   CLAIMED_OWNER=$(claim_record "$PDA" owner) || bad "the claim account did not decode"
   echo "  the claim names owner $CLAIMED_OWNER"
@@ -490,19 +578,36 @@ if [ "$FIRED" = "1" ]; then
     bad "the claim names $CLAIMED_OWNER, not $OWNER_HEX"
   fi
   # The watcher was never told the hash. It knows the change happened between
-  # two heights it read itself, so it reads the blocks in between.
-  echo "  searching blocks $H0..$H1 for the transaction that wrote $PDA"
-  FOUND=$(find_claim_tx "$PDA" "$H0" "$H1")
-  EV_BLOCK=$(kv "$FOUND" block); EV_TX=$(kv "$FOUND" tx)
-  if [ -n "$EV_BLOCK" ]; then
-    ok "found it in block $EV_BLOCK"
+  # two heights it read itself — the last block before it started watching, and
+  # the last block at the moment the change appeared — so the cause is in that
+  # range and it reads every block of it. Neither end is a constant, an offset,
+  # or a guess: H0 comes from section 2 and H1 from the poll that saw the change.
+  # An end that could not be read is a window that could not be derived, and this
+  # says so rather than substituting anything for it.
+  if [ -z "$H0" ] || [ -z "$H1" ]; then
+    bad "the search window could not be derived from the chain: '${H0:-}'..'${H1:-}'"
+  elif [ "$H1" -lt "$H0" ]; then
+    bad "the chain height went backwards while watching, $H0 -> $H1, so there is no window to search"
   else
-    bad "the change is on chain but no block in $H0..$H1 holds that account"
-  fi
-  if [ -n "$EV_TX" ]; then
-    ok "the transaction is $EV_TX ($(kv "$FOUND" tx_bytes) bytes, hash round-tripped through getTransaction)"
-  else
-    note "$(kv "$FOUND" note)"
+    echo "  searching blocks $H0..$H1 ($((H1 - H0 + 1)) block(s)) for the transaction that wrote $PDA"
+    FOUND=$(find_claim_tx "$PDA" "$H0" "$H1")
+    EV_BLOCK=$(kv "$FOUND" block); EV_TX=$(kv "$FOUND" tx)
+    if [ -n "$EV_BLOCK" ]; then
+      ok "found it in block $EV_BLOCK"
+      # A block without its transaction is not a find. This branch used to print
+      # `note` and let the run go green, while section 8 went on claiming the
+      # watcher "found the transaction in the blocks without being told its
+      # hash" — which it had not. The note stays, as the explanation; the verdict
+      # is a failure, because nothing here found what this section is for.
+      if [ -n "$EV_TX" ]; then
+        ok "the transaction is $EV_TX ($(kv "$FOUND" tx_bytes) bytes, hash round-tripped through getTransaction)"
+      else
+        bad "block $EV_BLOCK holds the account, but the transaction in it was not isolated"
+        note "$(kv "$FOUND" note)"
+      fi
+    else
+      bad "the change is on chain but no block in $H0..$H1 holds that account"
+    fi
   fi
 fi
 
@@ -578,6 +683,31 @@ fi
 # And the decode, not just the ownership: a claim record must refuse to come out
 # of an account that holds none.
 control_a_no_record "$GHOST_PDA" "${PDA:-}"
+
+# CONTROL C — section 2's reader must be capable of saying "claimed". Section 2
+# passes by reading eight zeros off the watched account, and eight zeros is also
+# what this chain answers for an address that was mistyped, for a PDA derived
+# under some other program, and for anything nobody has ever written. "Nothing is
+# there" is therefore the reader's DEFAULT answer, and a check whose passing
+# condition is the default is not obviously reading anything at all.
+#
+# So the same two calls run again — `owner_of` then `owner_state` — on the same
+# account, now that a claim has been written to it, and are required to reach the
+# opposite verdict. That is the pair section 2 would have had to fail: if this
+# says `unclaimed` too, then section 2's OK was the reader's default and this run
+# proved nothing about the account being free.
+if [ "$FIRED" = "1" ]; then
+  AFTER_OWNER=$(owner_of "$PDA")
+  AFTER_STATE=$(owner_state "$AFTER_OWNER")
+  printf '  %-30s %s\n' "the same account, now claimed" "$PDA"
+  if [ "$AFTER_STATE" = claimed ]; then
+    ok "control C: the section-2 reader calls it $AFTER_STATE now, so its 'unclaimed' was a reading"
+  else
+    bad "control C: with a claim written to it the section-2 reader still calls it $AFTER_STATE"
+  fi
+else
+  bad "control C: nothing was claimed, so the section-2 reader was never shown able to say so"
+fi
 
 # CONTROL B — the payload check must be capable of failing. The same comparison
 # that passed in section 5 is run against an alert with one field changed, and
