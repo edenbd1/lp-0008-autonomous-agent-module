@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -334,6 +335,21 @@ private:
     /// it goes through @ref registerSkill, which takes one.
     StdLogosResult installBuiltinSkills(logos::agent::SkillPorts ports);
 
+    /// **The store the skills are actually using**, which is the caller's when
+    /// it wired one through `SkillPorts::tasks` and this module's own otherwise.
+    ///
+    /// Every durability path goes through here rather than naming `tasks_`, and
+    /// that is the whole point of the method. `installBuiltinSkills` hands the
+    /// task skills `ports.tasks ? *ports.tasks : tasks_`; the snapshot port, the
+    /// recovery restore and @ref checkpointTasks used to name `tasks_`
+    /// unconditionally. A host that wired its own store — which the header of
+    /// `SkillPorts::tasks` tells it to do precisely when it "has to survive a
+    /// restart" — therefore got the empty module store snapshotted, recovery
+    /// restored into a store nothing reads, and its real pending tasks written
+    /// down nowhere at all. Silently: an agent that persists the wrong store and
+    /// an agent that persists the right one look identical until the restart.
+    logos::agent::TaskStore &taskStore();
+
     /// Write the task store down if it has moved since the last write.
     ///
     /// Called after every @ref invoke rather than from inside the three task
@@ -342,7 +358,13 @@ private:
     /// exactly the third-party skill this module's usability criterion invites
     /// people to write. The comparison against the last written snapshot is what
     /// keeps that from being an fsync per call.
-    void checkpointTasks();
+    ///
+    /// Returns the reason the write failed, or empty for "written" and for
+    /// "there was nothing to write". @ref invoke reports a non-empty answer to
+    /// its caller instead of swallowing it: the skill's work happened, the
+    /// record of it did not, and a caller told `ok:true` for a task that the
+    /// next restart will not find has been told the one thing that is not true.
+    std::string checkpointTasks();
 
     /// `{"path":…,"recovery":…,…}` for `meta.status`, or empty when this module
     /// was never given a directory to write to.
@@ -459,6 +481,15 @@ private:
     /// Declared before `skills_` so it is destroyed after them: the three task
     /// skills and `meta.status` hold a reference to whichever store is in use.
     logos::agent::TaskStore tasks_;
+    /// The store `registerBuiltinSkills` handed the task skills, when a caller
+    /// supplied one. Null means `tasks_`. See @ref taskStore.
+    ///
+    /// Atomic rather than under `mutex_` because the two locks it sits between
+    /// are different ones: `installBuiltinSkills` writes it while holding
+    /// nothing, and `checkpointTasks` reads it under `durableMutex_`. A pointer
+    /// that is written once, before the store it names is reachable through any
+    /// skill, needs the publication and not the exclusion.
+    std::atomic<logos::agent::TaskStore *> activeTasks_{nullptr};
     std::map<std::string, std::shared_ptr<logos::agent::ISkill>> skills_;
     std::string ownerAddress_;
     std::string policyHashHex_;
@@ -517,6 +548,12 @@ private:
     /// The snapshot text last written, so a checkpoint that would rewrite the
     /// same bytes does not.
     std::string lastSaved_;
+    /// The snapshot text last *attempted*, which is not the same thing once a
+    /// save has failed: `lastSaved_` deliberately stays behind so the write is
+    /// retried, and without this every later call — `meta.status` included —
+    /// would be told about a loss that belonged to the call before it. See
+    /// @ref checkpointTasks.
+    std::string lastAttempted_;
     /// The last failed save, if any. Reported rather than thrown: the work the
     /// skill did really did happen, and the thing that failed is the record of
     /// it — which is exactly what an operator needs told.

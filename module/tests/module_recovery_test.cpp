@@ -413,6 +413,147 @@ int main()
               "while a second task does");
     }
 
+    std::printf("\nthe store the HOST wired is the store that gets written down\n");
+    {
+        // `SkillPorts::tasks` exists for exactly one deployment, and its own
+        // documentation names it: "a host that has to survive a restart owns the
+        // store, restores it before registration, and passes it here". So that
+        // host is the one caller for whom the durability half has to be right —
+        // and it was the one caller for whom it was wrong. Registration handed
+        // the task skills `*ports.tasks`; the snapshot port, the recovery
+        // restore and the checkpoint all named the module's own `tasks_`. The
+        // module therefore compared an empty store against an empty snapshot
+        // after every call, found nothing had moved, and wrote NOTHING, ever,
+        // while `meta.status` — reading the same store the skills use — kept
+        // reporting the pending tasks. Losing everything and having nothing look
+        // alike from outside; this is that failure with the host's store in it.
+        const std::string dir = scenarioDir("hoststore");
+        {
+            TaskStore hostStore;
+            AgentModuleImpl m;
+            m._logosCoreSetContext_("/modules/agent", "agent-1", dir);
+            SkillPorts ports;
+            ports.task = workingTransport();
+            ports.tasks = &hostStore;
+            check(m.registerBuiltinSkills(ports).success,
+                  "the module wires its built-ins to the store the host owns");
+            check(m.configure("owner-1", kPolicy).success, "and binds to an owner");
+            check(m.start().success, "and starts");
+
+            check(parsed(openTask(m, "task-1")).value("ok", false), "a task is opened");
+            check(parsed(openTask(m, "task-2")).value("ok", false), "and a second one");
+            // The premise of everything below: the skills really are using the
+            // host's store, so a snapshot of the module's own store would be a
+            // snapshot of the wrong thing rather than of nothing in particular.
+            check(hostStore.size() == 2,
+                  "both land in the HOST's store, which is where the skills were pointed");
+
+            check(fileExists(snapshotPath(dir)),
+                  "and the snapshot exists at all: the store that moved is the store checkpointed");
+            const std::string written = readFile(snapshotPath(dir));
+            check(mentions(written, "task-1") && mentions(written, "task-2"),
+                  "with both tasks in it, not an empty rendering of a store nothing uses");
+        }
+        {
+            // The restart, with a *fresh* host store — nothing in this process
+            // remembers anything. Recovery has to restore into the store the
+            // skills will be reading, or the agent comes up empty while its
+            // snapshot file sits there full of tasks.
+            TaskStore hostStore;
+            AgentModuleImpl m;
+            m._logosCoreSetContext_("/modules/agent", "agent-1", dir);
+            SkillPorts ports;
+            ports.task = workingTransport();
+            ports.tasks = &hostStore;
+            m.registerBuiltinSkills(ports);
+            m.configure("owner-1", kPolicy);
+            check(m.start().success, "the restarted module starts");
+            check(hostStore.size() == 2,
+                  "and recovery restored into the HOST's store, not into the module's own");
+            const TaskCounts after = counts(m);
+            check(after.total == 2 && after.active == 2,
+                  "so the agent comes back serving both pending tasks");
+        }
+    }
+
+    std::printf("\na save that fails is reported to the caller who lost something\n");
+    {
+        // `invoke` used to swallow this: the save error went into
+        // `lastSaveError_`, `meta.status` grew a `last_save_error` field, and
+        // the call itself answered `ok:true` for a task whose record was never
+        // written. The caller — the only party in a position to retry, to
+        // refuse, or to tell a human — was the one party not told.
+        const std::string dir = scenarioDir("savefail");
+        AgentModuleImpl m;
+        m._logosCoreSetContext_("/modules/agent", "agent-1", dir);
+        SkillPorts ports;
+        ports.task = workingTransport();
+        m.registerBuiltinSkills(ports);
+        m.configure("owner-1", kPolicy);
+        check(m.start().success, "the module starts against an empty directory");
+        check(parsed(openTask(m, "task-1")).value("ok", false),
+              "a first task is opened while the disk works");
+        const unsigned long long good = snapshotInode(snapshotPath(dir));
+        check(good != 0, "and is on disk");
+
+        // Break the write, and break it in a way that does not depend on who is
+        // running the suite. `TaskPersistence` writes `<path>.tmp` and renames
+        // it over the target; `open(2)` for writing on a DIRECTORY is EISDIR for
+        // root as well, where a chmod would simply be ignored.
+        check(::mkdir((snapshotPath(dir) + ".tmp").c_str(), 0700) == 0,
+              "the temp file every save must go through is made impossible to write");
+
+        const json broken = parsed(openTask(m, "task-2"));
+        check(broken.value("ok", true) == false,
+              "the call whose record could not be written does NOT come back ok");
+        check(mentions(broken.value("error", std::string{}), "could not be written") &&
+                  mentions(broken.value("error", std::string{}), "restart from here loses it"),
+              "and says what was lost — the record, not the work — in those terms");
+        check(broken.value("durable", true) == false,
+              "with a machine-readable `durable:false` beside the prose");
+        check(!broken.value("durability_error", std::string{}).empty(),
+              "and the underlying reason, which is the part an operator has to act on");
+        // The work DID happen, and an answer that hid that would send the caller
+        // to retry a task the peer has already been sent — which for a priced
+        // task is the expensive direction to be wrong in.
+        check(broken.value("task_id", std::string{}) == "task-2" &&
+                  broken.value("state", std::string{}) == "submitted",
+              "while keeping the skill's own answer underneath, because the work happened");
+        check(counts(m).active == 2, "the task really is in the store, unwritten");
+        check(snapshotInode(snapshotPath(dir)) == good,
+              "and the last good snapshot is untouched: a failed save destroys nothing");
+        check(!durability(m).value("last_save_error", std::string{}).empty(),
+              "meta.status reports it too, for the operator who arrives later");
+
+        // A read-only call is not failed by somebody else's unwritten change.
+        // It retries the write — that retry is how the state lands when the disk
+        // comes back — but it has lost nothing itself, and failing the very
+        // diagnostic an operator opens *because* the disk is broken helps nobody.
+        check(parsed(m.invoke("meta.status", "{}")).value("ok", false),
+              "a call that changes nothing still answers, on the same broken disk");
+        check(parsed(m.invoke("wallet.balance", "{}")).value("ok", true) == false,
+              "and an unwired skill still refuses for its OWN reason, not for the disk's");
+
+        // Not just the first one. A second change while the disk is still broken
+        // is a second thing lost, and is reported as one.
+        const json brokenAgain = parsed(openTask(m, "task-3"));
+        check(brokenAgain.value("ok", true) == false && brokenAgain.value("durable", true) == false,
+              "a further change while the disk is still broken is reported too");
+
+        // The control that makes all of the above mean something: put the write
+        // path back, and the module goes green again by itself.
+        check(::rmdir((snapshotPath(dir) + ".tmp").c_str()) == 0, "the write path is restored");
+        const json fixed = parsed(openTask(m, "task-4"));
+        check(fixed.value("ok", false), "and the next task is recorded and reported ok");
+        check(snapshotInode(snapshotPath(dir)) != good, "the snapshot is written again");
+        check(durability(m).value("last_save_error", std::string{}).empty(),
+              "and the reported error is cleared rather than left standing");
+
+        const std::string recovered = readFile(snapshotPath(dir));
+        check(mentions(recovered, "task-2") && mentions(recovered, "task-3"),
+              "with the changes the broken interval could not write, since the retry caught up");
+    }
+
     std::printf("\nabove-threshold spends, and the owner who is not there\n");
     {
         // The module's own owner channel: an event out, `approveSpend` back.
@@ -581,7 +722,7 @@ int main()
 // checks noticed. Recorded because a test nobody has tried to break is a test
 // nobody has checked.
 //
-//   never construct TaskPersistence (the state before this change) ....... 16
+//   never construct TaskPersistence (the state before this change) ....... 29
 //   checkpoint nothing after invoke ...................................... 11
 //   start anyway on a snapshot that could not be read .....................  4
 //   treat a failed load as a fresh start ..................................  4
@@ -589,6 +730,15 @@ int main()
 //   wire the owner channel even when the module is not hosted .............  1
 //   accept an approval for a request nobody is waiting on .................  2
 //   leave the correlation id in the table after the spend .................  1
+//   the durability half names `tasks_` instead of the store the skills
+//     were wired to (`taskStore()` -> `tasks_`) ...........................  4
+//   swallow the save error again, so `invoke` answers ok:true for work
+//     whose record was never written .....................................   5
+//
+// The first row and the last two were measured against the suite as it stands.
+// The six in between were measured before the last two scenarios were added and
+// are therefore floors rather than current counts: a suite that grew can only
+// notice a mutation more.
 //
 // One caveat, recorded because this list exists to admit them. "A call that
 // changes nothing rewrites nothing" was written as a comparison of the file's

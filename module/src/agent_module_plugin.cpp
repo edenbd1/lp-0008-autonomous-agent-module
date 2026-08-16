@@ -85,6 +85,12 @@ constexpr const char *kModuleVersion = "0.1.0";
 AgentModuleImpl::AgentModuleImpl() = default;
 AgentModuleImpl::~AgentModuleImpl() = default;
 
+logos::agent::TaskStore &AgentModuleImpl::taskStore()
+{
+    logos::agent::TaskStore *const wired = activeTasks_.load(std::memory_order_acquire);
+    return wired ? *wired : tasks_;
+}
+
 void AgentModuleImpl::onContextReady()
 {
     // The host provisions this; a module loaded outside one (a unit test, the
@@ -96,10 +102,14 @@ void AgentModuleImpl::onContextReady()
         return;
     }
 
+    // Through `taskStore()` and not `tasks_`, and resolved at CALL time rather
+    // than captured here: this hook can fire either side of
+    // `registerBuiltinSkills`, so a reference taken now would name the module's
+    // own store even for a host that wires one a moment later.
     logos::agent::TaskStorePort port;
-    port.snapshot = [this] { return tasks_.snapshot(); };
+    port.snapshot = [this] { return taskStore().snapshot(); };
     port.restore = [this](const std::string &snapshotJson, std::string &err) {
-        return tasks_.restore(snapshotJson, err);
+        return taskStore().restore(snapshotJson, err);
     };
 
     std::lock_guard<std::mutex> lock(durableMutex_);
@@ -169,7 +179,8 @@ StdLogosResult AgentModuleImpl::start()
                                 ". Refusing to start with an empty task list on top of a "
                                 "snapshot that could not be read";
             } else {
-                lastSaved_ = tasks_.snapshot();
+                lastSaved_ = taskStore().snapshot();
+                lastAttempted_ = lastSaved_;
             }
         }
     }
@@ -651,8 +662,10 @@ StdLogosResult AgentModuleImpl::registerBuiltinSkills(logos::agent::SkillPorts p
             return StdLogosResult{false, {}, "the built-in skills must be wired before start()"};
         }
         // Once, for the same reason `registerSkill` refuses a duplicate name: a
-        // second wiring cannot replace the first, so it would only ever be
-        // twenty-two refusals reported as a failure to register.
+        // second wiring cannot replace the first, so it would only ever be one
+        // refusal per built-in skill, reported as a failure to register. The
+        // count is deliberately not written here: it was "twenty-two" and the
+        // registry has been 28 for some time.
         if (builtinsClaimed_) {
             return StdLogosResult{false, {}, "the built-in skills are already registered"};
         }
@@ -1068,6 +1081,12 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     // The caller's store when it owns one — it is the half that has to survive a
     // restart — and the module's own otherwise.
     TaskStore &tasks = ports.tasks ? *ports.tasks : tasks_;
+    // Published to the durability half in the same breath, because that half
+    // used to name `tasks_` on its own and the two then disagreed about which
+    // store the agent even had. Written before the skills below are constructed
+    // and long before any of them is reachable through `invoke`, so a checkpoint
+    // can never see the wrong store for work the new skills did.
+    activeTasks_.store(ports.tasks, std::memory_order_release);
 
     const std::vector<std::shared_ptr<logos::agent::ISkill>> builtins{
         // Messaging, over Logos Delivery.
@@ -1222,12 +1241,33 @@ std::string AgentModuleImpl::invoke(const std::string &name, const std::string &
     }
 
     std::string result;
+    std::string threw;
     try {
         result = skill->invoke(paramsJson);
     } catch (const std::exception &e) {
-        return fail("skill '" + name + "' threw: " + e.what());
+        threw = "skill '" + name + "' threw: " + e.what();
     } catch (...) {
-        return fail("skill '" + name + "' threw");
+        threw = "skill '" + name + "' threw";
+    }
+    if (!threw.empty()) {
+        // The checkpoint happens on this path too, and it did not used to: the
+        // `return` was taken from inside the catch, straight past it.
+        //
+        // A skill that throws can perfectly well have moved the task store
+        // first — `agent.task` opens the task and *then* addresses a transport —
+        // and that change was left on nobody's disk until some unrelated later
+        // call happened to notice the store had moved and write it. A restart in
+        // between lost it silently, which is the exact failure the durability
+        // half of this module exists to prevent, arriving through the one door
+        // nobody was watching. "Isolated" has to mean a failing skill costs that
+        // skill its own entry — not that it costs the store its durability.
+        const std::string saveError = checkpointTasks();
+        if (!saveError.empty()) {
+            threw += ". It had already moved the task store, and that change could not be "
+                     "written down either: " +
+                     saveError;
+        }
+        return fail(threw);
     }
 
     // Pass the skill's own answer through, but only once it is known to be JSON.
@@ -1255,33 +1295,83 @@ std::string AgentModuleImpl::invoke(const std::string &name, const std::string &
     // Whatever the skill did to the task store, write it down before the answer
     // leaves the module. A crash between the reply and the next checkpoint is
     // the window this closes.
-    checkpointTasks();
-    return result;
+    const std::string saveError = checkpointTasks();
+    if (saveError.empty()) {
+        return result;
+    }
+
+    // The record did not get written, and the answer must say so rather than
+    // pass the skill's `ok:true` through. Both halves are true and both are
+    // reported: the work HAPPENED — a message went out, a task was opened, a
+    // payment may have settled — and it is not durable, so the next restart
+    // will not know about it. A caller told only the first half will act on a
+    // task the agent is about to forget; one told only the second would retry
+    // work that was already done, which for a priced task is the expensive
+    // mistake. Hence the skill's own fields are kept underneath.
+    //
+    // A checkpoint only runs at all when the store MOVED, so a read-only call
+    // — `meta.status`, `wallet.balance` — is never failed by a disk that
+    // cannot be written to. The diagnostic that reports the problem keeps
+    // answering while the problem is happening.
+    json annotated =
+        answer.is_object() ? answer : json{{"result", answer}};
+    annotated["ok"] = false;
+    annotated["durable"] = false;
+    annotated["durability_error"] = saveError;
+    annotated["error"] =
+        "skill '" + name + "' did its work, and the record of it could not be written to " +
+        [this] {
+            std::lock_guard<std::mutex> lock(durableMutex_);
+            return durable_ ? durable_->path() : std::string("the task snapshot");
+        }() +
+        ": " + saveError +
+        ". The work is done and is NOT durable: a restart from here loses it";
+    return dumpSafe(annotated);
 }
 
-void AgentModuleImpl::checkpointTasks()
+std::string AgentModuleImpl::checkpointTasks()
 {
     std::lock_guard<std::mutex> lock(durableMutex_);
     if (!durable_) {
-        return;
+        return {};
     }
-    // The store's own rendering, compared against what was last written. Two
-    // calls that changed nothing — `meta.status`, a refused `agent.task` — cost
-    // a snapshot and no fsync.
-    std::string current = tasks_.snapshot();
+    // The store's own rendering — whichever store the skills were wired to, see
+    // `taskStore()` — compared against what was last written. Two calls that
+    // changed nothing — `meta.status`, a refused `agent.task` — cost a snapshot
+    // and no fsync.
+    std::string current = taskStore().snapshot();
     if (current == lastSaved_) {
-        return;
+        return {};
     }
     std::string err;
     if (!durable_->save(err)) {
-        // Not propagated to the caller: the skill's work happened, and what
-        // failed is the record of it. Reported through `meta.status`, which is
-        // where an operator looks after the restart that lost something.
         lastSaveError_ = err;
-        return;
+        // Reported to the CALLER THAT LOST SOMETHING, and to that one only.
+        //
+        // Kept in `lastSaveError_` for `meta.status`, which is where an operator
+        // looks after the restart that lost something — and *returned*, which it
+        // did not used to be. Reporting it only in a diagnostic nobody is
+        // reading at the time meant `invoke` answered `ok:true` for a task whose
+        // record was never written, so the one caller in a position to retry,
+        // refuse or tell a human was the one caller not told.
+        //
+        // The comparison against the last *attempted* bytes is what keeps that
+        // from turning into "everything fails once the disk does". A failed save
+        // leaves `lastSaved_` stale by construction, so every later call finds
+        // the store moved and tries again — correctly, since that retry is how
+        // the state gets written when the disk comes back. But a `meta.status`
+        // retrying somebody else's unwritten change has itself lost nothing, and
+        // failing the diagnostic an operator is reading *because* the disk is
+        // broken helps nobody. So a retry of bytes already attempted is silent,
+        // and a call that added something new to the unwritten pile is not.
+        const bool lostSomethingNew = current != lastAttempted_;
+        lastAttempted_ = std::move(current);
+        return lostSomethingNew ? err : std::string{};
     }
     lastSaveError_.clear();
+    lastAttempted_ = current;
     lastSaved_ = std::move(current);
+    return {};
 }
 
 std::string AgentModuleImpl::durabilityJson() const
