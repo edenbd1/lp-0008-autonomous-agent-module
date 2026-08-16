@@ -76,6 +76,10 @@ export SPEL_BIN=$PWD/vendor/spel/target/release/spel   # or any spel on PATH
 ./scripts/use-cases/01-file-vault.sh
 
 # needs the Storage library and the LEZ wallet. Writes one transaction.
+# It must be the wallet built from a logos-execution-zone checkout
+# (cargo build --release -p wallet), not any binary called `wallet`: this use
+# case turns a document into a signing key and imports it, and a stock build has
+# no `account import`. The script probes for that subcommand and says so.
 export WALLET_BIN=/path/to/wallet
 ./scripts/use-cases/04-privacy-notary.sh
 # re-check every notarisation ever made, without writing anything:
