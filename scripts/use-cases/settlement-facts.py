@@ -166,10 +166,28 @@ def main():
     # it claims to have found must occur, exactly once, at the offset it was
     # read from — otherwise the layout has drifted and every number below it is
     # arithmetic on the wrong bytes.
+    #
+    # "Exactly once" is half of that sentence and it was the half nothing
+    # checked. `find` reports the FIRST occurrence and stops, so a second copy
+    # of the same 32 bytes further into the transaction agreed with this loop
+    # perfectly — and a duplicated id is precisely the state in which the offset
+    # this parse read the account from is one of two candidates and the parse
+    # cannot say which of them the balance beside it belongs to. A comment is a
+    # specification; this one had a clause the code did not implement.
+    #
+    # It is not a clause that costs anything on correct data: measured against
+    # all fifteen settlements recorded in artifacts/a2a-task.tsv and
+    # artifacts/shielded-settlement.tsv, every account id occurs exactly once in
+    # every transaction, at the offset the parse read it from.
     for u in updates:
         first = raw.find(u["account"])
         if first != u["offset"]:
             emit("error", "update_at_%d_but_its_id_occurs_at_%d" % (u["offset"], first))
+            return 1
+        seen = raw.count(u["account"])
+        if seen != 1:
+            emit("error", "the_id_of_the_update_at_%d_occurs_%d_times"
+                 % (u["offset"], seen))
             return 1
 
     # The policy ledger, FOUND rather than named. A settlement's post-state
@@ -183,8 +201,28 @@ def main():
     # `ledger_account` is emitted so a caller can partition settlements by the
     # ledger they charged: a running total is only comparable against another
     # total from the same account.
-    ledger = next((u for u in updates if policy_fields(u["data"])), None)
-    if ledger is not None:
+    #
+    # "EXACTLY ONE" IS ASSERTED HERE RATHER THAN ASSUMED. This was
+    # `next((u for u in updates if policy_fields(u["data"])), None)`, which takes
+    # the first record and never learns whether there was a second — under a
+    # paragraph whose first sentence is "A settlement's post-state carries
+    # exactly one 97-byte record with version byte 1". Two records mean the
+    # caller is being handed one envelope's running total for a transaction that
+    # charged two, with nothing in the output saying so; the same decoder in
+    # scripts/submission-evidence.py has refused that case all along ("a
+    # settlement charges one envelope") and this one did not.
+    #
+    # The count is also emitted when it is zero. A caller reading `ledger_spent`
+    # out of these lines could not previously tell a transaction that wrote no
+    # ledger from one this script declined to describe; silence is not a value,
+    # and `ledger_records=0` is.
+    ledgers = [u for u in updates if policy_fields(u["data"])]
+    emit("ledger_records", len(ledgers))
+    if len(ledgers) > 1:
+        emit("error", "the_post_state_holds_%d_policy_records" % len(ledgers))
+        return 1
+    if ledgers:
+        ledger = ledgers[0]
         emit("ledger_account", b58encode(ledger["account"]))
         for k, v in policy_fields(ledger["data"]).items():
             emit("ledger_%s" % k, v)

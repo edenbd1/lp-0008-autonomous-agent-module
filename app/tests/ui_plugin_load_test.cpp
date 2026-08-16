@@ -41,9 +41,12 @@
 // code is the result.
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPluginLoader>
+#include <QPointer>
 #include <QString>
 #include <QWidget>
 
@@ -226,20 +229,63 @@ int main(int argc, char **argv)
                       widget->objectName()));
         check(widget->objectName() == QLatin1String("lp0008AgentConsole"),
               QStringLiteral("and it is this plugin's console, not some other widget"));
-        // WHAT THIS LINE DOES AND DOES NOT ESTABLISH, said here because it used
-        // to be `check(true, …)` — an assertion that cannot fail, whose only
-        // real content was that the process had not aborted on the call above.
-        // It now asserts the two pointers the round trip is about, which is
-        // still weak: `destroyWidget` returns void, so a leak or a double-free
-        // is not visible from here, and nothing stronger is asserted because
-        // this harness needs a QApplication and the built UI plugin and has not
-        // been watched running against a deliberately broken destroyWidget. By
-        // this repository's own standard a guard nobody has watched fail is not
-        // a guard, and inventing one that has never been run would be the same
-        // mistake in a new place. What it is NOT is a tautology any longer.
+
+        // THIS USED TO BE `check(widget != nullptr && component != nullptr, …)`,
+        // AND BEFORE THAT `check(true, …)`, AND THE TWO ARE THE SAME ASSERTION.
+        //
+        // `widget` is non-null because this whole block is inside `if (widget)`;
+        // `component` is non-null because the harness returned at the cast six
+        // lines above if it was not; and `destroyWidget` takes its argument by
+        // value, so it cannot make either of them null. There was no input,
+        // reachable or otherwise, that turned that line red. Its own comment
+        // admitted the weakness ("a leak or a double-free is not visible from
+        // here") and then claimed "what it is NOT is a tautology any longer",
+        // which was the part that was wrong.
+        //
+        // Watched failing before it was believed, which is what the old comment
+        // said had not been done: a stub `ui` plugin was built carrying this
+        // IID, this manifest and a `createWidget` returning a widget named
+        // `lp0008AgentConsole`, with a `destroyWidget` whose body is empty — the
+        // widget is never taken back, never parented and never deleted. The old
+        // line printed `ok` against it.
+        //
+        // A guarded pointer is what makes the leak visible. `QPointer` is set to
+        // null by the QObject destructor itself, so the assertion below is about
+        // the object's lifetime rather than about the pointer the caller still
+        // holds, and an empty `destroyWidget` leaves it non-null. The plugin
+        // takes the widget back with `deleteLater()`, which posts an event
+        // rather than deleting, and this harness runs no event loop — so the
+        // deferred deletions are delivered here by hand. Written that way round
+        // deliberately: an implementation that deleted synchronously instead is
+        // equally correct and equally caught, because both are done by the time
+        // `sendPostedEvents` returns.
+        QWidget *kept = component->createWidget(nullptr);
+        QPointer<QWidget> handedBack(widget);
+        QPointer<QWidget> neverHandedBack(kept);
+        check(!handedBack.isNull() && !neverHandedBack.isNull(),
+              QStringLiteral("two widgets from the same vtable, both alive before either "
+                             "is handed back"));
+
         component->destroyWidget(widget);
-        check(widget != nullptr && component != nullptr,
-              "destroyWidget accepts it back, and returns to a live component");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        check(handedBack.isNull(),
+              QStringLiteral("destroyWidget really took it back — the guarded pointer to "
+                             "it is null, so the console was destroyed rather than leaked"));
+        // The control, and it is the half that makes the line above mean
+        // something: the same guarded-pointer test, on the widget that was NOT
+        // handed over, has to come out the other way. Without it, a `QPointer`
+        // that nulled itself for some reason of its own would read as a working
+        // destroyWidget.
+        check(!neverHandedBack.isNull(),
+              QStringLiteral("while the one that was not handed over is still alive — the "
+                             "same assertion, opposite input, opposite verdict"));
+
+        // And then it goes the same way, so this harness leaks nothing either.
+        component->destroyWidget(kept);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        check(neverHandedBack.isNull(),
+              QStringLiteral("and it is destroyed too once it is handed over, which is the "
+                             "same call reaching the same verdict on the same input"));
     }
 
     if (failures == 0) {

@@ -105,7 +105,17 @@ openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
 CIPHER_SHA=$(shasum -a 256 "$WORK/secret.enc" | cut -d' ' -f1)
 echo "  aes-256-cbc, pbkdf2 200000 iterations, a 32-byte key made for this run"
 echo "  sha256  $CIPHER_SHA"
-if [ "$CIPHER_SHA" != "$PLAIN_SHA" ]; then ok "the ciphertext is not the plaintext"
+# THE CIPHERTEXT HAS TO EXIST BEFORE IT CAN BE COMPARED. Both verdicts in this
+# section are satisfied by a zero-byte file: sha256 of nothing is not sha256 of
+# the document, so "not the plaintext" passes, and the marker is not in an empty
+# file either, so "the marker does not appear" passes too. `openssl … || die`
+# above catches a non-zero exit, and step 5's `[ -s retrieved.enc ]` catches the
+# rest — so the SCRIPT could not go green on this, but these two lines could,
+# and a check that reads true on an absence is not saying what it appears to.
+# The size is asserted here rather than left to a later section to notice.
+if [ ! -s "$WORK/secret.enc" ]; then
+  bad "openssl produced no ciphertext at all, so nothing below is a comparison"
+elif [ "$CIPHER_SHA" != "$PLAIN_SHA" ]; then ok "the ciphertext is not the plaintext"
 else bad "the 'ciphertext' hashes to the same thing as the plaintext"; fi
 # The grep has to be shown to be capable of finding the marker, or "not found in
 # the ciphertext" is equally consistent with a grep that finds nothing anywhere.

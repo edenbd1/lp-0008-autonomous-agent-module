@@ -49,9 +49,11 @@ if [ -z "$lgx" ] || [ ! -x "$lgx" ]; then
 fi
 
 plugin=""
+pluginext=""
 for ext in dylib so dll; do
     if [ -f "$build/modules/agent_plugin.$ext" ]; then
         plugin="$build/modules/agent_plugin.$ext"
+        pluginext="$ext"
         break
     fi
 done
@@ -228,18 +230,113 @@ done
 # linker can no longer tell us what the binary needs, so the *name it will ask
 # for* is read out of the binary instead, and every name that is in there has to
 # be in the package.
-missing=""
-for wanted in liblogosdelivery.dylib liblogosdelivery.so libstorage.dylib libstorage.so; do
-    strings -a "$plugin" 2>/dev/null | grep -qxF "$wanted" || continue
-    [ -f "$stage/$variant/$wanted" ] || missing="$missing $wanted"
+# THIS CHECK HAD NEVER MATCHED ANYTHING, and the reason is written down one file
+# over. It looked for the four whole file names —
+#
+#     for wanted in liblogosdelivery.dylib liblogosdelivery.so \
+#                   libstorage.dylib libstorage.so; do
+#         strings -a "$plugin" | grep -qxF "$wanted" || continue
+#
+# — and `module/src/delivery_runtime.cpp:110` explains, deliberately, why no such
+# string is in the binary: the full name is COMPOSED at run time from a 16-byte
+# stem and a 3- or 6-byte suffix, precisely so that `check-package-fresh.py`'s
+# ">= 8 bytes" literal search can corroborate the stem rather than a suffix from
+# a branch this build did not compile. So `grep -qxF liblogosdelivery.dylib`
+# missed, `|| continue` skipped, all four names skipped, `missing` stayed empty,
+# and the line below printed. Measured against the committed artefact, unpacked
+# out of `module/agent.lgx`, with a staging directory holding the plugin and
+# NOTHING ELSE:
+#
+#     $ ls stage/darwin-arm64
+#     agent_plugin.dylib
+#     $ …
+#     ok    every library the plugin opens by name at run time is in the package
+#
+# — the package carried no library at all and the check that exists to say so
+# said the opposite. `strings -a` on the same binary does find `liblogosdelivery`
+# (line 773 of its output) and finds no name with an extension on it.
+#
+# Three things follow, and none of them weakens the check.
+#
+#   * The STEM is what is searched for, because the stem is what is in the
+#     binary, and the file required in the package is the stem plus THIS
+#     platform's suffix — the one taken from the plugin that was found above,
+#     not guessed.
+#   * `strings` itself is a prerequisite of the check rather than a way of
+#     passing it. Its absence used to be indistinguishable from a clean result:
+#     the pipeline failed, `|| continue` skipped every name, and the same green
+#     line printed. Measured in a stock `ubuntu:24.04` — the image
+#     `scripts/harness-no-toolchain.sh` uses, where binutils is not installed —
+#     the identical fragment printed the same "ok" for the same empty package.
+#   * The pairing runs in BOTH directions and neither of them is vacuous. Every
+#     library the build staged must be one the plugin actually asks for — a copy
+#     of the wrong file is exactly as unloadable as no copy — and every stem the
+#     plugin asks for that the build DID produce must be in the package. A stem
+#     the plugin names and this build has no library for is the documented Linux
+#     state (docs/basecamp.md: upstream publishes no `liblogosdelivery.so` and
+#     never has, so the plugin carries the code path and finds nothing to open),
+#     and it is now printed as the state it is instead of passing in silence.
+#
+# The first direction is also the control for the matcher. A run that says "the
+# plugin asks for liblogosdelivery" is a run in which this `grep -qxF`
+# demonstrably matched something, so the green line below cannot be the result of
+# a search that found nothing — which is what the green line below used to be.
+command -v strings >/dev/null 2>&1 || {
+    echo "  FAIL  no 'strings' on PATH, so the names this plugin opens at run" >&2
+    echo "        time cannot be read out of it. That is not a clean result, it" >&2
+    echo "        is no result: install binutils (or Xcode command line tools)." >&2
+    exit 1; }
+pluginstrings="$(strings -a "$plugin" 2>/dev/null)"
+[ -n "$pluginstrings" ] || {
+    echo "  FAIL  'strings' read no text at all out of $plugin, so the checks" >&2
+    echo "        below would pass by examining nothing." >&2
+    exit 1; }
+# A HERE-STRING AND NOT A PIPE, and this is the second reason the old check could
+# never fire — the first being that it looked for a name no binary contains.
+# `strings … | grep -q` is wrong under the `set -o pipefail` at the top of this
+# script: grep exits at its first match, `strings` dies of SIGPIPE, and the
+# pipeline reports 141. Measured on the committed `linux-amd64` plugin, whose
+# strings do contain the stem:
+#
+#     liblogosdelivery: pipeline said 141 -> treated as not found
+#     libstorage:       pipeline said 1   -> treated as not found
+#
+# — the same status for a name that is there and a name that is not, so a match
+# found EARLY in the output was indistinguishable from no match at all. That is
+# the identical trap `app/package-ui.sh` records having hit and fixed in its
+# `nm`/`liblogos_core` symbol check; the fix here is the same one, for the same
+# reason, and it is why the strings are read into a variable once above.
+asks_for() { grep -qxF -- "$1" <<<"$pluginstrings"; }
+
+# Direction 1: nothing rides along that the plugin does not open.
+for shipped in "$stage/$variant"/*."$pluginext"; do
+    [ -f "$shipped" ] || continue
+    name="$(basename "$shipped")"
+    if [ "$name" = "$(basename "$plugin")" ]; then continue; fi
+    asks_for "${name%.*}" || {
+        echo "  FAIL  the package carries $name and the plugin never asks for" >&2
+        echo "        '${name%.*}' by name, so nothing here pairs the two. Either" >&2
+        echo "        the library is dead weight or delivery_runtime.cpp's stem" >&2
+        echo "        has moved and the file the host looks for is another one." >&2
+        exit 1; }
+    echo "  ok    the plugin opens '${name%.*}' by name, and $name is in the package"
 done
-if [ -n "$missing" ]; then
-    echo "  FAIL  the plugin opens these by name at run time and the package" >&2
-    echo "        carries none of them, so every skill on the wire would" >&2
-    echo "        refuse in an installation that looks complete:$missing" >&2
-    exit 1
-fi
-echo "  ok    every library the plugin opens by name at run time is in the package"
+
+# Direction 2: nothing the plugin opens is left out of a build that made it.
+for stem in liblogosdelivery libstorage; do
+    if ! asks_for "$stem"; then continue; fi
+    wanted="$stem.$pluginext"
+    if [ -f "$stage/$variant/$wanted" ]; then continue; fi
+    if [ -f "$(dirname "$plugin")/$wanted" ]; then
+        echo "  FAIL  the build produced $wanted beside the plugin and the package" >&2
+        echo "        does not carry it, so every skill on the wire would refuse in" >&2
+        echo "        an installation that looks complete." >&2
+        exit 1
+    fi
+    echo "  <-    the plugin opens '$stem' by name and this build has no $wanted"
+    echo "        to ship, so the installed module will report it absent rather"
+    echo "        than fail to load — see docs/basecamp.md."
+done
 
 # ONE PACKAGE, ONE VARIANT PER PLATFORM — and only one of them is ever built on
 # the machine doing the packaging. So an existing package is ADDED TO, not

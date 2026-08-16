@@ -236,12 +236,37 @@ rule "4. the A2A task lifecycle, driven"
 # chain, no key. Where they are missing this reports that the lifecycle was not
 # driven and prints no states at all, which is the same standard as before: what
 # is not demonstrated is not described.
-if a2a_lifecycle "$ROOT" "$CARD"; then
+#
+# THREE OUTCOMES, because there are three, and this had two. It was
+#
+#     if a2a_lifecycle "$ROOT" "$CARD"; then ok …; else note "not driven" …; fi
+#
+# and `a2a_lifecycle` returned 1 both when it never started the driver and when
+# the driver ran and reported a broken transition. So a genuine regression in
+# `TaskStore` — the store letting a completed task be reopened, or refusing it
+# for the wrong reason, which is the single thing the OK line above claims —
+# printed "the lifecycle was not driven in this run", printed "Nothing above
+# claims a transition that did not happen" underneath a transcript of driven
+# transitions, and let the run finish green. It was demonstrated by rewording
+# the terminal-state refusal in module/src/agent_skills.cpp; the driver caught
+# it and said so, and this branch threw the answer away.
+#
+# A lifecycle that ran and failed is now a failure of this use case, which is
+# what it is: the marketplace's task machinery is the half of A2A this script is
+# named for. Only $A2A_NOT_DRIVEN — set by the paths that give up before the
+# driver is invoked — is allowed to be a note.
+LIFECYCLE_RC=0
+a2a_lifecycle "$ROOT" "$CARD" || LIFECYCLE_RC=$?
+if [ "$LIFECYCLE_RC" -eq 0 ]; then
   ok "the lifecycle ran through TaskStore, ending terminal, with reopen refused"
-else
+elif [ "$LIFECYCLE_RC" -eq "$A2A_NOT_DRIVEN" ]; then
   note "the lifecycle was not driven in this run — see the reason above."
   note "It is covered by module/tests/agent_skills_test.cpp, which CI runs."
   note "Nothing above claims a transition that did not happen."
+else
+  bad "the lifecycle WAS driven through TaskStore and it did not behave as the"
+  bad "binding requires — see the transcript above. This is a defect in the"
+  bad "module's task machinery, not a missing tool on this machine."
 fi
 
 if [ "$SETTLE" = "1" ]; then
@@ -340,7 +365,19 @@ if [ -s "$SETTLEMENTS" ]; then
     TX=$(kv "$R" settlement_tx);        PAY_K=$(kv "$R" server_pay_account)
     CLIENT_K=$(kv "$R" client);         SKILL_K=$(kv "$R" skill)
     REC_BEFORE=$(kv "$R" balance_before); REC_AFTER=$(kv "$R" balance_after)
-    [ -n "$TX" ] || continue
+    # A settlement row with no transaction hash is a recorded payment with no
+    # evidence, and this used to `continue` before SEEN was incremented — so the
+    # row vanished from both counts and the summary line below said "N
+    # settlement(s), each one decoded" about a manifest that held more than N.
+    # The floor at the end only catches a manifest that is entirely empty. CI
+    # compares the printed count against the manifest's row count and would have
+    # caught it; a reviewer running this script by hand, which is what the docs
+    # tell them to do, would not.
+    if [ -z "$TX" ]; then
+      SEEN=$((SEEN + 1))
+      bad "  task $TASK records no settlement_tx, so nothing about it can be checked"
+      continue
+    fi
     SEEN=$((SEEN + 1))
     ROW_OK=1
     echo
@@ -402,8 +439,16 @@ if [ -s "$SETTLEMENTS" ]; then
       # first. A shielded payment is the same instruction against the same
       # account; counting only this file reported a settlement the chain has and
       # the repository does not. lib.sh counts them, by ledger and by block.
-      SB=$(shielded_before "$PROGRAM_HASH" "$(kv "$F" block)" "$LEDGER" "$SH_LEDGER" "$(kv "$F" ledger_period_blocks)")
-      if [ "$SPENT" -eq "$((PRICE_K + SB))" ]; then
+      # ITS REFUSAL IS CHECKED. `shielded_before` prints 0 AND returns 1 when it
+      # cannot bound the sum to a period, and lib.sh's comment says callers chain
+      # it with `&&` — this one did not, so a reading that could not be taken
+      # arrived as the number zero and was added to the price like any other.
+      SB_OK=1
+      SB=$(shielded_before "$PROGRAM_HASH" "$(kv "$F" block)" "$LEDGER" "$SH_LEDGER" "$(kv "$F" ledger_period_blocks)") || SB_OK=0
+      if [ "$SB_OK" -eq 0 ]; then
+        bad "  the shielded spend charged to $LEDGER before this could not be read, so what the ledger should hold here is unknown"
+        ROW_OK=0
+      elif [ "$SPENT" -eq "$((PRICE_K + SB))" ]; then
         if [ "${SB:-0}" -gt 0 ]; then
           ok "  it moved $PRICE_K: its ledger reads $SPENT, $SB of it charged by shielded spend before this"
         else
@@ -484,7 +529,19 @@ if [ -n "$PREV_LEDGER" ]; then
   else
     # Plus anything charged to this same ledger and recorded in another manifest.
     # The ledger counts spends, not rows of this file.
-    SB_TOTAL=$(shielded_before "$PROGRAM_HASH" "$((LIVE_WINDOW + PREV_PB))" "$PREV_LEDGER" "$SH_LEDGER" "$PREV_PB")
+    #
+    # AND ITS REFUSAL IS A FAILURE HERE, which matters more than at the call
+    # above because the comparison this feeds is deliberately permissive in one
+    # direction. `shielded_before` prints 0 and returns 1 when it cannot bound
+    # the sum to a period; this line took the 0 and dropped the 1, so an unread
+    # shielded total made RECORDED too small, LIVE_SPENT came out GREATER than
+    # it, and the run took the "the chain moved, this repository did not" branch
+    # and printed OK. Shown with a ledger whose period cannot be read: the
+    # function returned 1, the caller saw 0, and a total of 9 against 5 recorded
+    # printed "which accounts for every one of the 5 LEZ charged above" while 4
+    # LEZ of it had simply not been counted.
+    SB_OK=1
+    SB_TOTAL=$(shielded_before "$PROGRAM_HASH" "$((LIVE_WINDOW + PREV_PB))" "$PREV_LEDGER" "$SH_LEDGER" "$PREV_PB") || SB_OK=0
     RECORDED=$((SUM + SB_TOTAL))
     # The comparison is bounded in the two directions separately, because they
     # are not the same claim and only one of them is about this repository.
@@ -500,7 +557,9 @@ if [ -n "$PREV_LEDGER" ]; then
     # since, which is the same shape of defect as summing across a period
     # boundary and one this file has already been red for twice. It is reported
     # rather than asserted, and it says which side moved.
-    if [ "$LIVE_SPENT" -eq "$RECORDED" ]; then
+    if [ "$SB_OK" -eq 0 ]; then
+      bad "the shielded spends charged to $PREV_LEDGER in this period could not be read, so $RECORDED is not the figure this ledger should be compared against"
+    elif [ "$LIVE_SPENT" -eq "$RECORDED" ]; then
       if [ "${SB_TOTAL:-0}" -gt 0 ]; then
         ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: $SUM from this manifest, $SB_TOTAL from artifacts/shielded-settlement.tsv"
       else

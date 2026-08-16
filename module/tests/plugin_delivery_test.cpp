@@ -1142,10 +1142,16 @@ int runOwner(const QString &path, const QString &owner, const QString &agent,
     step("5. wait for an agent to ask");
     QJsonObject asked;
     QString id;
+    // Kept, because step 8 needs it. It is the one reply in this run where a
+    // request really is waiting, and it is therefore the opposite input for the
+    // "nothing is waiting for an answer any more" assertion down there — see
+    // the note beside it.
+    QJsonObject whileWaiting;
     for (int i = 0; i < seconds * 2 && id.isEmpty(); ++i) {
         r = call(p, "owner.pending", QStringLiteral("{}"));
         const QJsonArray waiting = r.value("pending").toArray();
         if (!waiting.isEmpty()) {
+            whileWaiting = r;
             asked = waiting.first().toObject();
             id = asked.value("id").toString();
             break;
@@ -1208,8 +1214,28 @@ int runOwner(const QString &path, const QString &owner, const QString &agent,
     std::this_thread::sleep_for(std::chrono::seconds(4));
     r = call(p, "owner.pending", QStringLiteral("{}"));
     note("owner.pending: " + QString::fromUtf8(QJsonDocument(r).toJson(QJsonDocument::Compact)));
-    check(r.value("pending").toArray().isEmpty(),
+    // `contains` first, for exactly the reason the `unverifiable` line at the
+    // bottom of this step already states: `QJsonValue::toArray()` on an ABSENT
+    // key hands back an EMPTY array, so "pending is empty" was equally true of a
+    // reply that carries no `pending` member at all — `{"ok":false,"error":"call
+    // owner.watch first"}` is one, and the empty `QJsonObject` that `call()`
+    // returns for a request which never reached the module is another. Both mean
+    // this app was not answering, which is the opposite of what the line claims.
+    // The key has to BE there, and be an array, before its emptiness can mean
+    // the queue drained.
+    check(r.contains(QStringLiteral("pending")) && r.value("pending").isArray()
+              && r.value("pending").toArray().isEmpty(),
           "nothing is waiting for an answer any more");
+    // The control, and it costs nothing because this run already produced the
+    // opposite input: `whileWaiting` is the `owner.pending` reply from step 5,
+    // taken while the agent's request was still unanswered. The identical
+    // three-part test has to come out FALSE against it — otherwise the line
+    // above is not telling a drained queue from a reply that never had one.
+    check(!(whileWaiting.contains(QStringLiteral("pending"))
+            && whileWaiting.value(QStringLiteral("pending")).isArray()
+            && whileWaiting.value(QStringLiteral("pending")).toArray().isEmpty()),
+          "and the same test said the opposite in step 5, while the request was still "
+          "waiting — so an empty `pending` here is a queue that emptied");
     check(r.value("answered").toArray().size() == 1,
           "and the one that was answered is recorded as answered");
     note(QStringLiteral("frames %1, self-authored and refused %2, ignored %3")

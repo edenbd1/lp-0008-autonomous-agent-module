@@ -252,8 +252,26 @@ build_module() { # name dir impl-header impl-class [extra cmake args...]
       echo "$refs" | grep -v '^@rpath/' >&2
       die "$name: a Qt framework is referenced by absolute path — it resolves here and nowhere else"
     fi
-    printf '%s\n' "$refs" | grep -q '6\.9\.' \
-      || die "$name: the plugin is not linked against Qt 6.9.x: $refs"
+    # EVERY framework, not one of them. `grep -q '6\.9\.'` over the whole block
+    # is satisfied by a SINGLE matching line, so a plugin linking QtCore 6.9.2
+    # and QtRemoteObjects 6.11.0 passed a check whose own failure message reads
+    # "the plugin is not linked against Qt 6.9.x". Measured, with otool's output
+    # supplied verbatim to the same three lines:
+    #
+    #   @rpath/QtCore.framework/Versions/A/QtCore 6.9.2)
+    #   @rpath/QtRemoteObjects.framework/Versions/A/QtRemoteObjects 6.11.0)
+    #   ->  ok    (the script's verdict) Qt through @rpath, 6.9.x
+    #
+    # and a mixed link is exactly the state the comment above this function
+    # exists for: Qt's minor version is a ceiling per module, and the module that
+    # exceeds it is the one whose calls time out. So the question is inverted —
+    # any line that is NOT 6.9.x is named and fails — which is the same shape as
+    # the `@rpath` test three lines up, and which needs `$refs` to be non-empty,
+    # already established above.
+    local skew; skew="$(printf '%s\n' "$refs" | grep -v ' 6\.9\.' || true)"
+    [ -z "$skew" ] || {
+      printf '%s\n' "$skew" >&2
+      die "$name: the framework(s) above are not Qt 6.9.x, and Basecamp 0.2.2 bundles 6.9.2 — a plugin over that ceiling loads 'successfully' and answers nothing"; }
   fi
   echo "  ok    $plugin"
   echo "        Qt through @rpath, 6.9.x, from $qtdir"

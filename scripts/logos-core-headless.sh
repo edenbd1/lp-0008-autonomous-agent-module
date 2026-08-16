@@ -434,15 +434,49 @@ fi
 # Read BY HEADER NAME. This manifest has gained columns twice — `claim_account`,
 # `record_prefix`, `claim_tx` — and a positional read returns a plausible wrong
 # value rather than failing.
-col() { # file header row-key -> value
+# A HEADER NAME THAT IS NOT IN THE FILE WAS NOT A FAILURE — IT WAS THE WHOLE ROW.
+#
+# `c` is set only when the loop finds the name, so a manifest that had lost or
+# renamed the column left it unset, and `$c` in awk is `$0`: the entire
+# tab-separated line. The caller's only guard is `[ -n "$OWNER" ]`, and a whole
+# line is very much non-empty. Measured under mawk, which is the awk in the
+# `ubuntu:24.04` container `scripts/harness-no-toolchain.sh` runs this command
+# in, against a copy of the manifest with `owner` renamed to `owner_account`:
+#
+#   VALUE=[storage  9Xpkkvos…  5Sa13Ny…  EZSN69nj…  6FscNXjN…  50  500  1000  …]
+#
+# The run then passes that to the harness as the owner to bind the module to.
+# (BSD awk instead makes it a runtime error on stderr and an empty value, so the
+# same drift reads as "no row for 'storage'" — a true-sounding message about a
+# row that is right there.) Either way the one thing nobody is told is that the
+# column is gone, which is precisely what this reader exists to notice: the
+# comment above it says a positional read "returns a plausible wrong value rather
+# than failing", and this was doing that under a by-name spelling.
+#
+# So a missing HEADER now exits 3, which is a different answer from a missing
+# ROW, and both are checked at the call site.
+col() { # file header row-key -> value on stdout; exit 3 if there is no such header
   awk -F'\t' -v w="$2" -v k="$3" '
-    NR==1 { for (i=1;i<=NF;i++) if ($i==w) c=i; next }
+    NR==1 { for (i=1;i<=NF;i++) if ($i==w) c=i
+            if (!c) exit 3
+            next }
     $1==k { print $c; exit }' "$1"
 }
 [ -f "$MANIFEST" ] || die "no $MANIFEST: run ./scripts/deploy-agents.sh first, or set MANIFEST"
-OWNER=$(col "$MANIFEST" owner "$CATEGORY")
-POLICY=$(col "$MANIFEST" policy_account "$CATEGORY")
-AGENT_ID=$(col "$MANIFEST" agent_id "$CATEGORY")
+# THE CONTROL, and it is one line: the same reader, asked for a column that
+# cannot be there, must refuse. Without it "the manifest has an `owner` column"
+# is a sentence this script never tests — it only ever asks for names it expects
+# to find, so a reader that answered something for every name would satisfy every
+# call below and be caught by none of them.
+if col "$MANIFEST" no_such_column "$CATEGORY" >/dev/null 2>&1; then
+  die "$MANIFEST answered for a column called 'no_such_column', so the by-name
+read below is not reading names and nothing it returns can be trusted."
+fi
+MANIFEST_COLS="run ./scripts/deploy-agents.sh, which writes it, or migrate the file by hand.
+$MANIFEST has: $(head -n1 "$MANIFEST" | tr '\t' ' ')"
+OWNER=$(col "$MANIFEST" owner "$CATEGORY")           || die "$MANIFEST has no 'owner' column. $MANIFEST_COLS"
+POLICY=$(col "$MANIFEST" policy_account "$CATEGORY") || die "$MANIFEST has no 'policy_account' column. $MANIFEST_COLS"
+AGENT_ID=$(col "$MANIFEST" agent_id "$CATEGORY")     || die "$MANIFEST has no 'agent_id' column. $MANIFEST_COLS"
 [ -n "$OWNER" ] && [ -n "$POLICY" ] \
   || die "no row for '$CATEGORY' in $MANIFEST (have: $(awk -F'\t' 'NR>1{printf "%s ", $1}' "$MANIFEST"))"
 

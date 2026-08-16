@@ -186,16 +186,47 @@ VECTORS = [
 
 
 def selftest():
+    """Check the curve arithmetic against the published vectors before using it.
+
+    WHY THIS IS NOT WRITTEN WITH `assert`, WHICH IS HOW IT WAS WRITTEN.
+
+    `assert` is removed by the interpreter under `-O` and under `PYTHONOPTIMIZE`,
+    so a self-test built out of assertions is a self-test that an environment
+    variable deletes — and this one is the whole guarantee behind two files.
+    `scripts/use-cases/verify-agent-card.py` imports this function and says, in
+    as many words, "the verifier checks itself against the published BIP-340
+    vectors before it is allowed to call anything valid. A verifier that returns
+    True for everything would otherwise report a forged card as genuine."
+
+    Measured, on a copy of the tree, with `schnorr_verify` rewritten to `return
+    True` — that verifier, exactly — against a published card whose description
+    had been rewritten after it was signed:
+
+        $ PYTHONOPTIMIZE=1 verify-agent-card.py --public-key <storage.pub>
+        verified: 5Sa13NyN… signed this card, and it is the payment account
+        exit 0
+        $ verify-agent-card.py --public-key <storage.pub>
+        AssertionError: BIP-340 self-test: verified a lie
+        exit 1
+
+    The same forged card, the same broken primitive, and the verdict depended on
+    an environment variable. Nothing here changes what is checked; it changes the
+    check from one the runtime may drop into one it may not.
+    """
+    def must(ok, why):
+        if not ok:
+            raise SystemExit("BIP-340 self-test: " + why)
+
     for sec, pub, aux, msg, sig in VECTORS:
         sec, pub, aux, msg, sig = (bytes.fromhex(x) for x in (sec, pub, aux, msg, sig))
-        assert pubkey_of(sec) == pub, "BIP-340 self-test: public key mismatch"
-        assert schnorr_sign(msg, sec, aux) == sig, "BIP-340 self-test: signature mismatch"
-        assert schnorr_verify(msg, pub, sig), "BIP-340 self-test: verification failed"
+        must(pubkey_of(sec) == pub, "public key mismatch")
+        must(schnorr_sign(msg, sec, aux) == sig, "signature mismatch")
+        must(schnorr_verify(msg, pub, sig), "verification failed")
         # One flipped bit in the message. Not a fixed wrong message: the first
         # published vector signs 32 zero bytes, so "verify against zeros" is a
         # check that passes for the wrong reason exactly once.
         tampered = bytes([msg[0] ^ 1]) + msg[1:]
-        assert not schnorr_verify(tampered, pub, sig), "BIP-340 self-test: verified a lie"
+        must(not schnorr_verify(tampered, pub, sig), "verified a lie")
 
 
 # ── the card ─────────────────────────────────────────────────────────────────

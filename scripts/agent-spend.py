@@ -108,12 +108,24 @@ def window_start_for(block, period_blocks):
 
 
 def selftest():
+    """The window arithmetic, against the crate's own vectors.
+
+    Not `assert`, which is what this was: the interpreter removes assertions
+    under `-O` and under `PYTHONOPTIMIZE`, so the check that this build agrees
+    with the consensus rule was one an environment variable could delete —
+    silently, in the file that signs a real settlement. Measured on the sibling
+    self-test in scripts/sign-agent-card.py, where the same shape let a forged
+    card verify. A `raise` cannot be optimised out.
+    """
     for block, period, expected in ((8629, 1000, 8000), (8000, 1000, 8000),
                                     (7999, 1000, 7000), (12345, 0, 0)):
         got = window_start_for(block, period)
-        assert got == expected, (
-            "window_start_for(%d, %d) = %d, and the crate the guest links says %d"
-            % (block, period, got, expected))
+        if got != expected:
+            raise SystemExit(
+                "agent-spend: window_start_for(%d, %d) = %d, and the crate the "
+                "guest links says %d. Refusing to build a proof against window "
+                "arithmetic this build and the chain disagree about."
+                % (block, period, got, expected))
 
 
 def read_policy(url, policy_account):

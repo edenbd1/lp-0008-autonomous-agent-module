@@ -359,7 +359,25 @@ balance_of() {
     -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["'"$1"'"]}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result",{}).get("balance",0))'
 }
-BEFORE=$(balance_of "$RECIP")
+# A BALANCE THAT WAS NOT READ IS NOT A BALANCE OF ZERO. `balance_of` prints
+# nothing when curl times out or the answer does not parse, and every use of
+# these two values below is `$((AFTER - BEFORE))`, where shell arithmetic reads
+# an empty string as 0. So an unread BEFORE silently turned "the recipient went
+# up by exactly 50" into "the recipient now holds exactly 50" — a delta measured
+# against a baseline nobody took, on the assertion whose own comment says it is
+# "the only reason that was caught rather than shipped as a green run". The same
+# defect and the same fix are in scripts/a2a-task.sh; demonstrated there, with
+# the before-read pointed at a closed port, the assertion went green on a
+# settlement nothing had been read about.
+balance_or_die() { # account what-for -> a decimal balance on stdout, or stop.
+  # `X=$(balance_or_die …) || die …` at the call site: an `exit` inside a command
+  # substitution ends only that subshell, so the status has to be taken there.
+  local v; v=$(balance_of "$1")
+  case "$v" in ''|*[!0-9]*) exit 1 ;; esac
+  printf '%s\n' "$v"
+}
+BEFORE=$(balance_or_die "$RECIP") \
+  || die "could not read the recipient's balance before the spend, so there is no baseline to compare against"
 
 # `--bin-auth-transfer` is not cosmetic. `spend` moves no balance itself — LEZ
 # rule 5 forbids a program from debiting an account it does not own — so it
@@ -410,12 +428,16 @@ echo "  50 (inside the envelope) -> $TX"
 # A transaction hash is not a payment. An earlier version of this instruction
 # produced confirmed, on-chain proofs that a policy PERMITTED an amount and
 # moved nothing at all, so the assertion is on the balance.
-AFTER=0
+AFTER=""
 for _ in $(seq 1 30); do
   AFTER=$(balance_of "$RECIP")
+  case "$AFTER" in ''|*[!0-9]*) sleep 2; continue ;; esac
   [ "$((AFTER - BEFORE))" -eq 50 ] && break
   sleep 2
 done
+case "$AFTER" in
+  ''|*[!0-9]*) die "the recipient's balance after the spend did not read back ('${AFTER}'), so nothing here says the money moved" ;;
+esac
 [ "$((AFTER - BEFORE))" -eq 50 ] \
   || die "the recipient went $BEFORE -> $AFTER: the spend did not transfer 50"
 echo "  recipient balance $BEFORE -> $AFTER  (+50, read back from the chain)"
@@ -450,7 +472,8 @@ echo "$GOT" | grep -q 'Program error 6005:' || {
 }
 echo "  $OVER (over the per-tx ceiling of $PER_TX, and inside the balance) -> refused"
 echo "         $GOT"
-END=$(balance_of "$RECIP")
+END=$(balance_or_die "$RECIP") \
+  || die "the recipient's balance did not read back after the refusal, so nothing here says it is unchanged"
 [ "$END" -eq "$AFTER" ] || die "the refused spend still moved balance: $AFTER -> $END"
 echo "  recipient balance unchanged at $END after the refusal"
 

@@ -122,8 +122,28 @@ for v in c_cat c_pol c_tx c_ptx c_pp c_pb; do
   [ -n "${!v}" ] || { bad "$AGENTS is missing a column ($v)"; }
 done
 
+# Counted, and the categories named, because the loop below is the whole section
+# and A LOOP OVER NOTHING RUNS CLEAN. The two sections underneath this one both
+# have a floor and this one had none — `a2a-task.tsv` needs two settlements,
+# `shielded-settlement.tsv` needs one, and their comments say why. Measured on a
+# copy of this tree: with `artifacts/agents.tsv` cut back to its header row, this
+# section printed
+#
+#     policies (artifacts/agents.tsv)
+#
+# and nothing else, and contributed zero failures — on the manifest that is the
+# only evidence for "three separate agents deployed on LEZ testnet, one per
+# default skill category". The whole run was still red, but for reasons in the
+# sections below it; nothing here noticed that it had checked no agent at all.
+#
+# The floor is the criterion's own sentence rather than a number: THREE, one per
+# default skill category, and the categories are named so that three rows for one
+# category cannot satisfy it. A row only counts when the chain agreed with the
+# manifest about it, so this cannot be satisfied by rows that failed above.
+pol_rows=0; pol_ok=0; pol_cats=""
 if [ -n "$c_cat" ] && [ -n "$c_pol" ]; then
   while IFS=$'\t' read -r -a f; do
+    pol_rows=$((pol_rows + 1))
     cat="${f[$((c_cat-1))]}"; pol="${f[$((c_pol-1))]}"
     ctx="${f[$((c_tx-1))]}";  ptx="${f[$((c_ptx-1))]}"
     pp="${f[$((c_pp-1))]}";   pb="${f[$((c_pb-1))]}"
@@ -141,6 +161,7 @@ print('OK %d %d %d %d %d' % (le(33,49),le(49,65),le(65,73),le(73,81),le(81,97)))
     case "${1:-}" in
       OK)
         if [ "$2" = "$ptx" ] && [ "$3" = "$pp" ] && [ "$4" = "$pb" ]; then
+          pol_ok=$((pol_ok + 1)); pol_cats="$pol_cats $cat"
           ok "$cat  $pol  per_tx $2 / per_period $3 / $4 blocks; window $5 spent $6"
         else
           bad "$cat  $pol  chain says $2/$3/$4, manifest says $ptx/$pp/$pb"
@@ -156,6 +177,21 @@ print('OK %d %d %d %d %d' % (le(33,49),le(49,65),le(65,73),le(73,81),le(81,97)))
       bad "$cat  create_policy $ctx is not on chain"
     fi
   done < <(rows "$AGENTS")
+fi
+
+# The positive statement this section exists to make, and it is a failure rather
+# than a label for the same reason the two below it are: zero rows is not
+# "nothing to disagree with", it is the claim having no evidence at all.
+for want_cat in storage messaging blockchain; do
+  case " $pol_cats " in
+    *" $want_cat "*) ;;
+    *) bad "no '$want_cat' agent in $AGENTS whose account the chain agrees with: the criterion asks for one agent per default skill category, and this run checked none for that one" ;;
+  esac
+done
+if [ "$pol_ok" -ge 3 ]; then
+  ok "$pol_ok of $pol_rows row(s) are agents whose anchored envelope the chain confirms ($pol_cats )"
+else
+  bad "only $pol_ok of $pol_rows row(s) in $AGENTS have an envelope the chain confirms, and three are needed — one per default skill category"
 fi
 
 echo
@@ -243,17 +279,53 @@ print(d[1:33].hex() if len(d)>33 and d[0]==0 else '')")
     shipped=0
     while IFS=$'\t' read -r -a f; do
       stx="${f[$((c_stx-1))]}"; ba="${f[$((c_ba-1))]}"; prog="${f[$((c_prog-1))]}"
+      # AN EMPTY NEEDLE IS FOUND IN EVERY HAYSTACK, and this is where that got
+      # in: `bytes.fromhex('$SHIPPED_IMG')` is `b''` when the derivation above
+      # failed, and `b'' in anything` is True in Python. So a run that could not
+      # read the shipped ImageID off any anchor — the failure the `bad` twenty
+      # lines up reports — went on to label EVERY settlement `SHIPPED` and
+      # satisfy the `need 2` floor with it. Measured on a copy of this tree with
+      # `artifacts/agents.tsv` emptied:
+      #
+      #   FAIL  could not read the shipped ImageID off an anchor: settlements
+      #         cannot be attributed from the chain
+      #   ok    11 settlement(s) under the shipped program (need 2)
+      #
+      # Eleven readings that were never taken, reported as agreement. The
+      # shielded section a hundred lines below already guards exactly this with
+      # `carries = bool(img) and …`; the guard is now on both of them, and here
+      # it produces a THIRD answer rather than a false one — a row nobody could
+      # attribute is not a row that agrees and not a row that disagrees, and it
+      # does not count toward the floor either way.
       out=$(rpc getTransaction "[\"$stx\"]" | python3 -c "
 import json,sys,base64
 r=json.load(sys.stdin).get('result')
 if not isinstance(r,list): print('ABSENT'); raise SystemExit
-print('%s %s' % (r[1], 'SHIPPED' if bytes.fromhex('$SHIPPED_IMG') in base64.b64decode(r[0]) else 'OTHER'))")
+img='$SHIPPED_IMG'
+if not img: print('%s UNATTRIBUTABLE' % r[1]); raise SystemExit
+print('%s %s' % (r[1], 'SHIPPED' if bytes.fromhex(img) in base64.b64decode(r[0]) else 'OTHER'))")
       set -- $out
       if [ "${1:-}" = "ABSENT" ]; then
         bad "$stx is not on chain"
         continue
       fi
+      # AND AN ANSWER THAT DID NOT COME BACK IS ITS OWN VERDICT. The decoder
+      # above prints nothing at all when the RPC does not answer or the body does
+      # not parse — `set --` then leaves no positional arguments and `b="$1"`
+      # aborted the whole script on `$1: unbound variable`, part-way through the
+      # manifest and before the shielded section had run. That failed closed, so
+      # it was never wrong; it was just unreadable, and it stopped the two
+      # sections below from being checked at all. Named instead, and the run
+      # carries on to check everything else.
+      if [ "$#" -lt 2 ]; then
+        bad "$stx  the chain did not answer for this settlement, so nothing here says where it is or what it called"
+        continue
+      fi
       b="$1"; chain="$2"
+      if [ "$chain" = UNATTRIBUTABLE ]; then
+        bad "$stx  block $b  cannot be attributed: no shipped ImageID was derived (see above); this is a reading that could not be taken, not a settlement that agrees"
+        continue
+      fi
       # What the manifest claims, in the same vocabulary.
       if [ "$prog" = "$DEPLOY_TX" ]; then claim=SHIPPED; else claim=OTHER; fi
 
@@ -353,6 +425,12 @@ print('%s %s' % (r[1], 'SHIPPED' if carries else 'OTHER'))")
       set -- $out
       if [ "${1:-}" = "ABSENT" ]; then
         bad "$stx is not on chain"
+        continue
+      fi
+      # Same as the settlements loop above: no answer is a verdict of its own,
+      # not an unbound variable that ends the run.
+      if [ "$#" -lt 2 ]; then
+        bad "$stx  the chain did not answer for this settlement, so nothing here says which block holds it"
         continue
       fi
       b="$1"; chain="$2"

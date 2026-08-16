@@ -263,12 +263,17 @@ TXT
     | awk '/^Public\//{print substr($1,8); exit}')
   [ -n "$ACCOUNT" ] || die "the wallet did not report an account for the derived key"
   echo "  account $ACCOUNT"
+  # Through `owner_state` (lib.sh) rather than compared to the zero string here,
+  # so that a chain which did not answer is its own verdict. Reported as "already
+  # exists" it would send a reader looking for a colliding account that is not
+  # there; and section 6 below, which needs the opposite verdict, had the same
+  # reader written the other way round and passed on exactly that silence.
   BEFORE_OWNER=$(owner_of "$ACCOUNT")
-  if [ "$BEFORE_OWNER" = "0,0,0,0,0,0,0,0" ]; then
-    ok "getAccount reports the default account: nothing has ever created it"
-  else
-    bad "that account already exists, owned by $BEFORE_OWNER — this run proves nothing new"
-  fi
+  case "$(owner_state "$BEFORE_OWNER")" in
+    unclaimed) ok "getAccount reports the default account: nothing has ever created it" ;;
+    claimed)   bad "that account already exists, owned by $BEFORE_OWNER — this run proves nothing new" ;;
+    *)         bad "the chain did not answer for $ACCOUNT, so nothing here says it is free" ;;
+  esac
 
   rule "5. record it on LEZ"
   echo "  submitting an account-creation transaction signed by the derived key."
@@ -313,8 +318,17 @@ SEEN=0
 if [ -s "$MANIFEST" ]; then
   for ADDR in $(column_of "$MANIFEST" content_address); do
     NTX=$(field "$MANIFEST" "$ADDR" notary_tx)
-    [ -n "$NTX" ] || continue
     NACC=$(field "$MANIFEST" "$ADDR" account)
+    # A notarisation row with no transaction is a proof of existence with nothing
+    # to check it against, and this used to `continue` before SEEN was
+    # incremented — so the row left both counts and the summary line said "N
+    # notarisation(s), each verified" about a manifest holding more than N. The
+    # floor at the end only catches a manifest that is entirely empty.
+    if [ -z "$NTX" ]; then
+      SEEN=$((SEEN + 1))
+      bad "  $ADDR records no notary_tx, so nothing about it can be checked"
+      continue
+    fi
     SEEN=$((SEEN + 1))
     ROW_OK=1
     echo
@@ -374,11 +388,29 @@ if [ -s "$MANIFEST" ]; then
       note "  blocks, and it is this comparison that has gone out of date."
       ROW_OK=0
     fi
-    if [ "$NOW_OWNER" != "0,0,0,0,0,0,0,0" ]; then
-      ok "  getAccount still reports it as a real account today"
-    else
-      bad "  getAccount reports the default account — the record is gone"; ROW_OK=0
-    fi
+    # THE RECORD IS STILL THERE, and this is the one line in the loop whose
+    # passing condition used to be satisfied by silence. It read
+    #
+    #     if [ "$NOW_OWNER" != "0,0,0,0,0,0,0,0" ]; then ok …
+    #
+    # and `owner_of` prints the empty string when curl times out or the body does
+    # not parse, and `null` when the RPC answers with no result. Neither is the
+    # zero string, so both took the OK branch: an RPC that had stopped answering
+    # `getAccount` read as an account that was still there. With `getTransaction`
+    # still working — one method degraded, which is a single timeout — this
+    # script printed "getAccount still reports it as a real account today" for
+    # every row, then "2 notarisation(s), each verified from the chain", and
+    # exited 0 having read nothing. That is the same defect 05 was fixed for, in
+    # the file that had not been fixed.
+    #
+    # `owner_state` (lib.sh) has three answers, so an unread account is neither
+    # present nor absent and cannot pass for either.
+    NOW_STATE=$(owner_state "$NOW_OWNER")
+    case "$NOW_STATE" in
+      claimed)   ok "  getAccount still reports it as a real account today" ;;
+      unclaimed) bad "  getAccount reports the default account — the record is gone"; ROW_OK=0 ;;
+      *)         bad "  getAccount did not answer for $NACC, so nothing here says the record survives"; ROW_OK=0 ;;
+    esac
     [ "$ROW_OK" -eq 1 ] && COUNT=$((COUNT + 1))
   done
 fi
@@ -396,6 +428,23 @@ if rpc getTransaction "[\"$IMPOSSIBLE\"]" | grep -q '"result":null'; then
   ok "control: a transaction hash that cannot exist returns null"
 else
   bad "the control hash did not return null — the checks above are not meaningful"
+fi
+# CONTROL: the account reader must be capable of the OTHER answer. Every row
+# above passes by `owner_state` saying `claimed`, and until this control existed
+# there was nothing in a verify-only run to show that reader ever saying anything
+# else — a reader stuck on one word would have passed every row just as happily,
+# which is precisely how the `!=` form used to pass on a chain that had stopped
+# answering. So the same two calls are made about an account nobody has ever
+# created, and are required to reach the opposite verdict. An unreachable chain
+# answers `unreadable` here and fails this, which is the point: it is the same
+# silence, and it must not read as either state.
+GHOST_ACCOUNT=$(hex_id "$IMPOSSIBLE")
+GHOST_STATE=$(owner_state "$(owner_of "$GHOST_ACCOUNT")")
+printf '  %-30s %s\n' "an account nobody created" "$GHOST_ACCOUNT"
+if [ "$GHOST_STATE" = unclaimed ]; then
+  ok "control: the same reader calls an account nobody created $GHOST_STATE, so 'a real account' above was a reading"
+else
+  bad "control: an account nobody created reads as $GHOST_STATE — the reader above is not distinguishing anything"
 fi
 GHOST=$(kv "$(python3 scripts/use-cases/notary-key.py "a-document-nobody-notarised")" pubkey)
 # The positive half FIRST, and it is not decoration. "The ghost key is not in

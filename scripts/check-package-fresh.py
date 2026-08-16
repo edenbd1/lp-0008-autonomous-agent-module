@@ -132,6 +132,26 @@ SOURCE_SUFFIXES = (".h", ".cpp", ".hpp", ".cc", ".json", ".txt")
 
 MIN_LITERAL = 8
 
+# HOW MANY LITERALS THE SCANNER HAS TO FIND BEFORE "they are all in the binary"
+# IS A SENTENCE ABOUT THE BINARY.
+#
+# Layer 2 answers by building a list of the literals that are missing and asking
+# whether it is empty, so a scanner that extracts nothing produces an empty list
+# and corroborates every binary in the world. The floor is what makes that
+# distinguishable from a clean run, and it is a shared constant rather than a
+# number typed at each site because the same corroboration is run in three
+# places — here, and in the two record writers, which bless a sibling binary on
+# exactly this evidence and then write the record CI reads back. One of those
+# three had the floor, one had it and said in its own comment that it had been
+# measured going wrong without it, and one had neither. A floor that only some
+# of the callers apply is not a floor.
+#
+# The numbers are the counts a healthy tree produces with a wide margin: the
+# module's sources yield ~750 literals of >= MIN_LITERAL bytes and the harness's
+# single translation unit yields ~146.
+SOURCE_LITERAL_FLOOR = 300
+HARNESS_LITERAL_FLOOR = 60
+
 # Literals that are in the source and legitimately never reach the binary. Each
 # one needs a reason, and a stale entry here is an error rather than a silent
 # hole: an allow-list nobody revisits is where the next defect hides. If an
@@ -516,6 +536,41 @@ def check(repo, rebuild_dir=None):
     recorded_variants = record.get("variants") or {}
     if not recorded_variants:
         r.fail("the record names no variants")
+
+    # WHICH VARIANTS THE PACKAGE ACTUALLY SHIPS, read out of the package and not
+    # out of the record.
+    #
+    # Everything below used to iterate the RECORD and nothing ever iterated the
+    # package, so the one direction that matters for a stranger installing this
+    # file — "the .lgx offers me a plugin for my platform; was that plugin ever
+    # checked?" — was not asked. A variant present in the package and absent
+    # from the record passed every assertion in this file by not being looked
+    # at, which is the same defect as a check that finds nothing and calls it a
+    # pass. check_harness() has had the mirror image of this check all along
+    # ("an unrecorded binary is one nobody can check"); the package side did
+    # not.
+    #
+    # Measured on a copy of the tree: a `variants/linux-riscv64/agent_plugin.so`
+    # holding 53 bytes of prose, added to the tarball and advertised in
+    # manifest.json's `main`, produced no failure, no mention, and the line
+    # "every variant the package ships a plugin for has a harness beside it:
+    # darwin-arm64, linux-amd64, linux-arm64" — a sentence about the package
+    # that was measuring the record.
+    #
+    # Both readings are taken, because they answer different questions: the
+    # member paths are what a host unpacking the tarball finds on disk, and
+    # `manifest.json`'s `main` is what it is told to load. A variant in either
+    # is a variant this package offers somebody.
+    shipped_variants = {n.split("/")[1] for n in members
+                        if n.startswith("variants/") and len(n.split("/")) > 2}
+    shipped_variants |= set(manifest.get("main") or {})
+    for variant in sorted(shipped_variants - set(recorded_variants)):
+        r.fail("the package ships a %s variant that %s says nothing about, so "
+               "none of the checks below ever read it: not its sha256, not its "
+               "source literals, and not whether a harness exists for the "
+               "platform it invites somebody to install on. Repackage that "
+               "variant, or delete it from the .lgx." % (variant, RECORD))
+
     binaries = {}
     for variant, info in sorted(recorded_variants.items()):
         main = info.get("main")
@@ -540,15 +595,28 @@ def check(repo, rebuild_dir=None):
         if declared != main:
             r.fail("the manifest's main[%s] is %r, the record's is %r"
                    % (variant, declared, main))
+        # The host reads the PACKAGED metadata.json — the name, the type and the
+        # IID it loads the plugin under all come from that copy — so it has to be
+        # this repository's copy. `if meta_member in members:` made the one case
+        # where the host reads NOTHING the case this check said nothing about:
+        # measured by rebuilding the tarball without
+        # `variants/darwin-arm64/metadata.json`, which removed one `ok` line from
+        # the output and left the run green. An absence is not a match, and it
+        # is a worse fault than a mismatch, because a variant with no metadata is
+        # one Basecamp cannot describe at all.
         meta_member = "variants/%s/metadata.json" % variant
-        if meta_member in members:
-            if members[meta_member] == open(
-                    os.path.join(repo, "module/metadata.json"), "rb").read():
-                r.ok("the metadata.json inside %s is module/metadata.json" % variant)
-            else:
-                r.fail("the metadata.json inside %s differs from "
-                       "module/metadata.json — the host reads the packaged copy"
-                       % variant)
+        if meta_member not in members:
+            r.fail("%s is not in the package. Every variant carries its own copy "
+                   "of module/metadata.json and the host reads the packaged one, "
+                   "so a variant without it is one that ships no name, type or "
+                   "IID." % meta_member)
+        elif members[meta_member] == open(
+                os.path.join(repo, "module/metadata.json"), "rb").read():
+            r.ok("the metadata.json inside %s is module/metadata.json" % variant)
+        else:
+            r.fail("the metadata.json inside %s differs from "
+                   "module/metadata.json — the host reads the packaged copy"
+                   % variant)
 
     # docs/basecamp.md quotes the root hash as evidence, and a document that
     # quotes a superseded artefact is the same defect one level up — this line
@@ -608,7 +676,7 @@ def check(repo, rebuild_dir=None):
 
     # ---- layer 2: the shipped binary carries this source's own strings ----
     lits = literals(repo, sorted(on_disk))
-    if len(lits) < 300:
+    if len(lits) < SOURCE_LITERAL_FLOOR:
         r.fail("only %d literals of >= %d bytes were extracted; the scanner "
                "found essentially nothing and would agree with any binary"
                % (len(lits), MIN_LITERAL))
@@ -658,8 +726,15 @@ def check(repo, rebuild_dir=None):
         "shipped binary" % (len(on_disk), len(lits) - len(LITERAL_EXCLUSIONS)))
 
     # ---- and the other committed binary -----------------------------------
+    #
+    # The variants handed on are the ones the PACKAGE ships, not the ones the
+    # record names. check_harness()'s coverage clause is a sentence about the
+    # package — "every variant the package ships a plugin for needs a harness" —
+    # and it was being answered from the record, so a variant the record had
+    # never heard of could not create a hole in it. Being unrecorded is already
+    # a failure above; it must not also buy exemption from this one.
     print()
-    check_harness(repo, r, set(binaries))
+    check_harness(repo, r, shipped_variants | set(binaries))
     harness_failures = len(r.failures) - package_failures
 
     print()
@@ -795,7 +870,7 @@ def check_harness(repo, r, package_variants):
 
     # ---- layer 1 + the executable's own bytes -----------------------------
     lits = literals(repo, [HARNESS_SOURCE])
-    if len(lits) < 60:
+    if len(lits) < HARNESS_LITERAL_FLOOR:
         r.fail("only %d literals of >= %d bytes were extracted from %s; the "
                "scanner found essentially nothing and would agree with any "
                "binary" % (len(lits), MIN_LITERAL, HARNESS_SOURCE))
@@ -894,6 +969,7 @@ def check_harness(repo, r, package_variants):
 
         if shape["format"] == "ELF":
             worst = {}
+            unreadable = []
             for lib, versions in sorted(shape["version_needs"].items()):
                 for v in versions:
                     for prefix, floor in LINUX_SYMBOL_FLOOR.items():
@@ -901,6 +977,13 @@ def check_harness(repo, r, package_variants):
                             continue
                         got_v = _version_tuple(v, prefix)
                         if got_v is None:
+                            # A `GLIBC_2.38` this reader cannot turn into
+                            # numbers is not a version below the floor, it is a
+                            # version nobody compared. Silently skipping it made
+                            # the strongest claim about this binary depend on
+                            # the reader's own parser succeeding, so it is
+                            # reported instead.
+                            unreadable.append("%s (in %s)" % (v, lib))
                             continue
                         if got_v > worst.get(prefix, (0,)):
                             worst[prefix] = got_v
@@ -911,10 +994,46 @@ def check_harness(repo, r, package_variants):
                                    "this harness, which is the whole claim."
                                    % (rel, v, prefix,
                                       ".".join(str(n) for n in floor)))
-            r.note("%s needs at most %s — the runtime's own floor is "
-                   "GLIBC_2.38, GLIBCXX_3.4.32, CXXABI_1.3.15"
-                   % (rel, ", ".join("%s%s" % (p, ".".join(str(n) for n in v))
-                                     for p, v in sorted(worst.items())) or "nothing"))
+            floor_text = ", ".join(
+                "%s%s" % (p, ".".join(str(n) for n in v))
+                for p, v in sorted(LINUX_SYMBOL_FLOOR.items()))
+            # THE FLOOR CHECK'S OWN FLOOR, and without it the loop above is a
+            # loop over whatever the ELF reader managed to find — which for an
+            # empty `version_needs` is nothing at all, and a loop over nothing
+            # passes.
+            #
+            # This is not hypothetical about a binary this repository does not
+            # have: it was measured on the committed linux-amd64 harness, by
+            # retagging its DT_VERNEED and DT_VERNEEDNUM entries to a tag this
+            # reader ignores and leaving every other byte alone. The run stayed
+            # green, printed "needs at most nothing" as a NOTE, and went on to
+            # state in its closing banner that the harness "needs no newer
+            # glibc/libstdc++ than liblogos_core.so itself" — a claim it had
+            # just failed to read a single symbol version for. A note is what
+            # this file uses for a measurement; it is not what an unperformed
+            # measurement gets.
+            #
+            # Every C++ binary this toolchain produces needs versioned symbols
+            # from glibc and libstdc++ — the committed pair need GLIBC_2.38,
+            # GLIBCXX_3.4.29 and CXXABI_1.3.9 between them — so finding none is
+            # a reader that did not work, not a binary that needs nothing.
+            if unreadable:
+                r.fail("%s declares symbol version(s) %s that this reader could "
+                       "not turn into numbers, so they were compared against "
+                       "nothing" % (rel, ", ".join(sorted(set(unreadable)))))
+            if not worst:
+                r.fail("no symbol version requirement could be read out of %s at "
+                       "all, so \"it needs nothing newer than the runtime does\" "
+                       "was asserted over an empty list. Every ELF this "
+                       "toolchain builds needs versioned glibc and libstdc++ "
+                       "symbols; a binary that appears to need none is a "
+                       "DT_VERNEED this reader failed to find. The runtime's own "
+                       "floor is %s." % (rel, floor_text))
+            else:
+                r.note("%s needs at most %s — the runtime's own floor is %s"
+                       % (rel, ", ".join("%s%s" % (p, ".".join(str(n) for n in v))
+                                         for p, v in sorted(worst.items())),
+                          floor_text))
 
         # ---- layer 2: the shipped binary carries this source's strings ----
         missing = [(lit, sites) for lit, sites in sorted(lits.items())

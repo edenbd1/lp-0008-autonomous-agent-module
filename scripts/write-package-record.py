@@ -111,7 +111,12 @@ def carried_forward(repo, packaged, members):
             # with "the scanner found essentially nothing and would agree with
             # any binary". A recorder that blesses on a check that examined
             # nothing writes the record CI then reads back.
-            if len(lits) < 300:
+            # The floor is `check_package_fresh`'s own constant, not a number
+            # typed here: a recorder and a checker that disagree about how much
+            # evidence counts as evidence is the same hole as one that disagrees
+            # about the file set, which is what the module docstring above is
+            # about.
+            if len(lits) < _checker.SOURCE_LITERAL_FLOOR:
                 sys.exit(
                     "  FAIL  only %d source literal(s) of >= %d bytes were "
                     "extracted, so 'the sibling binary still contains every "

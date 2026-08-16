@@ -135,6 +135,37 @@ clang++ -std=c++17 -o "$WORK/bin/logos_core_delivery_test" \
 
 filter() { grep -vE "^(DBG|INF|WRN|NOT|NTC|TRC|ERR|\[) " ; }
 
+# `add_rc <rc-file>…` — add each harness's recorded exit code to $rc, and refuse
+# to read an absence as a zero.
+#
+# Every mode below runs its harnesses in background subshells that end with
+# `echo $? > …/x.rc`, then totals them with `rc=$(( rc + $(cat …/x.rc) ))`. When
+# that file is not there — a subshell killed, a full or unwritable $TMPDIR, a
+# concurrent run that removed the work directory — `cat` prints nothing, the
+# expression becomes `$(( rc +  ))`, and bash reports
+#
+#     line 7: rc +  : syntax error: operand expected (error token is " ")
+#
+# on stderr and LEAVES $rc AT ITS PREVIOUS VALUE. There is no `set -e` here, so
+# the run continues; measured, with one of the two `.rc` files removed and the
+# other holding a failure, the total went from 1 to 0 and the script printed its
+# success sentence and exited 0. A harness whose result was lost is not a harness
+# that passed, so a missing or non-numeric file is counted as a failure and named.
+add_rc() { # rc-file...
+  local f v
+  for f in "$@"; do
+    v=$(cat "$f" 2>/dev/null)
+    case "$v" in
+      ''|*[!0-9]*)
+        echo "  FAIL  $f holds '${v}', not an exit code: the harness that should" >&2
+        echo "        have written it did not, so its result is unknown and is" >&2
+        echo "        counted as a failure rather than as a zero." >&2
+        rc=$((rc + 1)) ;;
+      *) rc=$((rc + v)) ;;
+    esac
+  done
+}
+
 if [ "$MODE" = "signers" ]; then
     # What the module does with what its two delegates SAY. Costs nothing, needs
     # no second agent and no key, and it is the mode to run when either delegate
@@ -194,7 +225,7 @@ if [ "$MODE" = "approval" ]; then
         wait
         echo "  --- owner ---"; filter < "$WORK/$run-owner.log" | grep -E "^  (ok|FAIL)|failure\)"
         echo "  --- agent ---"; filter < "$WORK/$run-agent.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
-        rc=$(( rc + $(cat "$WORK/$run.rc") ))
+        add_rc "$WORK/$run.rc"
     done
     say "[4/4] result"
     [ "$rc" -eq 0 ] || { echo "FAILED — logs in $WORK" >&2; exit 1; }
@@ -236,7 +267,7 @@ if [ "$MODE" = "two-modules" ]; then
         "$WORK/bin/plugin_delivery_test" "$MODDIR/agent_plugin.dylib" approval \
         "$A" "$O" "$PAYEE" 250 > "$WORK/alone.log" 2>&1; echo $? > "$WORK/alone.rc" )
     filter < "$WORK/alone.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
-    rc=$(( rc + $(cat "$WORK/alone.rc") ))
+    add_rc "$WORK/alone.rc"
 
     for run in approve deny; do
         say "[3/4] the owner's app will $run, and it is a loaded module"
@@ -259,7 +290,7 @@ if [ "$MODE" = "two-modules" ]; then
         filter < "$WORK/$run-ownermod.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
         echo "  --- the agent's module ---"
         filter < "$WORK/$run-agentmod.log" | grep -E "^  (ok|FAIL|<-)|failure\)"
-        rc=$(( rc + $(cat "$WORK/$run-ownermod.rc") + $(cat "$WORK/$run-agentmod.rc") ))
+        add_rc "$WORK/$run-ownermod.rc" "$WORK/$run-agentmod.rc"
     done
     say "[4/4] result"
     [ "$rc" -eq 0 ] || { echo "FAILED — logs in $WORK" >&2; exit 1; }
@@ -292,7 +323,7 @@ if [ "$MODE" = "peers" ]; then
     wait
     say "agent A"; filter < "$WORK/a.log" | grep -E "^  (ok|FAIL)|^[0-9]\.|failure"
     say "agent B"; filter < "$WORK/b.log" | grep -E "^  (ok|FAIL)|^[0-9]\.|failure"
-    rc=$(( $(cat "$WORK/a.rc") + $(cat "$WORK/b.rc") ))
+    rc=0; add_rc "$WORK/a.rc" "$WORK/b.rc"
     say "[4/4] result"
     [ "$rc" -eq 0 ] || { echo "FAILED — logs at $WORK/a.log and $WORK/b.log" >&2; exit 1; }
     echo "Two modules loaded through QPluginLoader, each with its own Delivery"
@@ -401,7 +432,7 @@ if [ "$MODE" = "settle" ]; then
     wait
     say "buyer";  filter < "$WORK/c.log" | grep -E "^  (ok|FAIL|<-)|^[0-9]\.|failure"
     say "seller"; filter < "$WORK/s.log" | grep -E "^  (ok|FAIL)|^[0-9]\.|failure"
-    rc=$(( $(cat "$WORK/c.rc") + $(cat "$WORK/s.rc") ))
+    rc=0; add_rc "$WORK/c.rc" "$WORK/s.rc"
     TX=$(grep -oE 'settled it on chain.*: [0-9a-f]{64}' "$WORK/c.log" | tail -1 \
          | grep -oE '[0-9a-f]{64}')
     say "[4/4] what the chain says about it"

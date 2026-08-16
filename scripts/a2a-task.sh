@@ -130,6 +130,40 @@ balance_of() {
   | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['balance'])"
 }
 
+# `balance_or_die <account> <what-this-reading-is-for>` — a balance, or a stop.
+#
+# AN UNREAD BALANCE IS NOT A BALANCE OF ZERO, and step 6 was reading one as
+# exactly that. `BEFORE=$(balance_of …)` was taken with no check of any kind, and
+# the only use of it is `DELTA=$((AFTER - BEFORE))`, where shell arithmetic reads
+# an empty string as 0. So a single 25-second curl timeout on the *first* of the
+# two reads turned the whole assertion into `AFTER -eq PRICE` — a comparison
+# against a baseline nobody measured. Measured here, with the before-read pointed
+# at a closed port and the after-read at a payee holding the price:
+#
+#   server balance before: []
+#   Public/5Sa13Ny…   -> 25  (delta 25, price 25)
+#   the recipient is 25 LEZ richer, and no owner signed anything
+#   MANIFEST ROW: ...  balance_before=   balance_after=25
+#
+# Green, on a settlement nothing had been read about, and it then appended a row
+# with an EMPTY `balance_before` to the committed manifest that
+# `scripts/verify-deployment.sh` reads. The comment above step 6 says "the last
+# word belongs to the balance, read from the chain" — a word that was not read is
+# not the last word, and this refuses instead of substituting a number for it.
+# Called as `X=$(balance_or_die …) || exit 1`: an `exit` inside a command
+# substitution ends the substitution's subshell and nothing else, so the status
+# has to be taken at the call site rather than trusted to propagate.
+balance_or_die() { # account what-for -> a decimal balance on stdout
+  local v; v=$(balance_of "$1")
+  case "$v" in
+    ''|*[!0-9]*)
+      echo "  could not read the $2 balance of $1 from $RPC: '${v}'" >&2
+      echo "  refusing to compare a balance against a baseline that was not measured" >&2
+      exit 1 ;;
+  esac
+  printf '%s\n' "$v"
+}
+
 PRICE=${A2A_PRICE:-25}         # inside the client's per-transaction limit
 
 # The envelope, read off the chain rather than out of the manifest. The policy
@@ -293,26 +327,61 @@ rule "3. A2A task lifecycle"
 #
 # The driver needs a compiler and nlohmann/json — no node, no chain, no key. When
 # they are missing the lifecycle is reported as not run, rather than printed.
+#
+# "IT DID NOT RUN" AND "IT RAN AND SAID NO" ARE DIFFERENT SENTENCES, and this
+# block used to print the first one for both. `LIFECYCLE_RAN` started at 0 and
+# was set only by a driver that exited 0, so a driver that compiled, ran, and
+# ASSERTED FALSE fell through to a message naming a missing compiler — and the
+# script then went on to spend a real settlement on the public testnet.
+# Demonstrated with a stub compiler that emits a driver exiting 1:
+#
+#     the lifecycle driver ran and ASSERTED FALSE
+#     the lifecycle was NOT driven in this run: no C++ compiler or no
+#     nlohmann/json here. …
+#     SCRIPT CONTINUES -> it now goes on to spend a real settlement. exit would be 0.
+#
+# Every word of that message was false and the run was green. There are three
+# outcomes here and they are now three: the toolchain is absent (reported, and
+# not fatal — that is a fact about the machine, not about the module); the
+# driver would not compile (reported, and not fatal, same reason); the driver
+# RAN and did not reach `completed` (fatal, because that is the A2A lifecycle
+# this script's own header promises and a settlement below it would be a payment
+# for a task nothing drove).
 TASK_ID=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 DRIVER=module/tests/a2a_drive.cpp
 CXX=$(command -v c++ || command -v clang++ || command -v g++ || true)
-LIFECYCLE_RAN=0
-if [ -n "$CXX" ] && [ -f "$DRIVER" ]; then
+LIFECYCLE=absent
+if [ -z "$CXX" ]; then
+  LIFECYCLE=no-compiler
+elif [ ! -f "$DRIVER" ]; then
+  LIFECYCLE=no-driver
+else
   INC=""
   for d in /usr/include /usr/local/include /opt/homebrew/include; do
     [ -f "$d/nlohmann/json.hpp" ] && { INC="-I$d"; break; }
   done
   BIN="${TMPDIR:-/tmp}/a2a_drive.$$"
   if "$CXX" -std=c++17 $INC "$DRIVER" module/src/agent_skills.cpp -o "$BIN" 2>/dev/null; then
-    if "$BIN" lifecycle --card "$CARDS/$SERVER_CAT.json"; then LIFECYCLE_RAN=1; fi
+    if "$BIN" lifecycle --card "$CARDS/$SERVER_CAT.json"; then LIFECYCLE=ran; else LIFECYCLE=failed; fi
     rm -f "$BIN"
+  else
+    LIFECYCLE=no-build
   fi
 fi
-if [ "$LIFECYCLE_RAN" -eq 0 ]; then
-  echo "  the lifecycle was NOT driven in this run: no C++ compiler or no"
-  echo "  nlohmann/json here. It is covered by module/tests/agent_skills_test.cpp,"
-  echo "  which CI runs. No state is printed, because none was taken."
-fi
+case "$LIFECYCLE" in
+  ran) ;;
+  failed)
+    echo "  THE LIFECYCLE DRIVER RAN AND DID NOT REACH 'completed'." >&2
+    echo "  That is this script's own claim — 'execute a task following the A2A" >&2
+    echo "  lifecycle' — failing against the card just published, so nothing below" >&2
+    echo "  is signed and no settlement is spent on a task nothing drove." >&2
+    exit 1 ;;
+  *)
+    echo "  the lifecycle was NOT driven in this run ($LIFECYCLE): no C++ compiler,"
+    echo "  no $DRIVER, or no nlohmann/json here. It is covered by"
+    echo "  module/tests/agent_skills_test.cpp, which CI runs. No state is printed,"
+    echo "  because none was taken." ;;
+esac
 
 rule "4. resync the client agent before proving"
 # Not optional, and the reason is worth writing down. A private account's state
@@ -373,8 +442,9 @@ if [ $((WINDOW_END - HEIGHT)) -lt 3 ]; then
   echo "  slips past block $WINDOW_END will be refused as out of its window." >&2
 fi
 
-# The balance that has to move, read off the chain before anything is signed.
-BEFORE=$(balance_of "$SERVER_PAY")
+# The balance that has to move, read off the chain before anything is signed —
+# and it has to have been READ. See `balance_or_die`.
+BEFORE=$(balance_or_die "$SERVER_PAY" "payee's before-") || exit 1
 echo "  server balance before: $BEFORE"
 
 # The settlement is signed by the CLIENT AGENT, not by the owner — that is what
@@ -447,7 +517,7 @@ rule "6. the money actually moved"
 # instruction produced a real, confirmed, on-chain proof that a policy PERMITTED
 # 25 LEZ and moved nothing, and it was written up as a settlement. So the last
 # word belongs to the balance, read from the chain, not to the transaction hash.
-AFTER=$(balance_of "$SERVER_PAY")
+AFTER=$(balance_or_die "$SERVER_PAY" "payee's after-") || exit 1
 DELTA=$((AFTER - BEFORE))
 echo "  Public/$SERVER_PAY  $BEFORE -> $AFTER  (delta $DELTA, price $PRICE)"
 if [ "$DELTA" -ne "$PRICE" ]; then

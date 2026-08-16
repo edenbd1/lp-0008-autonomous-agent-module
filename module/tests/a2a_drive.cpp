@@ -211,13 +211,34 @@ int driveLifecycle(int argc, char **argv)
     std::printf("  task %s opened against %s\n", taskId.c_str(), agentAddress.c_str());
     std::printf("  %-14s -> %-14s only TaskStore::create opens a task\n", "created",
                 opened.value("state", std::string("?")).c_str());
-    if (!sent.empty()) {
-        const json req = jsonOf(sent.front());
-        std::printf("  and an A2A %s went out for it\n",
-                    req.value("method", std::string("?")).c_str());
+    int bad = 0;
+
+    // THE ONLY REPORT THAT THE REQUEST LEFT THE MODULE USED TO LIVE INSIDE
+    // `if (!sent.empty())`, AND NOTHING OUTSIDE IT NOTICED THE EMPTY CASE.
+    //
+    // A `TaskSkill` that opened the task and published nothing took that branch
+    // zero times: the run printed one line fewer, every step below still walked
+    // the store, and the process still exited 0 — which is the number CI and
+    // both demo scripts read. A body that does not run is not a step that
+    // passed, and "an A2A request went out" is half of what this driver exists
+    // to show; the other half is the lifecycle underneath it.
+    //
+    // The method is named rather than merely counted, for the reason
+    // `agent_skills_test.cpp` gives where it pins the same field: `message/send`
+    // is what the A2A binding says a task request is, and a frame of any other
+    // shape on that topic is a request the peer will not recognise.
+    const json req = sent.empty() ? json::object() : jsonOf(sent.front());
+    const std::string method = req.value("method", std::string{});
+    std::printf("  and an A2A %s went out for it\n",
+                method.empty() ? "(nothing at all)" : method.c_str());
+    if (method != "message/send") {
+        std::fprintf(stderr,
+                     "  the task opened and no A2A message/send went out for it: %zu frame(s) "
+                     "on the wire\n",
+                     sent.size());
+        ++bad;
     }
 
-    int bad = 0;
     bad += !step(tasks, taskId, "working", "reading the file", "the peer picked it up");
     bad += !step(tasks, taskId, "working", "encrypting", "progress repeats working");
     bad += !step(tasks, taskId, "input-required", "passphrase?", "the peer needs input");

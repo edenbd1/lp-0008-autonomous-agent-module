@@ -124,6 +124,35 @@ r = json.load(sys.stdin).get('result')
 print(','.join(str(x) for x in r['program_owner']) if r else 'null')"
 }
 
+# `owner_state <what-owner_of-printed>` — one word for what the chain just said
+# about an account. THREE answers and not two:
+#
+#   unclaimed   the program owner is eight zeros, which is what this chain
+#               answers with for an address nobody has written yet
+#   claimed     some program owns it, so something has already written it
+#   unreadable  the read did not come back at all
+#
+# The third is the point, and it is why every test of an account's ownership
+# goes through here instead of comparing to the zero string in place. `owner_of`
+# prints nothing when curl times out or the JSON does not parse, and `null` when
+# the RPC answers with no result. Both of those are `!= 0,0,0,0,0,0,0,0`, so in
+# any check written the `!=` way round they land in the same branch as a real
+# account — a chain that had stopped answering read as a record that was still
+# there. 05 was fixed for that and 04 still had it: with an RPC answering
+# `"result":null` to `getAccount` and nothing else changed, 04 printed
+#   "OK  getAccount still reports it as a real account today"
+# for every row and exited 0, having read nothing.
+#
+# It lives here rather than in one script because three of them ask this
+# question and the answer has to mean the same thing in all three.
+owner_state() {
+  case "$1" in
+    0,0,0,0,0,0,0,0) echo unclaimed ;;
+    ''|null)         echo unreadable ;;
+    *)               echo claimed ;;
+  esac
+}
+
 chain_height() {
   rpc getLastBlockId '[]' | python3 -c "import json,sys; print(json.load(sys.stdin)['result'])"
 }
@@ -219,18 +248,38 @@ policy_account_of() {
 # The driver needs a C++ compiler and nlohmann/json and nothing else: no node,
 # no chain, no key. When they are absent the honest answer is that the lifecycle
 # was not exercised here, plus where it *is* exercised — not a prettier printf.
+#
+# "NOT DRIVEN" AND "DRIVEN, AND IT FAILED" ARE NOT THE SAME ANSWER, and this
+# function used to give them the same one. Every path that gives up before the
+# driver runs returned 1, and the driver's own exit code was passed straight
+# through — which is also 1 when a lifecycle step misbehaves. The single caller
+# reads any non-zero as "not driven" and prints a `note`, so a real regression in
+# `TaskStore` came out as
+#
+#   "the lifecycle was not driven in this run — see the reason above."
+#   "Nothing above claims a transition that did not happen."
+#
+# with the full transcript of driven transitions printed immediately above it,
+# and the script exited 0. Demonstrated by rewording the terminal-state refusal
+# in module/src/agent_skills.cpp: the driver caught it, said "refused for the
+# wrong reason", exited 1 — and use case 2 went green.
+#
+# So the two are separated by exit code. $A2A_NOT_DRIVEN means the lifecycle was
+# never started here and the caller may say so; ANY other non-zero code is the
+# driver's own verdict on code that did run, and must be a failure.
+A2A_NOT_DRIVEN=97
 a2a_lifecycle() {           # a2a_lifecycle <repo-root> [card-file]
   local root="$1" card="${2:-}" src bin cxx inc
   src="$root/module/tests/a2a_drive.cpp"
   bin="${TMPDIR:-/tmp}/a2a_drive.$$"
-  [ -f "$src" ] || { note "the lifecycle driver $src is missing; nothing was run"; return 1; }
+  [ -f "$src" ] || { note "the lifecycle driver $src is missing; nothing was run"; return "$A2A_NOT_DRIVEN"; }
 
   cxx=$(command -v c++ || command -v clang++ || command -v g++) || true
   if [ -z "$cxx" ]; then
     note "no C++ compiler here, so the task lifecycle was NOT driven in this run."
     note "It is covered by module/tests/agent_skills_test.cpp ('task lifecycle'),"
     note "which CI runs. No state is printed above, because none was taken."
-    return 1
+    return "$A2A_NOT_DRIVEN"
   fi
   # nlohmann/json is a header; find it rather than assume a system install.
   inc=""
@@ -241,13 +290,17 @@ a2a_lifecycle() {           # a2a_lifecycle <repo-root> [card-file]
     note "nlohmann/json is not installed here, so the task lifecycle was NOT driven"
     note "in this run. It is covered by module/tests/agent_skills_test.cpp, which CI"
     note "runs. No state is printed above, because none was taken."
-    return 1
+    return "$A2A_NOT_DRIVEN"
   fi
   if ! "$cxx" -std=c++17 $inc "$src" "$root/module/src/agent_skills.cpp" -o "$bin" 2>/dev/null; then
     note "the lifecycle driver did not build here, so no state was driven."
     note "It is covered by module/tests/agent_skills_test.cpp, which CI runs."
-    return 1
+    return "$A2A_NOT_DRIVEN"
   fi
+  # From here the driver RAN, so whatever it says is a verdict about the store
+  # and not about this machine. A driver that itself exits 97 would be
+  # indistinguishable from not having run, so that code is claimed here and
+  # a2a_drive.cpp returns only 0, 1 and 2.
   local rc=0
   if [ -n "$card" ] && [ -f "$card" ]; then
     "$bin" lifecycle --card "$card" || rc=$?
@@ -255,6 +308,7 @@ a2a_lifecycle() {           # a2a_lifecycle <repo-root> [card-file]
     "$bin" lifecycle || rc=$?
   fi
   rm -f "$bin"
+  [ "$rc" -eq "$A2A_NOT_DRIVEN" ] && rc=1
   return $rc
 }
 

@@ -178,17 +178,48 @@ sys.exit(0 if names == ['agent-policy/v1', 'agent_id'] else 1)" \
 GHOST=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda policy --agent-id "$IMPOSSIBLE" 2>/dev/null | tr -d '[:space:]')
 GHOST_OWNER=$(owner_of "$GHOST")
 printf '  %-28s %s\n' "an agent nobody anchored" "$GHOST"
-if [ "$GHOST_OWNER" = "0,0,0,0,0,0,0,0" ]; then
-  ok "  program_owner is all zeros: never initialised, so init would accept it"
-else
-  bad "  the control policy account is owned by $GHOST_OWNER"
-fi
+# Through `owner_state` (lib.sh) so that a chain which did not answer is named as
+# that. This comparison already fell on the failing side when the read came back
+# empty — it is written `=` rather than `!=` — but it then reported the account as
+# "owned by " with nothing after it, which reads as a chain contradicting the
+# repository rather than as a chain that said nothing. Section 3 above requires
+# the opposite verdict on a real policy account, so the two together show the
+# reader saying both words.
+case "$(owner_state "$GHOST_OWNER")" in
+  unclaimed) ok "  program_owner is all zeros: never initialised, so init would accept it" ;;
+  claimed)   bad "  the control policy account is owned by $GHOST_OWNER" ;;
+  *)         bad "  the chain did not answer for $GHOST, so nothing here says it is uninitialised" ;;
+esac
 
 # And the refusal itself, as it was submitted to this program. A refused
 # transaction is not an event on this chain — it answers null exactly as the
 # control above does — so these hashes are recorded as facts, not offered as
 # proof. The proof is crates/agent-verifier-adversarial, which runs the
 # committed binary against both steps of the attack.
+# THIS SECTION'S EVIDENCE HAS TO BE COUNTED, and it was not. Three separate ways
+# it could stop testing and still go green, all of them reachable:
+#
+#   * The manifest missing, or holding nothing but its header. The loop ran zero
+#     times, printed nothing at all, and the script finished "Use case 3 holds".
+#     Demonstrated by truncating artifacts/adversarial.tsv to its header line:
+#     section 4 emitted no note, no failure and no output, exit code 0.
+#   * A row whose `outcome` matched neither `accepted*` nor `submitted*` fell
+#     through the `case` silently, so a typo in one cell deleted that row's
+#     evidence without deleting the row.
+#   * The only `ok` this section can print asserts an ABSENCE — that a submitted
+#     attack is NOT on chain — and `tx_live` is false when the chain does not
+#     answer. Pointed at a closed port it printed
+#         "OK  60de3fc6…: submitted, never included"
+#     exactly as it does against the live chain. An absence proves nothing until
+#     the same question is shown coming back the other way.
+#
+# So: the rows that carry each kind of evidence are counted, and each count has
+# a floor. REFUSED is the claim of this section; ON_CHAIN is its control, because
+# those rows are checked with the same `tx_live` against the same RPC and must
+# come back true. A run where `tx_live` cannot say "yes" has not shown that its
+# "no" means anything.
+ADV_REFUSED=0     # attacks on the LIVE program, required to be absent from the chain
+ADV_ON_CHAIN=0    # attacks on a superseded program, required to be present
 if [ -s artifacts/adversarial.tsv ]; then
   LIVE_PROG=$DEPLOY_TX
   # By header name. This was eight positional variables against a file whose
@@ -203,7 +234,9 @@ if [ -s artifacts/adversarial.tsv ]; then
     ADV_I=$((ADV_I + 1))
     what=$(kv "$R" what); prog=$(kv "$R" program)
     tx=$(kv "$R" tx); outcome=$(kv "$R" outcome)
-    [ -n "$tx" ] || continue
+    # A recorded attack with no transaction is a row that cannot be checked, and
+    # skipping it quietly is how a manifest loses evidence without losing rows.
+    [ -n "$tx" ] || { bad "  row $((ADV_I - 1)) of artifacts/adversarial.tsv records no transaction to check"; continue; }
     case "$outcome" in
       accepted*) if [ "$prog" = "$LIVE_PROG" ]; then
                    bad "  $tx is recorded as accepted by the LIVE program"
@@ -211,6 +244,7 @@ if [ -s artifacts/adversarial.tsv ]; then
                    note "recorded, of the superseded program: $what"
                    printf '         %s  in block %s\n' "$tx" \
                      "$(kv "$(settlement_facts "$tx")" block)"
+                   ADV_ON_CHAIN=$((ADV_ON_CHAIN + 1))
                  else
                    bad "  a recorded accepted attack, $tx, is not on chain"
                  fi ;;
@@ -220,11 +254,29 @@ if [ -s artifacts/adversarial.tsv ]; then
                     bad "  $tx IS on chain — the second anchor was not refused"
                   else
                     ok "  $tx: submitted, never included"
+                    ADV_REFUSED=$((ADV_REFUSED + 1))
                   fi ;;
+      # Neither word, so this row states no outcome this script knows how to
+      # check. It used to fall out of the `case` without a sound.
+      *) bad "  row $((ADV_I - 1)) records outcome \"${outcome:-<empty>}\", which is neither accepted nor submitted — its evidence was not checked" ;;
     esac
   done
 else
-  note "no artifacts/adversarial.tsv to check the recorded attacks against"
+  bad "no artifacts/adversarial.tsv: the refusal this section is about is unevidenced"
+fi
+if [ "$ADV_REFUSED" -ge 1 ]; then
+  ok "  $ADV_REFUSED recorded attack(s) on the live program, none of them on chain"
+else
+  bad "  no recorded attack on the live program was checked, so nothing here shows one was refused"
+fi
+# The control, and it is the same reader answering the other way. Without a row
+# that `tx_live` says YES to, "$ADV_REFUSED attacks are not on chain" is equally
+# true of a chain that answers nothing at all — which is how it reads against a
+# closed port.
+if [ "$ADV_ON_CHAIN" -ge 1 ]; then
+  ok "  control: the same getTransaction finds $ADV_ON_CHAIN recorded attack(s) that WERE accepted, so its silence above is a reading"
+else
+  bad "  control: no recorded attack could be found on chain, so 'not on chain' above is indistinguishable from a chain that is not answering"
 fi
 
 rule "5. below the ceiling: accepted, unattended, and already on chain"
@@ -268,7 +320,13 @@ else
     r=$(row_of "$SETTLEMENTS" "$row_i") || die "could not read row $row_i"
     row_i=$((row_i + 1))
     price=$(kv "$r" price); tx=$(kv "$r" settlement_tx); pay=$(kv "$r" server_pay_account)
-    [ -n "$tx" ] || continue
+    # A settled price with no transaction is a ceiling claim with nothing behind
+    # it. This used to `continue` silently, so a row could leave the manifest's
+    # evidence without leaving the manifest.
+    if [ -z "$tx" ]; then
+      bad "  row $((row_i - 1)) of $SETTLEMENTS records a price of $price and no settlement_tx"
+      continue
+    fi
     n=$((n + 1))
     printf '  %s LEZ  %s\n' "$price" "$tx"
     if [ "$price" -le "$PER_TX" ]; then
@@ -336,9 +394,18 @@ else
   # ledger's running total is per period, so only shielded spends in the window
   # it is currently reporting belong in the comparison.
   SHIELDED=artifacts/shielded-settlement.tsv
+  # AND THE REFUSAL IS CHECKED, which the sibling call at the top of the loop
+  # already does with `&&` and this one did not. `shielded_before` prints 0 and
+  # returns 1 when it cannot bound the sum to one period; taking the 0 and
+  # dropping the 1 makes `total` too small, and too small lands in the branch
+  # below that treats a high ledger as the chain having simply moved on — so a
+  # shielded spend that could not be read came out as an OK.
+  EXTRA_OK=1
   if [ -f "$SHIELDED" ] && [ -n "$LIVE_WINDOW" ]; then
-    extra=$(shielded_before "$DEPLOY_TX" "$((LIVE_WINDOW + PERIOD))" "$prev_ledger" "$SH_LEDGER" "$PERIOD")
-    if [ "${extra:-0}" -gt 0 ]; then
+    extra=$(shielded_before "$DEPLOY_TX" "$((LIVE_WINDOW + PERIOD))" "$prev_ledger" "$SH_LEDGER" "$PERIOD") || EXTRA_OK=0
+    if [ "$EXTRA_OK" -eq 0 ]; then
+      bad "the shielded spends charged to $prev_ledger in this period could not be read, so $total is not the figure to compare the ledger against"
+    elif [ "${extra:-0}" -gt 0 ]; then
       note "plus $extra LEZ of shielded spend charged to the same ledger ($SHIELDED)"
       total=$((total + extra))
     fi

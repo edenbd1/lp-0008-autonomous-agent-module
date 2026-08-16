@@ -89,7 +89,12 @@ HEADER = [
 
 
 def carried_forward(repo, packaged, lits):
-    """The other variants already recorded, if their binaries still earn it."""
+    """The other variants already recorded, if their binaries still earn it.
+
+    `lits` has already cleared the floor in main(); see the comment there for
+    why a caller that skipped it would make every sibling below carry forward on
+    a corroboration that examined nothing.
+    """
     rec_path = os.path.join(repo, RECORD)
     if not os.path.isfile(rec_path):
         return {}
@@ -159,6 +164,41 @@ def main():
                  % (len(sdk_units), len(SDK_UNITS), sdk_root))
 
     lits = _checker.literals(repo, [SOURCE])
+    # THE FLOOR, WHICH THIS FILE WAS THE ONE NOT TO HAVE.
+    #
+    # Both corroborations below — the binary just built, and every sibling
+    # carried forward — are "the list of literals missing from these bytes is
+    # empty". That list is also empty when the scanner extracted no literals at
+    # all, so a blind scanner blesses every binary on the machine and this file
+    # writes the record scripts/check-package-fresh.py then reads back. The
+    # checker has had this floor from the start (`HARNESS_LITERAL_FLOOR`) and
+    # scripts/write-package-record.py added its own after measuring exactly this
+    # failure on the package side; this file, which does the same thing to the
+    # other committed binary, had neither.
+    #
+    # Measured, on a copy of the tree, by replacing module/tests/
+    # logos_core_load_test.cpp with a source whose every literal is shorter than
+    # MIN_LITERAL — no patching of anything else, and nothing that touches the
+    # binaries:
+    #
+    #     ok    linux-amd64 carries forward: same bytes, and they still contain
+    #           every source literal
+    #     ok    linux-arm64 carries forward: same bytes, and they still contain
+    #           every source literal
+    #     ok    recorded the darwin-arm64 harness ... Mach-O arm64
+    #     ok    0 literal(s) of module/tests/logos_core_load_test.cpp are in it
+    #     exit 0
+    #
+    # Two siblings blessed against source they had never seen, on a check that
+    # examined nothing, and the sentence saying so printed as an `ok`. The floor
+    # is shared with the checker rather than typed here so that the recorder and
+    # the checker cannot come to disagree about what counts as having looked.
+    if len(lits) < _checker.HARNESS_LITERAL_FLOOR:
+        sys.exit("  FAIL  only %d literal(s) of >= %d bytes were extracted from "
+                 "%s, so 'every literal of the source is in this binary' would "
+                 "be true of any binary at all. Refusing to record a harness, or "
+                 "to carry a sibling forward, on a corroboration that checked "
+                 "nothing." % (len(lits), _checker.MIN_LITERAL, SOURCE))
     missing = [lit for lit in lits if not _checker.in_binary(lit, blob)]
     if missing:
         sys.exit("  FAIL  %d of %d literals in %s are not in the binary that was "

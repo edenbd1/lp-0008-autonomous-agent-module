@@ -350,8 +350,32 @@ int main(int argc, char **argv)
               && listing.value("count").toInt() == kSkillCount,
           QStringLiteral("meta.skills lists all %1 skills over the boundary, and counts them")
               .arg(kSkillCount));
-    check(catalogued == listed,
-          "and every one of them carries the parameter schema skills() published for it");
+    // `catalogued == listed` ON ITS OWN IS SATISFIED BY TWO EMPTY SETS.
+    //
+    // `catalogued` is only appended to inside `if (object.value("parameters")
+    // .isObject())`, and `listed` only inside the loop over `entries`, so a
+    // `meta.skills` that answered nothing and a `skills()` that answered nothing
+    // compare equal and this line printed `ok` having compared no skill against
+    // no skill — the "ok (0 checked)" shape `module/tests/skills_test.cpp` and
+    // `module/tests/logos_core_load_test.cpp` have each already had removed,
+    // both times with the note that a line must be anchored on its own rather
+    // than on its neighbours. The equality is the claim; the count is what makes
+    // the claim about something.
+    check(!catalogued.isEmpty() && catalogued.size() == kSkillCount && catalogued == listed,
+          QStringLiteral("and all %1 of them carry the parameter schema skills() published "
+                         "for it (%2 compared)")
+              .arg(kSkillCount)
+              .arg(catalogued.size()));
+    // The control, so the comparison above is known to be able to say no. One
+    // name removed from the catalogue's side and the same `==` has to come out
+    // false — which it cannot do if either side is empty, so this line fails on
+    // exactly the state the line above used to pass on.
+    QSet<QString> oneShort = catalogued;
+    if (!oneShort.isEmpty()) {
+        oneShort.remove(*oneShort.constBegin());
+    }
+    check(!oneShort.isEmpty() && oneShort != listed,
+          "and the same comparison says no when one entry is taken away from it");
     check(catalogued.contains(QStringLiteral("meta.skills")),
           "including itself: it is a registered skill, not a special case in invoke()");
 

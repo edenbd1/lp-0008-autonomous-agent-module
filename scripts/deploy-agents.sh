@@ -375,11 +375,91 @@ fund_agent() { # category seed_account amount
 # credit. It is also what makes the balance readable with `getAccount`: private
 # notes are commitments and the RPC returns the default account for them, so a
 # payment into a shielded account cannot be checked from outside.
-claimed() { # account id -> true if some program already owns it
-  ! curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$1\"]}" \
-    | grep -q '"program_owner":\[0,0,0,0,0,0,0,0\]'
+#
+# `owner_state <account id>` — ONE WORD FOR WHAT THE CHAIN JUST SAID, and THREE
+# answers rather than two:
+#
+#   unclaimed   program_owner is eight zeros, which is what this chain answers
+#               for an address no program has ever claimed
+#   claimed     some program owns it, so `auth-transfer init` has been run
+#   unreadable  the read did not come back at all
+#
+# The third is the whole point of rewriting this. It used to be one line —
+#
+#     claimed() { ! curl … | grep -q '"program_owner":\[0,0,0,0,0,0,0,0\]'; }
+#
+# — and a `grep` that matches nothing exits 1, which the `!` turns into TRUE. So
+# EVERY way of not getting an answer said "claimed": a curl timeout, a sequencer
+# that is down, a typo in $RPC, an account id the RPC rejects. Measured against a
+# closed port:
+#
+#     $ SEQUENCER_URL=http://127.0.0.1:9 …
+#     VERDICT: claimed  (pay_account would accept it as already initialised)
+#
+# and against the live chain the same reader says `unclaimed` for a ghost address
+# and `claimed` for a real pay account, so the defect was only ever in what it
+# did with silence. Both places that ask cost something real:
+#
+#   * `pay_account`'s loop takes the first account the chain calls `claimed` as
+#     one this agent has already initialised. On an unreachable chain that is
+#     whichever id `account list` happened to print first, and the manifest then
+#     advertises — in the Agent Card, as the account to send money to — a public
+#     account nobody has run `auth-transfer init` on. Crediting one of those is
+#     rejected outright (`ClaimedUnauthorizedAccount`), so the failure surfaces
+#     as somebody else's payment bouncing.
+#   * the check AFTER `auth-transfer init` is meant to confirm the init landed.
+#     Reading silence as "claimed" made an init that never happened report
+#     success, which is the same sentence in the other direction.
+#
+# The comment on `chain_prefix` below already states the rule this now follows:
+# unknown must not read as agreeing.
+owner_state() { # account id -> unclaimed | claimed | unreadable
+  local body
+  body=$(curl -s -m 25 -X POST "$RPC" -H 'Content-Type: application/json' \
+           -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$1\"]}")
+  # Matched on the field itself, not on its absence: an answer with no
+  # `program_owner` in it — `"result":null`, an error object, an empty body, a
+  # page of HTML from a proxy — is unreadable and says so.
+  case "$body" in
+    *'"program_owner":[0,0,0,0,0,0,0,0]'*) echo unclaimed ;;
+    *'"program_owner":['*)                 echo claimed ;;
+    *)                                     echo unreadable ;;
+  esac
 }
+claimed() { # account id -> true only if the chain SAID some program owns it
+  [ "$(owner_state "$1")" = claimed ]
+}
+
+# THE CONTROL FOR THE READER ABOVE, and it runs once, before anything is funded.
+#
+# `pay_account` acts on `claimed` and on `unclaimed`, and both of those have to
+# be readings. "Claimed" is easy to corroborate — it is what the agents' own
+# accounts say — but the branch that costs money is the other one, and until this
+# ran there was nothing in this script showing that `owner_state` is capable of
+# saying `unclaimed` at all. A reader that answered `claimed` to everything would
+# have passed every check below it.
+#
+# The address is DERIVED rather than written down: 32 bytes of SHA-256 over a
+# fixed sentence and this run's own deploy transaction, base58-encoded the way the
+# wallet prints an account id. Nothing has ever written to it and nothing ever
+# will, so the chain's answer for it is the default one, and that is exactly what
+# the reader has to be able to report. `unreadable` fails here too — if the chain
+# will not answer for an address with no history, it is not going to answer
+# usefully for the accounts below either, and finding that out now costs a round
+# trip instead of three funded agents.
+GHOST=$(python3 -c "
+import hashlib,sys
+A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+b=hashlib.sha256(('an address nothing has ever written/' + sys.argv[1]).encode()).digest()
+n=int.from_bytes(b,'big'); s=''
+while n: n, r = divmod(n, 58); s = A[r] + s
+print('1' * (len(b) - len(b.lstrip(b'\x00'))) + s)" "$DEPLOY_TX")
+case "$(owner_state "$GHOST")" in
+  unclaimed) echo "control  $GHOST reads unclaimed, so the account reader can say both things" ;;
+  claimed)   echo "control  $GHOST reads CLAIMED, which is impossible for an address derived here — the reader is not reading" >&2; exit 1 ;;
+  *)         echo "control  the chain did not answer for $GHOST, so no reading it takes below means anything" >&2; exit 1 ;;
+esac
+echo
 
 pay_account() { # category -> public account id on stdout
   local home="$AGENT_HOMES/$1" id ids
@@ -390,8 +470,16 @@ pay_account() { # category -> public account id on stdout
   # over "the first one listed" keeps the manifest stable across runs: `account
   # list` does not promise an order, and a run that picked a different account
   # would advertise a payment address nobody has ever paid.
+  local state
   for id in $ids; do
-    if claimed "$id"; then echo "$id"; return 0; fi
+    state=$(owner_state "$id")
+    [ "$state" = claimed ] && { echo "$id"; return 0; }
+    # And a chain that will not answer stops this rather than letting the loop
+    # fall through to "$ids | head -n1" and advertise an uninitialised account.
+    [ "$state" = unreadable ] && {
+      echo "  the chain did not answer for Public/$id, so nothing here says" >&2
+      echo "  whether this agent already has a receiving account" >&2
+      return 1; }
   done
   id=$(printf '%s\n' $ids | head -n1)
   if [ -z "$id" ]; then
@@ -404,7 +492,12 @@ pay_account() { # category -> public account id on stdout
   [ -n "$id" ] || return 1
   LEE_WALLET_HOME_DIR="$home" NSSA_WALLET_HOME_DIR="$home" \
     "$WALLET" auth-transfer init --account-id "Public/$id" </dev/null >/dev/null 2>&1
-  claimed "$id" || return 1
+  state=$(owner_state "$id")
+  [ "$state" = claimed ] || {
+    echo "  auth-transfer init left Public/$id reading '$state', not claimed:" >&2
+    echo "  an account no program owns cannot be credited, so it must not be" >&2
+    echo "  advertised as one this agent is paid into" >&2
+    return 1; }
   echo "$id"
 }
 

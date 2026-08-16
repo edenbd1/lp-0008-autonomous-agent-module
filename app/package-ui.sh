@@ -114,6 +114,38 @@ if [ "$(uname -s)" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
             fi
         done
         [ "$missing" -eq 0 ] || exit 1
+        # A LOOP OVER NOTHING IS NOT A CLEAN RESULT, and `$checked` was already
+        # in the message without being in the assertion. `$undefined` is empty
+        # whenever `nm` cannot read the file, whenever the plugin is stripped,
+        # and whenever `grep -i logos` simply misses — and the loop then ran zero
+        # times, `missing` stayed 0, and this printed
+        #
+        #     ok    all 0 undefined Logos symbol(s) are exported by the host's
+        #           liblogos_core
+        #
+        # Measured, against a Mach-O with no Logos symbols in it: exit 0. The
+        # comment above already says the count is the thing that catches this —
+        # "checked five symbols while the plugin had seven" — so the floor is
+        # what that sentence was missing. Seven is not hardcoded: what has to be
+        # true is that this examined at least one symbol, because a plugin that
+        # binds NO Logos symbol from the host is not the plugin this packages.
+        [ "$checked" -gt 0 ] || {
+            echo "  FAIL  nm found no undefined Logos symbol in $plugin at all, so" >&2
+            echo "        the check below examined nothing. This plugin binds the" >&2
+            echo "        SDK symbols from the host at load time; a build with none" >&2
+            echo "        of them is not this plugin, and a stripped or unreadable" >&2
+            echo "        one is not a passing result." >&2
+            exit 1; }
+        # THE CONTROL for the matcher, one line: it has to be capable of saying
+        # "not exported". Every comparison above passes by finding something, so
+        # a `grep` that matched anything at all — a broken pattern, an empty
+        # `core_syms` that somehow matched, a `--` that stopped being honoured —
+        # would satisfy all of them at once and be caught by none.
+        if grep -q -- " __ZN5LogosNoSuchSymbolExistsEv\$" <<<"$core_syms"; then
+            echo "  FAIL  the export table matched a symbol that cannot exist, so" >&2
+            echo "        'is exported by liblogos_core' above means nothing" >&2
+            exit 1
+        fi
         echo "  ok    all $checked undefined Logos symbol(s) are exported by the host's liblogos_core"
     fi
 elif [ "$(uname -s)" = "Linux" ] && command -v readelf >/dev/null 2>&1; then
@@ -179,6 +211,21 @@ elif [ "$(uname -s)" = "Linux" ] && command -v readelf >/dev/null 2>&1; then
             fi
         done
         [ "$missing" -eq 0 ] || exit 1
+        # The same floor and the same control as the Mach-O branch above, for the
+        # same reason: with `$undefined` empty this loop ran zero times and
+        # reported "all 0 undefined Logos symbol(s) are exported", which is a
+        # sentence about a check that did not happen.
+        [ "$checked" -gt 0 ] || {
+            echo "  FAIL  nm -D found no undefined Logos symbol in $plugin at all," >&2
+            echo "        so the check below examined nothing. This plugin binds the" >&2
+            echo "        SDK symbols from the host at load time; a build with none" >&2
+            echo "        of them is not this plugin." >&2
+            exit 1; }
+        if grep -qxF -- "_ZN5LogosNoSuchSymbolExistsEv" <<<"$core_syms"; then
+            echo "  FAIL  the export table matched a symbol that cannot exist, so" >&2
+            echo "        'is exported by liblogos_core' above means nothing" >&2
+            exit 1
+        fi
         echo "  ok    all $checked undefined Logos symbol(s) are exported by the host's liblogos_core"
     else
         echo "  <-    no liblogos_core at $core, so the undefined Logos symbols in"

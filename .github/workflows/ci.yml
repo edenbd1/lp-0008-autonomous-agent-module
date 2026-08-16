@@ -328,7 +328,16 @@ jobs:
           # A green exit code is not evidence that anything was checked. Assert
           # the banner, and refuse the skip pattern this workflow already guards
           # against elsewhere: no step may go green by skipping.
-          if ! grep -q "agrees with" evidence.out; then
+          #
+          # The banner is quoted with the document's name in front of it. It was
+          # `grep -q "agrees with"`, and "agrees with" is a substring of
+          # "disagrees with" — which is how submission-evidence.py words its
+          # `artifacts/agents.tsv disagrees with the chain` failure. That path
+          # exits non-zero today, so the `if !` above catches it first and the
+          # trap is not reachable; a pattern that matches its own negation is
+          # still a pattern that is one refactor away from reading a
+          # disagreement as an agreement, and it costs nothing to name the file.
+          if ! grep -q "SUBMISSION-DRAFT.md agrees with" evidence.out; then
             echo "the check exited 0 without reporting agreement: it did not run to completion"
             exit 1
           fi
@@ -356,6 +365,25 @@ jobs:
             cat drift.out
             exit 1
           fi
+          # Red FOR THE RIGHT REASON. A non-zero exit was the whole assertion
+          # here, and submission-evidence.py has two ways to return 1: the one
+          # this control is about — "<file> no longer matches the chain" — and
+          # the Fatal path, "refusing to generate", which it takes when the
+          # SEQUENCER did not answer. The second needs no drifted document at
+          # all. The check above ran against the live chain seconds earlier, so
+          # a sequencer that drops out BETWEEN the two invocations leaves the
+          # real check green and this control green, and the control has then
+          # said nothing whatever about drift. Measured with a stub that agrees
+          # once and then reports the chain unreachable: the old form passes,
+          # printing its "and a drifted one is rejected" banner. The `use-cases`
+          # job already names this exact failure — "pointing SEQUENCER_URL at a
+          # dead port makes it exit 1 having checked nothing, and this control
+          # passed on that" — and closes it there with a grep. Same grep here.
+          grep -q "drift.md no longer matches the chain" drift.out \
+            || { echo "the drifted document was rejected for some other reason —"; \
+                 echo "an unreachable sequencer refuses to generate and exits 1 too,"; \
+                 echo "and that says nothing about whether drift is detected:"; \
+                 cat drift.out; exit 1; }
           rm -f drift.md drift.out evidence.out
           echo "OK the document matches the chain, and a drifted one is rejected"
 
@@ -572,6 +600,34 @@ jobs:
             echo "the module half did not compile in: the SDK headers were not reached"
             exit 1
           fi
+          # And the POSITIVE banner and the count, which this step's own comment
+          # promised and which it did not have. Ten other steps in this file
+          # assert both; this one asserted an exit code and the absence of a
+          # word. `failures` starts at 0, so a suite that ran NO cases prints
+          # "all skill behaviours hold" and returns 0 — measured: a stub that
+          # prints only that banner and exits 0 passes the old form of this
+          # step, on 0 of 90 assertions, with no SKIPPED anywhere to catch it.
+          # That is the same trap `cargo test` set in the `rust` job and the
+          # same one demo.sh set in `binaries`, and both are closed with a
+          # count.
+          #
+          # The floor does a second job the SKIPPED grep cannot. This file is
+          # split: 42 `check` call sites are always compiled and 77 more live
+          # behind `#ifdef LP0008_MODULE_TESTS`, which is the module half that
+          # went missing for months. A floor of 50 is above the 42 the
+          # always-compiled half can produce even if every one of them runs, so
+          # the count alone says the module half ran — the SKIPPED banner and
+          # this floor now have to be defeated separately. A floor and not an
+          # equality, and set well under the 119 call sites the file carries:
+          # cases come and go with ordinary edits and only "essentially none"
+          # is a defect.
+          grep -qF "all skill behaviours hold" skills_test.out \
+            || { echo "skills_test exited 0 without reporting a full pass"; exit 1; }
+          passed=$(grep -c "^  ok  " skills_test.out || true)
+          echo "skill assertions that ran and passed: ${passed:-0}"
+          [ "${passed:-0}" -ge 50 ] \
+            || { echo "only ${passed:-0} assertion(s) ran: a suite that is not there prints the pass banner too"; exit 1; }
+          rm -f skills_test.out
 
       # The two Reliability criteria that are about the *module* rather than
       # about a class beside it. `task_persistence_test` and
@@ -614,7 +670,26 @@ jobs:
           set -euo pipefail
           sed 's|    if (dir.empty()) {|    if (true) {|' \
             module/src/agent_module_plugin.cpp > broken_plugin.cpp
-          ! diff -q module/src/agent_module_plugin.cpp broken_plugin.cpp > /dev/null
+          # `! cmd` on a line of its own is not a guard. Under `set -e` bash
+          # does not exit when a command's return value is inverted with `!` —
+          # measured: `bash -euc '! diff -q f f >/dev/null; echo REACHED'`
+          # prints REACHED and exits 0. So when the sed above stops matching
+          # (the source is reindented, `dir` is renamed, the guard moves) this
+          # line noticed and said nothing, and the control went on to compile
+          # an UNMUTATED plugin. The three manifest controls in the `use-cases`
+          # job already write it as `! diff ... || { ...; exit 1; }`, which is
+          # what makes the inversion load-bearing; this one and the storage
+          # driver's did not.
+          #
+          # The step did still end red in that case, at the exit-code assertion
+          # below — but with the message "a module that persists nothing passed
+          # the recovery suite", about a module that persists everything. A
+          # gate that misreports why it fired sends the next reader to the
+          # module instead of to this sed, which is the failure this file
+          # spends its length guarding against. In the new form an identical
+          # file fails here, where the message is true.
+          ! diff -q module/src/agent_module_plugin.cpp broken_plugin.cpp > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
           clang++ -std=c++17 -w \
             -I_external/logos-cpp-sdk/cpp -Imodule/src \
             module/tests/module_recovery_test.cpp \
@@ -634,8 +709,29 @@ jobs:
           set +e
           ./broken_recovery_test > broken_recovery.out 2>&1; rc=$?
           set -e
-          echo "exit=$rc  failures=$(grep -c '^  FAIL' broken_recovery.out || true)"
+          # Red FOR THE RIGHT REASON, in the shape the `package` and `use-cases`
+          # controls already use. The failure count was computed on this very
+          # line and thrown away: `grep -c ... || true` inside an `echo`, with
+          # nothing asserting it, so the number went into the log and no branch
+          # ever read it. That left `rc != 0` as the whole control, and `rc !=
+          # 0` is satisfied by the mutated binary DYING before it ran a single
+          # assertion — a missing shared library, an abort in a static
+          # initialiser, a mutated plugin that segfaults on construction.
+          # Measured: a stub that prints nothing and exits 127 passes the old
+          # form, printing `failures=0` on its way through. Nothing about the
+          # recovery suite is falsified by a binary that never reached it.
+          #
+          # So the count is asserted now. The mutation is the one
+          # module_recovery_test.cpp's own table records as "never construct
+          # TaskPersistence ... 16", so a floor of 5 sits well under it and is
+          # there to say "assertions ran and went red", not to freeze a number
+          # that moves with ordinary edits. A control that cannot separate a
+          # caught mutation from a crash is not a control.
+          fails=$(grep -c '^  FAIL' broken_recovery.out || true)
+          echo "exit=$rc  failures=${fails:-0}"
           [ "$rc" -ne 0 ] || { echo "a module that persists nothing passed the recovery suite"; exit 1; }
+          [ "${fails:-0}" -ge 5 ] \
+            || { echo "the mutated build exited $rc having failed ${fails:-0} assertion(s): it died before the suite could test anything, so nothing was falsified here"; exit 1; }
 
       # Same argument for inference. No model here and none needed: what has to
       # hold is that a backend which is down, slow, incoherent or actively
@@ -1162,11 +1258,27 @@ jobs:
           [ "$rc" -ne 0 ] || { echo "a stale harness passed"; exit 1; }
           grep -q "logos_core_load_test.cpp has changed since the harness was built" hstale.out \
             || { echo "it went red without naming the source that changed"; exit 1; }
-          # And the second layer caught it on its own, in all three binaries:
-          # the record could have been hand-edited, the binaries could not.
+          # And the second layer caught it on its own, in every committed
+          # binary: the record could have been hand-edited, the binaries could
+          # not.
+          #
+          # The number is DERIVED, not written down. This read `[ "$n" -eq 3 ]`,
+          # a copy of the variant count in a file that does not know when that
+          # count changes, and it fails in BOTH directions. Commit a fourth
+          # harness that the literal check catches and a healthy run goes red on
+          # 4 != 3; commit a fourth that it does NOT catch, which is the defect
+          # this control exists for, and n is 3, the equality holds and the
+          # control reports a full pass over a harness nobody checked. A guard
+          # that goes green on exactly the case it was written to catch is worse
+          # than no guard. The step two above already derives its variant count
+          # from the package manifest "so the number cannot quietly become one";
+          # the record beside the harnesses is the same authority for these.
+          nvar=$(python3 -c "import json;print(len(json.load(open('module/harness/harness.sources'))['variants']))")
+          [ "${nvar:-0}" -ge 3 ] \
+            || { echo "the harness record names ${nvar:-0} variant(s); it is not describing this tree"; exit 1; }
           n=$(grep -c "literals from module/tests/logos_core_load_test.cpp are absent" hstale.out)
-          [ "$n" -eq 3 ] \
-            || { echo "the literal check fired on $n of 3 harnesses"; exit 1; }
+          [ "$n" -eq "$nvar" ] \
+            || { echo "the literal check fired on $n of the $nvar recorded harnesses"; exit 1; }
           git checkout -- module/tests/logos_core_load_test.cpp
           rm -f hstale.out
 
@@ -1195,8 +1307,16 @@ jobs:
           cat hswap.out
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "a swapped harness passed"; exit 1; }
+          # Derived, for the same reason as the control just above: `-ge 3` is a
+          # floor written against a tree that has three variants today, and a
+          # fourth committed harness that the hash check silently passed over
+          # would leave n at 3 and satisfy it. The record is asked how many
+          # there are — it is the same record the python above walked, so the
+          # two halves of this step cannot disagree about the number.
+          nvar=$(python3 -c "import json;print(len(json.load(open('module/harness/harness.sources'))['variants']))")
           n=$(grep -c "the committed harness is not the one that was recorded" hswap.out)
-          [ "$n" -ge 3 ] || { echo "it caught $n of 3"; exit 1; }
+          [ "$n" -ge "${nvar:-0}" ] && [ "${nvar:-0}" -ge 3 ] \
+            || { echo "it caught $n of the ${nvar:-0} recorded harnesses"; exit 1; }
           git checkout -- module/harness
 
           # And from the other end: a binary in that directory that the record
@@ -1285,12 +1405,32 @@ jobs:
       # give it one of its own. Every step in it is an assertion and the exit
       # code is the result, so a node that silently failed to start cannot
       # produce a passing transcript.
+      #
+      # What the exit code cannot say is how many of those assertions there
+      # were. `failures` starts at zero, so a driver that ran NONE of them
+      # returns 0 and prints the same closing banner as a driver that ran all
+      # ten — measured: a stub whose whole body is that banner and `exit 0`
+      # passes the old form of this step, which did not even capture the
+      # transcript to look. That is the trap the `rust` job closes on `cargo
+      # test` and the `binaries` job closes on demo.sh, and the transcript was
+      # being thrown away here rather than read. So the banner is asserted, the
+      # way `linux-headless` asserts the identical banner from
+      # logos_core_load_test, and the ok lines are counted. Ten of them on a
+      # clean run; a floor of 8, because a case removed on purpose is an
+      # ordinary edit and "essentially none" is the defect.
       - name: Drive the node
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$PWD/_external/logos-storage-nim/build"
           mkdir -p run-ok
-          ( cd run-ok && "$GITHUB_WORKSPACE/storage_node_drive" )
+          ( cd run-ok && "$GITHUB_WORKSPACE/storage_node_drive" ) 2>&1 | tee drive.out
+          grep -q "all steps confirmed (0 failure(s))" drive.out \
+            || { echo "the driver exited 0 without reporting a full pass"; exit 1; }
+          steps=$(grep -c '^  ok    ' drive.out || true)
+          echo "node steps that ran and passed: ${steps:-0}"
+          [ "${steps:-0}" -ge 8 ] \
+            || { echo "only ${steps:-0} of the driver's steps ran: a driver that asserts nothing exits 0 too"; exit 1; }
+          rm -f drive.out
 
       # Negative control 1, with the shipped source unmodified: block the path
       # the node needs for its repo with a regular file. The node cannot start,
@@ -1302,10 +1442,28 @@ jobs:
           export LD_LIBRARY_PATH="$PWD/_external/logos-storage-nim/build"
           mkdir -p run-blocked && printf 'not a directory' > run-blocked/lp0008-storage
           set +e
-          ( cd run-blocked && "$GITHUB_WORKSPACE/storage_node_drive" ); rc=$?
+          ( cd run-blocked && "$GITHUB_WORKSPACE/storage_node_drive" ) > blocked.out 2>&1; rc=$?
           set -e
+          cat blocked.out
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "the driver passed against a node that never started"; exit 1; }
+          # Red FOR THE RIGHT REASON. `rc != 0` was the whole assertion, and the
+          # transcript was not captured at all, so every way this binary can
+          # exit non-zero WITHOUT the block having done anything — a dynamic
+          # linker that cannot find libstorage.so, an OOM kill, a signal — read
+          # as "the node could not start", which is the one thing it does not
+          # prove. The two facts that make it a control are that the driver
+          # reached its assertions and reported one failed, and that it never
+          # got as far as storing anything. Both are in the transcript, and
+          # neither was being read.
+          fails=$(grep -c '^  FAIL' blocked.out || true)
+          [ "${fails:-0}" -ge 1 ] \
+            || { echo "the driver exited $rc having failed no assertion at all: it died before the block could be what stopped it"; exit 1; }
+          if grep -q '^  ok    the node returned a content address' blocked.out; then
+            echo "the node started and stored a file anyway: the blocked repo path"
+            echo "is not what made this run red, so this control tests nothing"; exit 1
+          fi
+          rm -f blocked.out
 
       # Negative control 2: one character of the assertion changed, so it looks
       # for a filename that was never uploaded. The node still starts, still
@@ -1318,16 +1476,43 @@ jobs:
           export LD_LIBRARY_PATH="$PWD/_external/logos-storage-nim/build"
           sed 's/lp0008-upload\.txt"),/lp0008-NEVER-uploaded.txt"),/' \
             module/tests/storage_node_drive.c > broken_drive.c
-          ! diff -q module/tests/storage_node_drive.c broken_drive.c > /dev/null
+          # `! cmd` alone is not a guard: under `set -e` bash does not exit on a
+          # command whose return value is inverted with `!`, so a sed whose
+          # pattern stopped matching produced an identical file here and this
+          # line said nothing. Written the way the three manifest controls in
+          # `use-cases` write it, so an unmutated copy fails on this line rather
+          # than four lines down under a message about the manifest assertion.
+          ! diff -q module/tests/storage_node_drive.c broken_drive.c > /dev/null \
+            || { echo "the control changed nothing, so it tests nothing"; exit 1; }
           cc -Wall -Wextra -o broken_drive broken_drive.c \
             -I_external/logos-storage-nim/library \
             -L_external/logos-storage-nim/build -lstorage
           mkdir -p run-broken
           set +e
-          ( cd run-broken && "$GITHUB_WORKSPACE/broken_drive" ); rc=$?
+          ( cd run-broken && "$GITHUB_WORKSPACE/broken_drive" ) > broken.out 2>&1; rc=$?
           set -e
+          cat broken.out
           echo "exit=$rc"
           [ "$rc" -ne 0 ] || { echo "the manifest assertion cannot fail"; exit 1; }
+          # Red FOR THE RIGHT REASON, and here that matters more than anywhere
+          # else in this job, because the comment above states three things the
+          # code did not check: that the node still starts, still stores the
+          # file, and still returns a manifest, with only the claim false. None
+          # of that follows from `rc != 0`. A node that failed to start in
+          # run-broken — a port clash, a slow libstorage, a repo left locked by
+          # the run before — exits non-zero having never reached the manifest at
+          # all, and the old form passed on it, becoming an unwitting duplicate
+          # of the control above. Measured: a stub that fails at "the node
+          # started" and stops passes the old form. So the three clauses of the
+          # comment are asserted as three greps, which is the difference between
+          # "something went wrong" and "the manifest assertion is what noticed".
+          grep -qF '  ok    the node started' broken.out \
+            || { echo "the node never started, so this run says nothing about the manifest assertion"; exit 1; }
+          grep -qF '  ok    the node returned a content address' broken.out \
+            || { echo "the file was never stored, so the manifest assertion was never reached"; exit 1; }
+          grep -qF '  FAIL  its manifest names the file we uploaded' broken.out \
+            || { echo "the run went red without the manifest assertion being the thing that failed"; exit 1; }
+          rm -f broken.out
 
   linux-headless:
     name: Logos Core loads and configures the shipped module, headless, on Linux

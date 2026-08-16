@@ -120,27 +120,11 @@ if len(d) != 33 or d[0] != 2:
 print({'version': d[0], 'owner': d[1:33].hex()}[sys.argv[2]])" "$1" "$2"
 }
 
-# `owner_state <what-owner_of-printed>` — one word for what the chain just said
-# about an account a claim would be written to. THREE answers and not two:
-#
-#   unclaimed   the program owner is eight zeros, which is what this chain
-#               answers with for an address nobody has written yet
-#   claimed     some program owns it, so something has already written it
-#   unreadable  the read did not come back at all
-#
-# The third is the point, and it is why every test below goes through here
-# instead of comparing to the zero string in place. `owner_of` prints nothing
-# when curl times out or the JSON does not parse, and `null` when the RPC
-# answers with no result. Both of those are `!= 0,0,0,0,0,0,0,0`, so both used to
-# land in the same branch as a real claim — a chain that had stopped answering
-# read as an account that had just changed.
-owner_state() {
-  case "$1" in
-    0,0,0,0,0,0,0,0) echo unclaimed ;;
-    ''|null)         echo unreadable ;;
-    *)               echo claimed ;;
-  esac
-}
+# `owner_state` — the three-verdict account reader every test below goes through
+# instead of comparing to the zero string in place, so that an unreadable account
+# is neither claimed nor unclaimed. It was defined here; it now lives in
+# scripts/use-cases/lib.sh, because 03 and 04 ask the same question and 04 had
+# the same defect this file was fixed for. The reasoning is written up there.
 
 # `control_a_no_record <ghost-account> <an-account-that-DOES-hold-a-claim>`
 #
@@ -418,11 +402,15 @@ if [ "$VERIFY_ONLY" = "1" ]; then
     | tail -n1 | tr -d '[:space:]')
   [ -n "$GHOST_PDA" ] || bad "control A: could not derive the unclaimed control account"
   printf '  %-30s %s\n' "an agent nobody claimed" "$GHOST_PDA"
-  if [ "$(owner_of "$GHOST_PDA")" = "0,0,0,0,0,0,0,0" ]; then
-    ok "control A: it reads as the default account, so the detector does not fire"
-  else
-    bad "control A: the unclaimed control account is owned by $(owner_of "$GHOST_PDA")"
-  fi
+  # Through `owner_state`, like the watch path, so a chain that did not answer
+  # is `unreadable` and fails rather than being reported as owned by nothing.
+  # The rows re-verified above require the same reader to say `claimed`, so the
+  # pair shows it reaching both verdicts in one run.
+  case "$(owner_state "$(owner_of "$GHOST_PDA")")" in
+    unclaimed) ok "control A: it reads as the default account, so the detector does not fire" ;;
+    claimed)   bad "control A: the unclaimed control account is owned by $(owner_of "$GHOST_PDA")" ;;
+    *)         bad "control A: the chain did not answer for $GHOST_PDA, so nothing here says it is unclaimed" ;;
+  esac
   control_a_no_record "$GHOST_PDA" "$(column_of "$MANIFEST" claim_account 2>/dev/null | grep -m1 .)"
   if rpc getTransaction "[\"$IMPOSSIBLE\"]" | grep -q '"result":null'; then
     ok "control B: a transaction hash that cannot exist returns null"
@@ -675,11 +663,15 @@ GHOST_PDA=$("$SPEL" --idl "$IDL" --program "$PROGRAM" pda claim --agent "$GHOST_
 [ -n "$GHOST_PDA" ] || bad "control A: could not derive the unclaimed control account"
 GHOST_OWNER=$(owner_of "$GHOST_PDA")
 printf '  %-30s %s\n' "an agent nobody claimed" "$GHOST_PDA"
-if [ "$GHOST_OWNER" = "0,0,0,0,0,0,0,0" ]; then
-  ok "control A: it reads as the default account, so the detector does not fire"
-else
-  bad "control A: the unclaimed control account is owned by $GHOST_OWNER"
-fi
+# Through `owner_state` for the same reason as everywhere else in this file: an
+# unread account must not read as an unclaimed one. Control C below requires the
+# same reader to say `claimed` about the watched account, so the two together
+# show it reaching both verdicts.
+case "$(owner_state "$GHOST_OWNER")" in
+  unclaimed) ok "control A: it reads as the default account, so the detector does not fire" ;;
+  claimed)   bad "control A: the unclaimed control account is owned by $GHOST_OWNER" ;;
+  *)         bad "control A: the chain did not answer for $GHOST_PDA, so nothing here says it is unclaimed" ;;
+esac
 # And the decode, not just the ownership: a claim record must refuse to come out
 # of an account that holds none.
 control_a_no_record "$GHOST_PDA" "${PDA:-}"

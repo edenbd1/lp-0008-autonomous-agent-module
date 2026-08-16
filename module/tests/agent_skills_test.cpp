@@ -258,10 +258,37 @@ static void *deepDocumentsOnASmallStack(void *)
               "a shallow snapshot loads, so the update below has a task to name");
         const std::string deepUpdate =
             R"({"taskId":"t1","status":{"state":"working","note":)" + nested(600) + "}}";
-        check(!live.applyUpdate(deepUpdate, err),
+        // THE REASON IS READ OUT OF A STRING NOTHING ELSE HAS WRITTEN TO.
+        //
+        // These two used to share `err` with the `store.restore(snap, err)`
+        // fifteen lines up, and that call had already left in it "the snapshot
+        // nests deeper than …". `applyUpdate` writes `err` only when it
+        // REFUSES — it ends in `TaskStore::advance`, which returns true without
+        // touching the string — so an `applyUpdate` that ACCEPTED this document
+        // left the stale message standing and the reason check below printed
+        // `ok` about a refusal that had not happened. Measured, by deleting the
+        // depth guard from `TaskStore::applyUpdate`: the line above went red and
+        // the line below stayed green, which is exactly the case its own message
+        // claims to be about. A fresh string is the whole fix — an assertion
+        // about what a call said has to read what THAT call said, and nothing
+        // else's leftovers.
+        std::string uerr;
+        check(!live.applyUpdate(deepUpdate, uerr),
               "and so is a status update off the wire");
-        check(mentions(err, "nests deeper"),
+        check(mentions(uerr, "nests deeper"),
               "refused for its depth, not for naming a task nobody opened");
+        // And the control, because a reason check is only a reason check if it
+        // can also say no. The same store and the same call, refused for the
+        // OTHER reason this block names: a task nobody opened. `mentions(…,
+        // "nests deeper")` has to come out FALSE here, or it is not
+        // distinguishing the depth refusal from the only message this store can
+        // produce.
+        std::string oerr;
+        check(!live.applyUpdate(R"({"taskId":"t9","status":{"state":"working"}})", oerr),
+              "a shallow update naming a task nobody opened is refused too");
+        check(!mentions(oerr, "nests deeper") && mentions(oerr, "no task"),
+              "and says THAT instead — the same assertion, on the other input, reaching "
+              "the other verdict");
     }
     return nullptr;
 }

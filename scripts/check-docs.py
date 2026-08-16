@@ -79,6 +79,8 @@ artefact rather than against prose — which is why they were worth adding as
 checks rather than as corrected sentences.
 """
 
+import hashlib
+import json
 import os
 import re
 import sys
@@ -129,6 +131,48 @@ HASH_FREE = {
         'its own \u00a75: "No program id, block height or balance is quoted here"',
 }
 
+# The one value a hash-free document may carry that LOOKS like a live
+# identifier: the worked example in docs/skills.md §7 prints the sha256 of a
+# fixed string, and the digest of a constant is a constant.
+#
+# THE EXEMPTION USED TO BE A LINE EXEMPTION, and it was the widest thing in this
+# file:
+#
+#     if "shasum" in raw or "digest" in raw or "sha256" in raw:
+#         continue
+#
+# — the whole line skipped because one of three words appeared anywhere on it,
+# in the one check whose subject is a document promising to carry no live
+# identifier. Exactly one line in the tree needs it. Every line in the tree
+# could claim it, and "digest" is a word these documents use constantly.
+# Measured: appending
+#
+#     The digest is recorded beside settlement `54f851825f17…e2f47115` above.
+#
+# to README.md — a live settlement hash, on a page whose second paragraph
+# promises "No transaction hash appears on this page" — passed, exit 0, with the
+# promise counted among the 2,173 lines it had just checked.
+#
+# So the exemption is the VALUE now, and it is recomputed rather than described:
+# every `{"content":"…"}` the document quotes is hashed, and only those digests
+# are let through. A derived exemption cannot be borrowed by another line, and
+# it fails if the transcript's digest ever stops being the digest of the
+# transcript's own input — which is one more thing checked rather than one less.
+CONTENT_RE = re.compile(r'\{"content":"((?:[^"\\]|\\.)*)"\}')
+
+
+def worked_example_digests(text):
+    """sha256 of every input a document's own transcripts quote."""
+    out = set()
+    for m in CONTENT_RE.finditer(text):
+        try:
+            content = json.loads('"%s"' % m.group(1))
+        except ValueError:
+            continue
+        out.add(hashlib.sha256(content.encode("utf-8")).hexdigest())
+    return out
+
+
 # A deploy hash, an ImageID or a policy PDA seed: 16+ hex characters in a row.
 HEX_RUN = re.compile(r"\b[0-9a-f]{16,}\b")
 # A LEZ account or agent id: base58, which has no 0, O, I or l. 32 characters is
@@ -159,6 +203,36 @@ EXPECTED_OUTSIDE_REPO = {
         "SUBMISSION-DRAFT.md is submitted into the prize repository, where it "
         "sits one level below TERMS.md. It does not resolve in this repository "
         "and must not: the link is right for where the document is read.",
+}
+
+# Line citations into a tree that is not in this repository, and the tree each
+# one points into. This table is the price of making a citation that resolves
+# nowhere a FAILURE rather than a silent skip — see the `hits` search in the
+# CITE_RE loop below for what the silence cost — and it is deliberately a table
+# with reasons rather than another entry in EXTERNAL: EXTERNAL is matched as a
+# substring against a path, so widening it to cover `src/api_call_handler.h`
+# would have exempted every `src/…` citation in the tree, this repository's
+# included, which is a hole a hundred times the size of the one being closed.
+#
+# Each entry is asserted ABSENT, the way EXPECTED_OUTSIDE_REPO is: if one of
+# these files turns up inside this repository, the exemption stops being true
+# and that fails too. An allow-list nobody revisits is where the next defect
+# hides.
+EXPECTED_UPSTREAM = {
+    "account_manager.rs":
+        "lee's wallet, where the `KeyNotFoundError` docs/a2a-binding.md §7 "
+        "quotes is raised. Not vendored here; docs/basecamp.md pins the "
+        "checkout.",
+    "validated_state_diff/mod.rs":
+        "lee's state machine, which is what applies rule 7 and the chained-call "
+        "cap. The line above it in the same table cites the same tree as "
+        "`lee/state_machine/core/src/program/mod.rs:14`, which EXTERNAL already "
+        "covers; this shorter form does not reach it.",
+    "src/api_call_handler.h":
+        "logos-delivery-module's own sources, one of the four upstream "
+        "checkouts docs/basecamp.md pins by revision.",
+    "src/delivery_module_plugin.cpp":
+        "logos-delivery-module's own sources, as above.",
 }
 # `file.ext:12` or `file.ext:12-34`, possibly a bare `:56` continuation.
 CITE_RE = re.compile(r"`([A-Za-z0-9_.\-/]+\.(?:cpp|h|rs|py|sh|json|toml|yml)):(\d+)(?:-(\d+))?`")
@@ -252,6 +326,7 @@ for doc in DOCS:
         path, start, end = m.group(1), int(m.group(2)), m.group(3)
         if path.startswith(EXTERNAL) or any(x in path for x in EXTERNAL):
             continue
+        line = text[: m.start()].count("\n") + 1
         target = resolve(doc, path)
         if target is None:
             # Bare file names such as `agent_skills.cpp` are resolved against the
@@ -262,12 +337,64 @@ for doc in DOCS:
                     continue
                 if os.path.basename(path) in files:
                     hits.append(os.path.join(base, os.path.basename(path)))
-            if len(hits) != 1:
-                continue          # ambiguous or absent: not this check's business
-            target = hits[0]
+        else:
+            hits = [target]
+        # THE SKIP THAT COULD NOT FAIL, and it disarmed class 2 — the class this
+        # script's own docstring calls "decidable without knowing what the line
+        # was supposed to say". This search used to end
+        #
+        #     if len(hits) != 1:
+        #         continue      # ambiguous or absent: not this check's business
+        #
+        # and the comment conflated two different answers. Ambiguous is indeed
+        # undecidable. ABSENT is the finding: a citation naming a file that is
+        # nowhere in this repository is class 1's defect wearing a line number,
+        # and class 1 cannot see it, because PATH_RE only matches a path whose
+        # closing backtick follows the extension — `module/src/gone.cpp:12` has
+        # `:12` in the way. Measured by appending
+        # "`module/src/nowhere.cpp:999`" to docs/limitations.md: this script
+        # printed the same "7 line citations" it prints for a clean tree and
+        # exited 0. A citation into nothing was counted as nothing rather than
+        # as a failure, so the number a reader takes for coverage was the number
+        # for a tree with one fewer citation in it.
+        #
+        # So absent is now a failure, ambiguous is now a failure that says which
+        # files it could have meant, and the citations that are RIGHT to skip —
+        # the four into upstream trees — are named in EXPECTED_UPSTREAM with the
+        # tree each one points into, and fail if they ever start resolving here.
+        if path in EXPECTED_UPSTREAM:
+            if hits:
+                failures.append(
+                    "%s:%d  %s is allow-listed as a citation into an upstream "
+                    "tree, but it resolves inside this repository now (%s) — the "
+                    "exemption is stale and is hiding a line number this script "
+                    "could check" % (doc, line, path,
+                                     os.path.relpath(hits[0], ROOT)))
+            else:
+                note_ok("line", "%s -> %s (upstream, as intended: %s)"
+                        % (doc, path, EXPECTED_UPSTREAM[path]))
+            continue
+        if not hits:
+            failures.append(
+                "%s:%d  cites %s:%s and there is no %s anywhere in this "
+                "repository. Either the file moved and the citation did not, or "
+                "it names an upstream tree and belongs in EXPECTED_UPSTREAM with "
+                "the tree it points into."
+                % (doc, line, path, m.group(2) + ("-" + end if end else ""),
+                   path))
+            continue
+        if len(hits) > 1:
+            failures.append(
+                "%s:%d  cites %s:%s, and %d files in this repository are called "
+                "that (%s). A line number is only checkable against one file, so "
+                "write the path this citation means."
+                % (doc, line, path, m.group(2) + ("-" + end if end else ""),
+                   len(hits), ", ".join(sorted(os.path.relpath(h, ROOT)
+                                               for h in hits))))
+            continue
+        target = hits[0]
         n = sum(1 for _ in open(target, "rb"))
         last = int(end) if end else start
-        line = text[: m.start()].count("\n") + 1
         if last > n:
             failures.append(
                 "%s:%d  cites %s:%s but that file has %d lines"
@@ -281,6 +408,25 @@ for doc in DOCS:
             path = "module/src/" + path
         target = resolve(doc, path)
         if target is None:
+            # The same silence class 2 had, in the class this file argues is the
+            # STRONGER form of citation. `if target is None: continue` meant a
+            # symbol cited in a file that does not exist was the one citation
+            # shape nothing here looked at: PATH_RE never sees it either, because
+            # SYMBOL_RE's own preferred spelling is a bare `agent_skills.cpp`
+            # and PATH_RE requires a slash. Measured by writing "`NoSuchSymbol`
+            # in `nowhere.cpp`" into docs/limitations.md — 71 symbol citations
+            # checked, exit 0, and the closing line still read "every path, link
+            # target, line citation and symbol citation resolves".
+            #
+            # Unlike a line citation there is no upstream case to carve out:
+            # SYMBOL_RE only matches `Name`, `file.cpp` / `file.h`, which is
+            # resolved under module/src, and module/src is this repository. So a
+            # miss is a wrong sentence, and it says so.
+            line = text[: m.start()].count("\n") + 1
+            failures.append(
+                "%s:%d  cites `%s` in %s, and there is no such file. A symbol "
+                "citation survives a refactor that a line number does not, but "
+                "only if the file it names is real." % (doc, line, symbol, path))
             continue
         body = open(target, encoding="utf-8", errors="replace").read()
         needle = symbol.split("::")[-1]
@@ -294,16 +440,20 @@ for doc, promise in HASH_FREE.items():
     full = os.path.join(ROOT, doc)
     if not os.path.exists(full):
         continue
-    for lineno, raw in enumerate(open(full, encoding="utf-8"), 1):
+    body = open(full, encoding="utf-8").read()
+    # Derived from this document's own transcripts, before a line of it is read.
+    exempt = worked_example_digests(body)
+    for lineno, raw in enumerate(body.splitlines(), 1):
         # The promise itself, and the retraction paragraphs that explain why it
         # exists, may quote a truncated id as an example. Anything under 16 hex
         # or 32 base58 characters is too short to be mistaken for a live value.
         for m in list(HEX_RUN.finditer(raw)) + list(BASE58.finditer(raw)):
             token = m.group(0)
-            # sha256 of a fixed string is a constant, not a chain identifier:
-            # the worked example's digest is checked against `shasum` on every
-            # run and cannot go stale.
-            if "shasum" in raw or "digest" in raw or "sha256" in raw:
+            # sha256 of a fixed string is a constant, not a chain identifier \u2014
+            # but only if it IS that sha256, which is now recomputed from the
+            # input the same document quotes rather than inferred from the word
+            # "digest" being somewhere on the line. See CONTENT_RE above.
+            if token in exempt:
                 continue
             failures.append(
                 "%s:%d  names an identifier (%s...) but promises not to \u2014 %s"
@@ -819,21 +969,53 @@ _ledger = open(os.path.join(ROOT, LEDGER_DOC), encoding="utf-8").read()
 
 
 def tsv_column(rel, header):
+    """The values under a named column, and a sentence saying why there are none.
+
+    Returns `(values, complaint)`. The complaint is the whole point of the
+    signature: every one of the three ways this used to answer `[]` — no file,
+    no such column, no rows — makes the ledger comparison below run over an
+    empty list, and a comparison over an empty list passes. It is the shape this
+    repository has met most often and it hid here in the plainest possible form.
+    Measured, on a copy of the tree: renaming `settlement_tx` to `tx_hash` in
+    artifacts/a2a-task.tsv — a rename this file has already had twice, and the
+    exact reason submission-evidence.py reads TSVs by header name — took the
+    ledger check from fifteen settlements to two and left the run green, saying
+    "checked ... 2 settlement(s) against the ledger" where a reader sees a
+    number and reads coverage. Thirteen settlements stopped being checked and
+    nothing anywhere said so.
+
+    So an absence is now reported as an absence, and the caller fails on it.
+    """
     path = os.path.join(ROOT, rel)
     if not os.path.exists(path):
-        return []
+        return [], "%s is not in this repository" % rel
     rows = [l.rstrip("\n").split("\t") for l in open(path, encoding="utf-8")]
-    if not rows or header not in rows[0]:
-        return []
+    if not rows:
+        return [], "%s is empty" % rel
+    if header not in rows[0]:
+        return [], ("%s has no `%s` column; its columns are %s"
+                    % (rel, header, ", ".join(rows[0])))
     i = rows[0].index(header)
-    return [r[i] for r in rows[1:] if len(r) > i]
+    values = [r[i] for r in rows[1:] if len(r) > i]
+    if not values:
+        return [], "%s has a header and no rows under `%s`" % (rel, header)
+    return values, None
 
 
 for rel, header in (("artifacts/a2a-task.tsv", "settlement_tx"),
                     ("artifacts/shielded-settlement.tsv", "tx")):
-    for tx in tsv_column(rel, header):
+    txs, complaint = tsv_column(rel, header)
+    if complaint:
+        failures.append(
+            "%s, so %s's ledger was compared against nothing. That comparison "
+            "cannot fail on an empty list, which makes a missing manifest and a "
+            "complete ledger the same green run." % (complaint, LEDGER_DOC))
+        continue
+    here = 0
+    for tx in txs:
         if len(tx) != 64:
             continue
+        here += 1
         # The ledger cites hashes truncated first8…last8, the way every table in
         # these documents does; the full form counts too.
         if tx in _ledger or ("%s…%s" % (tx[:8], tx[-8:])) in _ledger:
@@ -844,6 +1026,14 @@ for rel, header in (("artifacts/a2a-task.tsv", "settlement_tx"),
                 "and that ledger's own words are \"every transaction that has ever "
                 "touched any of the three\"." % (rel, tx[:8], tx[-8:], rel,
                                                  LEDGER_DOC))
+    # And the column has to hold hashes. A `settlement_tx` column of `none` or
+    # of truncated ids reads as a manifest with rows and compares nothing, which
+    # is the same defect one column along.
+    if not here:
+        failures.append(
+            "no row of %s carries a 64-character hash under `%s`, so %s's "
+            "ledger was compared against nothing at all"
+            % (rel, header, LEDGER_DOC))
 
 # 9. A TRUNCATED HASH WHOSE HALVES BELONG TO DIFFERENT TRANSACTIONS.
 #
