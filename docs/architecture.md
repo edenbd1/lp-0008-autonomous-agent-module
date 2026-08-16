@@ -480,7 +480,7 @@ from.
 
 Two CI workflows, split by what they can honestly assert:
 
-- `.github/workflows/ci.yml` — minutes, gates every push, in seven jobs: the
+- `.github/workflows/ci.yml` — minutes, gates every push, in eight jobs: the
   policy crate and its adversarial tests (`rust`); the committed binary still
   hashing to the deployed transaction *and* that transaction being live on the
   public testnet with a cannot-exist hash as the control, plus `demo.sh` from a
@@ -488,9 +488,10 @@ Two CI workflows, split by what they can honestly assert:
   a red X names the suite (`skills`); the shipped `.lgx` against the source
   committed beside it (`package`); a real Logos Storage node (`storage-node`);
   Logos Core loading, configuring and starting the committed module headless on
-  Linux, out of the published AppImage (`linux-headless`); and the illustrative
-  use cases against the public testnet (`use-cases`).
-- `.github/workflows/e2e-local-sequencer.yml` — an hour or more, scheduled: the
+  Linux, out of the published AppImage (`linux-headless`); the same deployment
+  command in a container with no compiler on it at all (`toolchain-free`); and
+  the illustrative use cases against the public testnet (`use-cases`).
+- `.github/workflows/e2e-local-sequencer.yml` — hours, scheduled: the
   whole policy lifecycle against a real standalone LEZ sequencer with
   `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a job that completes
   through one reports green without having run, which is worse than red.

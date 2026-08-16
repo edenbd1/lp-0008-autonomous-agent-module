@@ -116,15 +116,16 @@ rather than left, because what it said about CI stopped being true.** It was
 written before any code; the paragraphs below are what CI is now, and the
 retraction under them is what it used to say.
 
-`.github/workflows/ci.yml` runs **seven** jobs, all carrying evidence rather
+`.github/workflows/ci.yml` runs **eight** jobs, all carrying evidence rather
 than just compiling: the policy primitive and its adversarial tests (`rust`);
 the committed program hashing to the deployed transaction **and** that
 transaction being live on the public testnet, with a cannot-exist hash as the
 control (`binaries`); the C++ suites against fake ports (`skills`); the shipped
 `.lgx` against the source committed beside it (`package`); a real Logos Storage
 node (`storage-node`); Logos Core loading, configuring and starting the
-committed module headless on Linux (`linux-headless`); and the illustrative use
-cases against the public testnet (`use-cases`).
+committed module headless on Linux (`linux-headless`); the same deployment
+command in a container that has no compiler on it at all (`toolchain-free`);
+and the illustrative use cases against the public testnet (`use-cases`).
 `.github/workflows/e2e-local-sequencer.yml` is the second workflow.
 
 **Retracted: "the Linux plugin build is not in CI, and the job is removed until

@@ -93,7 +93,11 @@ VERBOSE = "--list" in sys.argv
 # scripts/submission-evidence.py and guarded by that script's --check; its prose
 # cites source paths and symbols like any other document here, and those are
 # what this catches.
-DOCS = ["README.md", "examples/README.md", "SUBMISSION-DRAFT.md"] + [
+DOCS = ["README.md", "examples/README.md", "SUBMISSION-DRAFT.md",
+        # The submission write-up itself was not gated by anything until now:
+        # every path, link and citation in the one document a reader is sent to
+        # went unchecked while thirteen others were.
+        "solutions/LP-0008.md"] + [
     os.path.join("docs", f)
     for f in sorted(os.listdir(os.path.join(ROOT, "docs")))
     if f.endswith(".md")
@@ -1108,6 +1112,44 @@ for _f in sorted(os.listdir(os.path.join(ROOT, "module/tests"))):
             "README §10 claims every file here is accounted for, so either "
             "run it or name it in ci.yml's accounting block with what it needs."
             % _f)
+
+# --- how many jobs ci.yml runs, against how many the prose claims -----------
+#
+# `docs/architecture.md` said "seven jobs" and then listed seven, while
+# `ci.yml` defined eight -- `toolchain-free` was simply absent from the
+# sentence. A list that is short by one entry contains no wrong number, which
+# is why nothing caught it and why the count has to be DERIVED. Same shape as
+# the skills table that listed 24 of 28.
+with open(os.path.join(ROOT, ".github/workflows/ci.yml"), encoding="utf-8") as _fh:
+    _CI_YML = _fh.read()
+_JOBS = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", _CI_YML.split("\njobs:\n", 1)[-1])
+if not _JOBS:
+    failures.append("could not parse any job name out of .github/workflows/ci.yml, "
+                    "so every claim about how many it runs went unchecked")
+_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+          "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+          "twelve": 12}
+_n_jobs = 0
+for _doc in DOCS:
+    _path = os.path.join(ROOT, _doc)
+    if not os.path.exists(_path):
+        continue
+    for _i, _line in enumerate(open(_path, encoding="utf-8"), 1):
+        if "ci.yml" not in _line:
+            continue
+        for _m in re.finditer(r"\*{0,2}(\w+)\*{0,2}\s+jobs\b", _line):
+            _raw = _m.group(1).lower()
+            _claim = _WORDS.get(_raw, int(_raw) if _raw.isdigit() else None)
+            if _claim is None:
+                continue
+            _n_jobs += 1
+            if _claim != len(_JOBS):
+                failures.append(
+                    "%s:%d says ci.yml runs %d job(s); it defines %d: %s"
+                    % (_doc, _i, _claim, len(_JOBS), ", ".join(_JOBS)))
+
+print("checked %d claim(s) about how many jobs ci.yml runs against the %d it defines"
+      % (_n_jobs, len(_JOBS)))
 
 print("checked %d catalogue entr(ies), %d variant claim(s) against %d packaged "
       "variant(s), %d settlement(s) against the ledger, %d truncated hash(es), "
