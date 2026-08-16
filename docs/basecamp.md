@@ -1238,3 +1238,232 @@ Honest list, in the order that matters:
    install procedure, and `app/tests/ui_plugin_load_test.cpp` is the harness
    that reproduces Basecamp's own PluginLoader and was watched failing against
    two other real Qt plugins before it was believed.
+5. ~~The wallet, storage and messaging modules loaded beside it.~~ Built and
+   run: see the section below. This item spent two revisions of
+   `SUBMISSION-DRAFT.md` being described as impossible against Basecamp 0.2.2,
+   which was a statement about the app *bundle* and not about Logos Core.
+
+## Alongside the wallet, storage and messaging modules
+
+The criterion, verbatim: "The agent module loads and runs inside Logos Core
+alongside the wallet, storage, and messaging modules without requiring
+modifications to those modules."
+
+This document, and `SUBMISSION-DRAFT.md` with it, said for a long time that no
+submission could close that against this host, because
+`ls /Applications/LogosBasecamp.app/Contents/modules/` returns exactly three
+modules and none of them is a wallet, a storage or a messaging module. The
+listing is right. The conclusion was wrong, and it was wrong in a way worth
+naming, because the evidence for it was real and pointed at the wrong thing:
+**Logos Core loads from the user modules directory as well as the bundle's**,
+which is the whole subject of the "Installing it into Basecamp" section above
+and is how this repository's own module gets in. What the bundle ships was never
+the constraint.
+
+### The two commands
+
+```sh
+./scripts/build-companion-modules.sh                  # storage, delivery, wallet
+./scripts/logos-core-headless.sh storage --alongside
+```
+
+Both exit 0. The first fetches the three module repositories at the revisions
+below, stages the external library each one's own `metadata.json` declares, runs
+`logos-cpp-generator` over its impl header, builds each against the pinned Qt,
+and packages each as an `.lgx` with the same `lgx` tool `module/package-basecamp.sh`
+uses. The second installs all four packages — the agent's and the three
+companions' — into one modules directory and runs
+`module/tests/logos_core_load_test.cpp` against them.
+
+By default the companions go into `build-companions/modules`, not into the
+Logos Basecamp install. Not because the real directory would not work — it is
+the same code path, and `logos_core_add_modules_dir` is handed whichever it is —
+but because a verification command should not drop three third-party modules
+into somebody's app behind their back. `LOGOS_MODULES_DIR=…` points it at the
+real one.
+
+### The pinned revisions
+
+| Repository | Revision | Why this one |
+|---|---|---|
+| `logos-co/logos-storage-module` | `f6bfab3` | default-branch tip |
+| `logos-co/logos-delivery-module` | `3f0f2d8` | default-branch tip; this is the messaging module |
+| `logos-co/logos-wallet-module` | `f6f9c16` | default-branch tip |
+| `logos-messaging/logos-delivery` | `f8b0365` | **the delivery module's own `flake.lock` pin**, not the tip — see below |
+| `status-im/go-wallet-sdk` | `f6c0924` | the wallet module's own `flake.nix` pin |
+| `status-im/nim-taskpools` | `9e8ccc7` | `logos-delivery`'s own `nimble.lock` pin at `f8b0365` |
+
+`logos-co/logos-modules` aggregates the three modules as submodules, but its
+submodule pointers are four months behind (April 2026) and predate the
+`universal` interface these revisions use; building those instead would need a
+different `logos-cpp-sdk`. The tips are what the module repositories publish.
+
+### The one upstream break this has to route around
+
+`logos-delivery-module`'s tip does **not** build against `logos-delivery`'s tip.
+The library's C ABI moved on 2026-08-14: the reply callbacks went from a scalar
+convention, `void (*)(int, const char*, size_t, void*)`, to a three-argument one,
+`void (*)(int err_code, const char* reply, const char* err_msg, void*)`, and the
+module's own `api_call_handler.h` still binds the old shape. Against the newer
+library that is seventeen compile errors, the first of them
+
+```
+error: no matching function for call to 'bindApiCall'
+note: cannot initialize a parameter of type
+      'void (*)(int, const char *, const char *, void *)' with an lvalue of
+      type 'DeliveryCallback' (aka 'void (*)(int, const char *, unsigned long, void *)')
+```
+
+So the library is built at `f8b0365`, which is the revision
+`logos-delivery-module`'s own `flake.lock` names. That is its published build
+input; taking the tip instead is the deviation, not the other way round.
+
+One more thing bites on the way there, and it is recorded because it costs an
+hour to find. `make liblogosdelivery` at that revision fails with
+
+```
+ffi/ffi_context.nim(6, 58) Error: cannot open file: taskpools/channels_spsc_single
+```
+
+because `nimble setup --localdeps` resolves `taskpools` to `7d96007`, which has
+no `channels_spsc_single`, rather than to the `9e8ccc7` its own `nimble.lock`
+pins, which does. `scripts/build-companion-modules.sh` detects that exact
+condition — the file's absence, not the revision — and puts the locked revision
+in place before building. This is a dependency of the *library*; nothing in the
+three module checkouts is touched by it, and the check below would catch it if
+it were.
+
+### What the runtime prints
+
+The companions are loaded **first**, deliberately: the claim is that the agent
+works with them present, not that four modules each load into an empty runtime
+one at a time.
+
+```
+<- known modules: wallet_module storage_module package_downloader
+                  package_manager delivery_module capability_module agent
+ok  logos_core_load_module('storage_module') reports success
+ok  logos_core_load_module('delivery_module') reports success
+ok  logos_core_load_module('wallet_module') reports success
+ok  logos_core_load_module() reports success
+<- loaded modules: wallet_module storage_module delivery_module
+                   capability_module agent
+ok  and so is 'storage_module' — one runtime, both modules
+...
+<- storage_module getPluginMethods(): 29 method(s) — init, start, stop, destroy,
+                                                    version, moduleVersion, …
+ok  'storage_module' answers across the runtime's transport with its own method
+    table: it is running, not just loaded
+<- delivery_module getPluginMethods(): 13 method(s) — createNode, start, stop,
+                                                     send, subscribe, …
+ok  'delivery_module' answers across the runtime's transport …
+<- wallet_module getPluginMethods(): 19 method(s) — ethClientInit, ethClientClose,
+                                                   ethClientGetClients, …
+ok  'wallet_module' answers across the runtime's transport …
+<- loaded modules, after the agent's skills were exercised:
+   wallet_module storage_module delivery_module capability_module agent
+ok  the agent module is still loaded after every skill was invoked
+ok  and the agent still reports itself started and bound to … with 3 other
+    module(s) loaded in the same runtime
+all steps confirmed (0 failure(s))
+```
+
+### Why "loaded" is not the check
+
+Because this document already contains the run where "loaded" was true and
+nothing worked. The Qt section above records it: a plugin built against 6.11
+makes `logos_core_load_module` return success and join the loaded set, and then
+its `logos_host` is gone and every call spends twenty seconds on `Timeout
+waiting for replica`. Four of the six companion checks would have passed for
+that.
+
+So each companion has to *answer*. `getPluginMethods` is framework-level in the
+SDK — `qt_provider_object.cpp` and `module_proxy.cpp` both special-case it before
+the call reaches the module's own dispatch — so it can be asked of a module this
+repository knows nothing about, and only a live module process produces a
+non-empty method table.
+
+That check was watched failing before it was believed. `storage_module` rebuilt
+against Homebrew's Qt 6.11.1 and dropped into the module directory in place of
+the good one:
+
+```
+ok    logos_core_load_module('storage_module') reports success
+ok    and so is 'storage_module' — one runtime, both modules
+FAIL  'storage_module' answers across the runtime's transport with its own
+      method table: it is running, not just loaded
+FAIL  and 'storage_module' is still loaded beside it
+```
+
+with, in the runtime's log 250 ms earlier and surfaced to nobody:
+
+```
+[error] [logos] [storage_module] LogosModule: Failed to load plugin: …
+  Error: "The plugin '…/storage_module_plugin.dylib' uses incompatible Qt
+  library. (6.11.0) [release]"
+```
+
+`build-companion-modules.sh` refuses to package a plugin that got this wrong,
+reading `Qt6Core_DIR` out of the CMake cache and the framework references out of
+the binary, because CMake falls through to the system Qt without a word when it
+cannot find the pinned one.
+
+### "Without requiring modifications to those modules", checked
+
+Both scripts run
+
+```sh
+git -C build-companions/src/<repo> status --porcelain --untracked-files=no
+```
+
+against each of the three checkouts and refuse if it prints anything — the same
+mechanism `examples/agent-console/run.sh` uses on `module/` for the third-party
+skill criterion. `build-companion-modules.sh` additionally requires every path
+the build **added** to be under `lib/` or `generated_code/`, which are the two
+directories the modules' own published build writes: `logos-module-builder`'s
+`lib/modulePreConfigure.nix` stages external libraries into the first
+(`copyExternalLibsToLib`) and writes `logos-cpp-generator`'s glue into the
+second (`universalCodegen`). Nothing under `src/`, no `CMakeLists.txt` and no
+`metadata.json` is touched.
+
+Both halves were watched failing. A comment appended to
+`storage_module_plugin.cpp`:
+
+```
+FAIL  storage_module: tracked files changed in …/logos-storage-module
+       M src/storage_module_plugin.cpp
+error: a companion module was modified — that is the criterion, not a detail
+```
+
+and an empty `PATCH_APPLIED.txt` dropped in the wallet checkout:
+
+```
+FAIL  wallet_module: the build left files outside lib/ and generated_code/:
+      PATCH_APPLIED.txt
+```
+
+The green run reads:
+
+```
+ok    storage_module @ f6bfab3: no tracked file changed; 6 added path(s), all under lib/ or generated_code/
+ok    delivery_module @ 3f0f2d8: no tracked file changed; 4 added path(s), all under lib/ or generated_code/
+ok    wallet_module @ f6f9c16: no tracked file changed; 2 added path(s), all under lib/ or generated_code/
+```
+
+### What this does not claim
+
+- **`darwin-arm64` only**, like everything else packaged here. No `linux-amd64`
+  variant of the companions is built.
+- **They are loaded and answering, not driven.** The criterion is about
+  coexistence, and nothing here has the agent *call* `storage_module` or
+  `wallet_module`. The agent's own `storage.*` skills still have no ports wired
+  — see "What was NOT verified" above — and loading somebody else's storage
+  module into the same runtime does not change that.
+- **`logos-chat-module` is not built.** It is a Rust `cdylib` whose
+  `metadata.json` declares `delivery_module` as its dependency, and
+  `delivery_module` is the messaging module the criterion names, so it would add
+  a second messaging module rather than a missing one.
+- **The prerequisites are not small.** Qt 6.9.2, a `logos-cpp-sdk` checkout,
+  `lgx`, Go, Nim, and a built Logos Storage library. Every one is checked by
+  name before anything is built, the way `logos-core-headless.sh` checks its
+  own; `docs/limitations.md` carries the list as prose.

@@ -429,11 +429,13 @@ unchecked box can be read without the prose around it:
   and saying so is a claim about a named artefact, checked, not an inference
   from something that failed.
 
-Four of the five unchecked boxes below are `[NOT BUILT]`, and the fifth is
+Three of the four unchecked boxes below are `[NOT BUILT]`, and the fourth is
 `[NOT BUILT]` in one clause and `[UPSTREAM]` in another. **Nothing here is
 blocked outright.** That is a harder thing to write than "the host forbids it",
-and it is the true one: one of these entries said the host forbade it and the
-host does not.
+and it is the true one: one of these entries said the host forbade it, the host
+did not, and that entry is now MET — built, run, and quoted below. An unbuilt
+thing dressed as an impossible one costs exactly one criterion, and this is what
+that cost looked like.
 
 Every MET below names a command that was run and the output it produced. Nothing
 here is upgraded on the strength of reading code: this repository has shipped
@@ -442,62 +444,109 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
 ### Functionality
 
-- [ ] **UNMET `[NOT BUILT]` — Module loads and runs inside Logos Core alongside
-  the wallet, storage, and messaging modules without modifying them.**
-  Half of this is demonstrated. The other half has not been attempted, and the
-  reason this entry used to give for that was false.
-
-  **Loads and runs: yes, in the real runtime.** `./scripts/logos-core-headless.sh`
-  (exit 0) `dlopen`s the real `liblogos_core` out of an installed
-  `LogosBasecamp.app` and drives it through the same C API, in the same order, as
-  Basecamp's own `app/main.cpp` — `logos_core_init` → `add_modules_dir` →
-  `set_persistence_base_path` → `set_access_policy` → `logos_core_start` →
-  `logos_core_load_module("agent", true)` — then `configure()` and `start()` over
-  the runtime's transport:
+- [x] **MET — Module loads and runs inside Logos Core alongside the wallet,
+  storage, and messaging modules without modifying them.**
+  Four modules, one runtime, one command. Two revisions of this entry said the
+  second half could not be done here; both were wrong, and the second one was
+  wrong after the first had already been retracted.
 
   ```
-  <- known modules: package_manager package_downloader capability_module agent
+  ./scripts/build-companion-modules.sh                     # exit 0
+  ./scripts/logos-core-headless.sh storage --alongside     # exit 0
+  ```
+
+  The first builds `logos-co/logos-storage-module` (`f6bfab3`),
+  `logos-co/logos-delivery-module` (`3f0f2d8`) and
+  `logos-co/logos-wallet-module` (`f6f9c16`) from their published sources and
+  packages each as an `.lgx`. The second installs all four packages into one
+  modules directory and drives the real `liblogos_core` out of an installed
+  `LogosBasecamp.app` through the same C API, in the same order, as Basecamp's
+  own `app/main.cpp`. The companions are loaded **first**, so every one of the
+  agent's own assertions runs in a process that is already hosting them:
+
+  ```
+  <- known modules: wallet_module storage_module package_downloader
+                    package_manager delivery_module capability_module agent
+  ok logos_core_load_module('storage_module') reports success
+  ok logos_core_load_module('delivery_module') reports success
+  ok logos_core_load_module('wallet_module') reports success
   ok logos_core_load_module() reports success
-  <- loaded modules: capability_module agent
+  <- loaded modules: wallet_module storage_module delivery_module
+                     capability_module agent
   ok configure() is accepted across the transport
   <- skills(): 25 entries
-  ok it lists exactly 25 — no more, no fewer (got 25)
+  ok invoke() dispatches to every one of the 25
+  <- storage_module getPluginMethods(): 29 method(s) — init, start, stop, …
+  ok 'storage_module' answers across the runtime's transport with its own
+     method table: it is running, not just loaded
+  <- delivery_module getPluginMethods(): 13 method(s) — createNode, start, …
+  ok 'delivery_module' answers across the runtime's transport …
+  <- wallet_module getPluginMethods(): 19 method(s) — ethClientInit, …
+  ok 'wallet_module' answers across the runtime's transport …
+  <- loaded modules, after the agent's skills were exercised:
+     wallet_module storage_module delivery_module capability_module agent
+  ok and the agent still reports itself started and bound to
+     2dA9APZgzcoX65YhNMJmsDC2v838ufLSjPyUdMknWoZd with 3 other module(s)
+     loaded in the same runtime
+  all steps confirmed (0 failure(s))
   ```
 
-  A module that loads and offers nothing looks identical to one that works, which
-  is why the skill count is asserted rather than the load. Basecamp itself is also
-  running it: `ps` shows a `logos_host --name agent` whose parent is
-  `LogosBasecamp.bin`.
+  **Why `getPluginMethods` and not the loaded set.** Because "loaded" is not the
+  claim and would have been the wrong thing to check. A plugin built against a Qt
+  whose minor version exceeds the host's makes `logos_core_load_module` return
+  *success* and join the loaded set; its `logos_host` is then gone and every call
+  spends twenty seconds timing out. This repository has a run of exactly that,
+  against its own module, quoted in [`docs/basecamp.md`](docs/basecamp.md). So
+  the check that carries the criterion is a call each companion has to answer:
+  `getPluginMethods` is framework-level in the SDK, so it needs no knowledge of
+  what the module does, and only a live module process produces a non-empty
+  table. It was watched failing before it was believed — `storage_module` rebuilt
+  against Homebrew's Qt 6.11.1 and installed in place gives
+  `ok logos_core_load_module('storage_module') reports success` followed by
+  `FAIL 'storage_module' answers across the runtime's transport`.
 
-  **Alongside those three: not done.** `ls
-  /Applications/LogosBasecamp.app/Contents/modules/` returns `capability_module`,
-  `package_downloader`, `package_manager`. Basecamp 0.2.2 ships no wallet, storage
-  or messaging module — a statement about the host, checked by listing a
-  directory, not an inference from a failed lookup.
+  **"Without modifications" is checked, not asserted.** Both scripts run
+  `git status --porcelain --untracked-files=no` against each upstream checkout
+  and refuse if it prints anything — the mechanism
+  [`examples/agent-console/run.sh`](examples/agent-console/run.sh) already uses
+  for `module/`. `build-companion-modules.sh` additionally requires every path
+  the build *added* to be under `lib/` or `generated_code/`, which are the two
+  directories the modules' own published build writes (`logos-module-builder`'s
+  `lib/modulePreConfigure.nix` stages external libraries into the first and
+  `logos-cpp-generator`'s glue into the second). Both halves were watched
+  failing: an appended comment in `storage_module_plugin.cpp` gives
+  `FAIL storage_module: tracked files changed`, and a stray `PATCH_APPLIED.txt`
+  gives `FAIL wallet_module: the build left files outside lib/ and
+  generated_code/`. Not one file under `src/`, no `CMakeLists.txt` and no
+  `metadata.json` was touched in any of the three.
 
-  **That is a fact about the bundle, not about Logos Core, and the difference is
-  the whole verdict.** The runtime loads modules out of the *user* modules
-  directory as well as its embedded one — which is precisely how the agent module
-  itself gets in, and `logos-core-headless.sh` is the command that puts it there.
-  And the three modules this criterion names exist, are public, and are released:
-  `logos-co/logos-modules` aggregates `logos-storage-module` (v2.1.2),
-  `logos-delivery-module` (v0.2.0), `logos-chat-module` (v0.2.2) and
-  `logos-wallet-module` as submodules, each with its own `CMakeLists.txt` and
-  `metadata.json`. Two of them are already named in
-  [`docs/recon.md`](docs/recon.md) as the real components behind the prize's
-  wording, and this repository already checks out `_external/logos-delivery-module`
-  and drives its node.
+  **What was actually wrong before.** The bundle observation was right —
+  `ls /Applications/LogosBasecamp.app/Contents/modules/` really does return only
+  `capability_module`, `package_downloader`, `package_manager` — and the
+  conclusion drawn from it was not. Logos Core loads from the **user** modules
+  directory too, which is exactly how this repository's own module gets in. The
+  bundle was never the constraint.
 
-  So what is missing is a build and four `logos_core_load_module` calls in one
-  runtime, not a permission. **`[NOT BUILT]`, not `[UPSTREAM]`.** The one honest
-  qualification: `logos-wallet-module` is described upstream as "very wip" and
-  cuts no releases, so the *wallet* conjunct is the one where the ground could
-  still move.
+  **The one thing that took real work, recorded because a reviewer will hit it.**
+  `logos-delivery-module`'s tip does not build against `logos-delivery`'s tip:
+  the library's C ABI moved on 2026-08-14 (reply callbacks went from
+  `(int, const char*, size_t, void*)` to `(int, const char*, const char*,
+  void*)`) and the module has not followed, which is seventeen compile errors in
+  `api_call_handler.h`. So the library is built at `f8b0365` — the revision the
+  module's **own** `flake.lock` pins. That is its published build input, not a
+  workaround. [`docs/basecamp.md`](docs/basecamp.md) carries the full recipe,
+  including the one dependency (`nim-taskpools`) that `nimble setup --localdeps`
+  resolves to a revision the locked `ffi` cannot compile against.
 
-  This entry previously ended "No submission can close this against this host."
-  That was wrong, and it was wrong in the comfortable direction — it dressed an
-  unbuilt thing as an impossible one, which is the same defect as overclaiming,
-  pointed the other way.
+  **Scope, stated plainly.** `darwin-arm64` only, like every other package here;
+  no `linux-amd64` variant of the companions is built. The modules are loaded and
+  answering, not driven — this criterion is about coexistence, and no attempt is
+  made here to have the agent *call* `storage_module` or `wallet_module` (the
+  agent's own storage skills still have no ports wired, which
+  [`docs/limitations.md`](docs/limitations.md) says and this does not change).
+  `logos-chat-module` is not built: it is a Rust `cdylib` that declares
+  `delivery_module` as a dependency, and `delivery_module` is the messaging
+  module the criterion names, so it adds nothing this does not already show.
 
 - [x] **MET — The agent has its own shielded LEZ account and can send and
   receive tokens independently of the owner's wallet.**
@@ -1536,40 +1585,42 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   Checked by looking: there is no `.mp4`, `.mov` or `.webm` under any path here.
   Blocker 1, and the only unchecked box with irreducible work in it.
 
-**Tally: 18 MET, 5 UNMET, of the 23 criteria the prize lists** — Functionality
-8 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-4 of 6. The parts sum to the whole: 8 + 2 + 3 + 1 + 4 = 18, and 3 + 2 = 5.
+**Tally: 19 MET, 4 UNMET, of the 23 criteria the prize lists** — Functionality
+9 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
+4 of 6. The parts sum to the whole: 9 + 2 + 3 + 1 + 4 = 19, and 2 + 2 = 4.
 
-Two boxes moved in opposite directions this pass, which is the point of
-re-reading them together:
+One box moved this pass, and it is the one the previous pass had just finished
+arguing was not blocked:
 
-- **Spending threshold → MET.** Re-read against the criterion's own words rather
-  than against the limitation it does not mention. Both behaviours it names are
-  executed and recorded. It had been held UNMET because an *approved* spend
-  cannot settle on chain — a genuine defect, fully written up, and not a clause
-  of that sentence.
-- **CI green on the default branch → UNMET.** It is red at the tip: a negative
-  control the tip commit made vacuous, and a settlement the chain holds that the
-  manifest never recorded. Both small, both ours.
+- **Module loads alongside wallet, storage, messaging → MET.** Built and run:
+  `logos-storage-module`, `logos-delivery-module` and `logos-wallet-module`
+  compiled from their published revisions, packaged, installed, and loaded into
+  the same `liblogos_core` as this repository's agent module — each answering
+  across the runtime's transport, and each checkout proved unedited by
+  `git status --porcelain`. The previous two passes had this entry as UNMET, the
+  first of them for a reason about the host that was false. Between reading the
+  correction and doing the work there was one day and about four hundred lines
+  of shell; the sentence "no submission can close this against this host" had
+  been standing for considerably longer than that.
 
-### The five unchecked boxes, by cause
+### The four unchecked boxes, by cause
 
 A reviewer should be able to read this table instead of the prose above and get
 the same answer about what is missing and whose it is.
 
 | Criterion | Cause | What closing it takes |
 |---|---|---|
-| Module loads alongside wallet, storage, messaging | `[NOT BUILT]` | Build `logos-storage-module`, `logos-delivery-module`/`logos-chat-module` and `logos-wallet-module` and load all four in one runtime. The modules are public and released. |
 | Owner interacts from a separate Logos app instance | `[NOT BUILT]` | Give the `app/` console a Delivery-backed owner channel and point two Basecamp instances at each other. Every part exists separately. |
 | CI green on the default branch | `[NOT BUILT]` | A control that mutates the card's price to something *other* than its own value, and one missing manifest row. |
 | Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
 | Single CLI command, on any machine, Logos Core headless | `[NOT BUILT + UPSTREAM]` | The wrapper is writable. "On any machine" is not, from here: `liblogos_core` ships only inside the GUI app, the packages are `darwin-arm64`-only, and the on-chain half needs a faucet. |
 
-**Four of the five are entirely ours, and the fifth is ours in one clause.**
-Nothing on this list is refused by the stack. The version of this checklist
-before this pass said one of them was, and the correction is recorded in that
-entry rather than made silently, because a wrongly-blamed host is how an unbuilt
-thing stops being anyone's job.
+**Three of the four are entirely ours, and the fourth is ours in one clause.**
+Nothing on this list is refused by the stack. Two passes ago this checklist said
+one of them was; that correction was recorded rather than made silently, and this
+pass is what came of it — the entry it defended is now built. A wrongly-blamed
+host is how an unbuilt thing stops being anyone's job, and the cost of leaving
+one standing is measurable: it was a criterion.
 
 The breakdown line has twice disagreed with itself here — "Functionality 6 of 11"
 under a header saying 14 over a section holding 5, and "Supportability 3 of 6"

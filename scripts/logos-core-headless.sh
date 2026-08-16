@@ -43,14 +43,47 @@
 # it is missing, so a machine that cannot run this says which piece it lacks
 # instead of failing somewhere inside a compile. docs/limitations.md carries the
 # same list as prose.
+#
+# --alongside
+#
+# The prize also asks that "the agent module loads and runs inside Logos Core
+# alongside the wallet, storage, and messaging modules without requiring
+# modifications to those modules". With `--alongside`, this command installs the
+# packages `scripts/build-companion-modules.sh` built out of untouched
+# `logos-co/logos-{storage,delivery,wallet}-module` checkouts into the same
+# modules directory, and the harness loads all four into one runtime — asserting
+# for each that it is not merely in the loaded set but ANSWERING across the
+# runtime's transport, which is the only way to tell a running module from one
+# whose host process died on a Qt version mismatch.
+#
+# It also re-checks, here rather than only at build time, that not one tracked
+# file in those three checkouts differs from the published revision. That is the
+# second half of the criterion and it is checked mechanically, the way
+# `examples/agent-console/run.sh` checks `git status --porcelain module/`.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
+
+ALONGSIDE=0
+args=()
+for a in "$@"; do
+  case "$a" in
+    --alongside) ALONGSIDE=1 ;;
+    *) args+=("$a") ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
 
 CATEGORY="${1:-${AGENT_CATEGORY:-storage}}"
 MANIFEST="${MANIFEST:-artifacts/agents.tsv}"
 LGX="${LGX:-module/agent.lgx}"
 MODULE_NAME="${MODULE_NAME:-agent}"
 BUILD="${HEADLESS_BUILD_DIR:-build-headless}"
+COMPANIONS_DIR="${COMPANIONS_DIR:-$ROOT/build-companions}"
+# The modules the criterion names, by the name each one calls itself in its own
+# metadata.json. Spelled out rather than globbed: a package that failed to build
+# would silently drop out of a glob, and the run would then prove that the agent
+# loads beside whatever happened to be lying around.
+COMPANIONS=(storage_module delivery_module wallet_module)
 
 die() { echo "$*" >&2; exit 1; }
 
@@ -97,6 +130,17 @@ case "$(uname -s)" in
 esac
 SDK="${LOGOS_CPP_SDK_ROOT:-$HOME/logos/src/logos-cpp-sdk}"
 PERSISTENCE="${LOGOS_PERSISTENCE_DIR:-$BUILD/persistence}"
+
+# `--alongside` installs four modules rather than one, and it does that into a
+# directory of its own unless told otherwise. Not because the real one would not
+# work — it is the same code path, and `logos_core_add_modules_dir` is given
+# whichever it is — but because a run that drops three third-party modules into
+# somebody's Logos Basecamp install is not something a verification command
+# should do behind their back. Point LOGOS_MODULES_DIR at the real directory to
+# have them turn up in the app.
+if [ "$ALONGSIDE" -eq 1 ] && [ -z "${LOGOS_MODULES_DIR:-}" ]; then
+  USER_MODULES="$COMPANIONS_DIR/modules"
+fi
 
 # ── the prerequisites, each named individually ────────────────────────────
 missing=0
@@ -173,27 +217,79 @@ if [ -z "$VARIANT" ]; then
   VARIANT=$(tar tzf "$LGX" | sed -n 's|^variants/\([^/]*\)/$|\1|p' | head -n1)
   [ -n "$VARIANT" ] || VARIANT="$DEFAULT_VARIANT"
 fi
-DEST="$USER_MODULES/$MODULE_NAME"
-echo "install   $LGX  variant $VARIANT"
-echo "          -> $DEST"
-rm -rf "$DEST"
-mkdir -p "$DEST" || die "could not create $DEST"
-tar xzf "$ROOT/$LGX" -C "$DEST" || die "could not unpack $LGX"
-[ -d "$DEST/variants/$VARIANT" ] \
-  || die "$LGX has no variant '$VARIANT' (has: $(tar tzf "$ROOT/$LGX" | sed -n 's|^variants/\([^/]*\)/$|\1|p' | tr '\n' ' '))"
-mv "$DEST/variants/$VARIANT"/* "$DEST/" && rm -rf "$DEST/variants"
-printf '%s' "$VARIANT" > "$DEST/variant"
-# The manifest's `main` must name a file that is really there: a `main` naming a
-# file the package does not contain is an invisible load failure — the host
-# resolves it, finds nothing, and says nothing. The harness asserts this too;
-# failing here says which half is wrong.
-MAIN=$(python3 -c "
+
+install_package() { # package-path module-name
+  local pkg="$1" name="$2" dest="$USER_MODULES/$2" main
+  echo "install   $pkg  variant $VARIANT"
+  echo "          -> $dest"
+  rm -rf "$dest"
+  mkdir -p "$dest" || die "could not create $dest"
+  tar xzf "$pkg" -C "$dest" || die "could not unpack $pkg"
+  [ -d "$dest/variants/$VARIANT" ] \
+    || die "$pkg has no variant '$VARIANT' (has: $(tar tzf "$pkg" | sed -n 's|^variants/\([^/]*\)/$|\1|p' | tr '\n' ' '))"
+  mv "$dest/variants/$VARIANT"/* "$dest/" && rm -rf "$dest/variants"
+  printf '%s' "$VARIANT" > "$dest/variant"
+  # The manifest's `main` must name a file that is really there: a `main` naming
+  # a file the package does not contain is an invisible load failure — the host
+  # resolves it, finds nothing, and says nothing. The harness asserts this too;
+  # failing here says which half is wrong.
+  main=$(python3 -c "
 import json,sys
-m=json.load(open('$DEST/manifest.json'))['main']
+m=json.load(open('$dest/manifest.json'))['main']
 print(m['$VARIANT'] if isinstance(m,dict) else m)" 2>/dev/null)
-[ -n "$MAIN" ] || die "manifest.json names no main for $VARIANT"
-[ -e "$DEST/$MAIN" ] || die "manifest.json names main=$MAIN, which is not in the package"
-echo "          installed, main=$MAIN"
+  [ -n "$main" ] || die "$name: manifest.json names no main for $VARIANT"
+  [ -e "$dest/$main" ] \
+    || die "$name: manifest.json names main=$main, which is not in the package"
+  echo "          installed, main=$main"
+}
+
+install_package "$ROOT/$LGX" "$MODULE_NAME"
+echo
+
+# ── 1b. and the modules the criterion says it has to run beside ───────────
+if [ "$ALONGSIDE" -eq 1 ]; then
+  PKGDIR="$COMPANIONS_DIR/pkg"
+  for name in "${COMPANIONS[@]}"; do
+    [ -f "$PKGDIR/$name.lgx" ] || die "
+no $PKGDIR/$name.lgx.
+
+Build the companion modules first — from their published sources, unmodified:
+
+    ./scripts/build-companion-modules.sh
+
+It fetches logos-co/logos-{storage,delivery,wallet}-module at pinned revisions,
+stages the external libraries each one's metadata.json declares, and packages
+each as an .lgx. docs/basecamp.md §'Alongside the wallet, storage and messaging
+modules' lists what it needs on the machine."
+  done
+
+  # The other half of the criterion — "without requiring modifications to those
+  # modules" — checked here and not only at build time, so that the single
+  # command a reviewer runs is also the command that proves it. `git status
+  # --porcelain` on a tracked file, exactly as examples/agent-console/run.sh
+  # does for module/.
+  echo
+  for name in "${COMPANIONS[@]}"; do
+    case "$name" in
+      storage_module)  repo="$COMPANIONS_DIR/src/logos-storage-module" ;;
+      delivery_module) repo="$COMPANIONS_DIR/src/logos-delivery-module" ;;
+      wallet_module)   repo="$COMPANIONS_DIR/src/logos-wallet-module" ;;
+    esac
+    [ -d "$repo/.git" ] || die "$name: no checkout at $repo to check for modifications"
+    dirty="$(git -C "$repo" status --porcelain --untracked-files=no)"
+    [ -z "$dirty" ] || die "
+$name: tracked files differ from the published revision in $repo:
+$dirty
+The criterion is 'without requiring modifications to those modules'. Revert
+them, or the run below would be proving something else."
+    echo "unmodified $name @ $(git -C "$repo" rev-parse --short HEAD)  ($repo)"
+  done
+  echo
+  for name in "${COMPANIONS[@]}"; do
+    install_package "$PKGDIR/$name.lgx" "$name"
+  done
+  export LOGOS_ALONGSIDE="$(IFS=,; echo "${COMPANIONS[*]}")"
+fi
 echo
 
 # ── 2. build the harness, if it is not already built ──────────────────────
@@ -244,7 +340,11 @@ echo
 
 # ── 3. run Logos Core headless ────────────────────────────────────────────
 mkdir -p "$PERSISTENCE"
-echo "run       headless: init → add_modules_dir → start → load_module($MODULE_NAME) → configure → start"
+if [ "$ALONGSIDE" -eq 1 ]; then
+  echo "run       headless: init → add_modules_dir → start → load_module(${LOGOS_ALONGSIDE//,/) → load_module(}) → load_module($MODULE_NAME) → configure → start"
+else
+  echo "run       headless: init → add_modules_dir → start → load_module($MODULE_NAME) → configure → start"
+fi
 echo
 LOGOS_HOST_PATH="$HOST_BIN" QT_PLUGIN_PATH="$QT_PLUGINS" QT_QPA_PLATFORM=offscreen \
   "$HARNESS" "$CORE_LIB" "$EMBEDDED_DIR" "$USER_MODULES" "$PERSISTENCE" \
@@ -255,6 +355,12 @@ if [ $rc -eq 0 ]; then
   echo "Logos Core ran the module headless and it reports itself configured and"
   echo "started, bound to owner $OWNER"
   echo "and to policy account $POLICY."
+  if [ "$ALONGSIDE" -eq 1 ]; then
+    echo
+    echo "It did so with ${LOGOS_ALONGSIDE//,/, } loaded in the same runtime, each"
+    echo "built from an unmodified upstream checkout and each answering across the"
+    echo "runtime's own transport."
+  fi
 else
   echo "the headless run failed (exit $rc)" >&2
 fi

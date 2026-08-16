@@ -79,6 +79,10 @@ DOCS = ["README.md", "examples/README.md", "SUBMISSION-DRAFT.md"] + [
 EXTERNAL = ("lee/", "lez/", "_external/", "logos-package/", "spel-framework-macros/",
             "vendor/spel/", "/path/to/", "library/", "build/", "lib/", "target/",
             "nlohmann/", "logos-execution-zone/", "build-basecamp/",
+            # gitignored, and written by scripts/build-companion-modules.sh:
+            # the upstream wallet/storage/messaging checkouts, their build trees
+            # and the .lgx packages Logos Core installs them from.
+            "build-companions/",
             # inside the pinned upstream checkouts: Basecamp, logos-cpp-sdk,
             # logos-module, logos-delivery. docs/basecamp.md pins each revision.
             "app/", "cpp/", "cmake/", "src/interface.h", "scripts/build_rln.sh")

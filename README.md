@@ -850,16 +850,43 @@ cannot come back on the connection that asked for it. Both, with their
 measurements and what is still bounded, are in
 [`docs/limitations.md`](docs/limitations.md).
 
-One more, and it is not ours to fix. The prize asks that the module load
-"alongside the wallet, storage, and messaging modules". **Logos Basecamp 0.2.2
-ships no such modules.** `ls /Applications/LogosBasecamp.app/Contents/modules/`
-returns `capability_module`, `package_downloader`, `package_manager`, and the
-harness's own output reads `loaded modules: capability_module agent`. So
-*loads and runs* is demonstrated against the real runtime, and *alongside those
-three* cannot be demonstrated by any submission against this host, because the
-three do not exist to load. That is a statement about Basecamp 0.2.2 on
-2026-08-15, checked by listing the directory, not an inference from the module
-failing to find them.
+One more, and this paragraph used to end in the wrong place. The prize asks that
+the module load "alongside the wallet, storage, and messaging modules", and what
+stood here was that Logos Basecamp 0.2.2 ships no such modules — true, `ls
+/Applications/LogosBasecamp.app/Contents/modules/` returns `capability_module`,
+`package_downloader`, `package_manager` — followed by the conclusion that no
+submission could therefore demonstrate it against this host. **That conclusion
+was false, and the observation it rests on was never about Logos Core.** The
+runtime loads from the *user* modules directory as well as the bundle's, which
+is precisely how this repository's own module gets in.
+
+The three modules exist and are public. They are built from their published
+revisions and loaded beside the agent by one command:
+
+```sh
+./scripts/build-companion-modules.sh                    # storage, delivery, wallet
+./scripts/logos-core-headless.sh storage --alongside
+```
+
+```
+<- loaded modules: wallet_module storage_module delivery_module
+                   capability_module agent
+ok 'storage_module' answers across the runtime's transport with its own
+   method table: it is running, not just loaded
+ok 'delivery_module' answers …
+ok 'wallet_module' answers …
+all steps confirmed (0 failure(s))
+```
+
+Loaded is not the claim, which is why each companion has to *answer*: a plugin
+built against too new a Qt reports a successful load and then times out, and
+[`docs/basecamp.md`](docs/basecamp.md) quotes the run where that happened here.
+The criterion's other half —
+"without requiring modifications to those modules" — is checked rather than
+asserted, by `git status --porcelain` against each upstream checkout, the same
+way [`examples/agent-console/run.sh`](examples/agent-console/run.sh) checks
+`module/`. [`docs/basecamp.md`](docs/basecamp.md) carries the build recipe and
+the one upstream ABI break it has to route around.
 
 ## 9. The owner channel
 
@@ -1077,7 +1104,13 @@ examples/skills/notary-digest     §5 — a third-party skill, outside module/sr
 scripts/demo.sh                   §1 — the whole thing from a clean clone
 scripts/deploy-agents.sh          §3 — three agents, funded and anchored
 scripts/logos-core-headless.sh    §4 — installs the module and runs Logos Core
-                                  headless: load, configure, start
+                                  headless: load, configure, start. With
+                                  --alongside, the same run with the wallet,
+                                  storage and messaging modules loaded too
+scripts/build-companion-modules.sh
+                                  §8 — builds those three from their published
+                                  sources, unmodified, and packages each as
+                                  an .lgx
 scripts/verify-deployment.sh      checks docs/DEPLOYMENT.md and artifacts/
                                   against the chain, and fails if they disagree
 scripts/check-package-fresh.py    checks module/agent.lgx against module/src,

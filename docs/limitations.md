@@ -1119,6 +1119,37 @@ built, and the script prints the missing ones by name with what to do:
 **Linux is untested.** The paths in the script for it are the documented ones and
 nothing in this repository has ever run it against a Basecamp install on Linux.
 
+### Additional prerequisites for `--alongside`
+
+`./scripts/logos-core-headless.sh storage --alongside` loads the wallet, storage
+and messaging modules into the same runtime, and those have to be built first by
+`./scripts/build-companion-modules.sh`. That script needs everything above plus:
+
+6. **`lgx`** (`LGX_BIN`), the packager from `logos-co/logos-package` that
+   `module/package-basecamp.sh` already needs.
+7. **A `logos-module-builder` and a `logos-module` checkout**
+   (`LOGOS_MODULE_BUILDER_ROOT`, `LOGOS_MODULE_ROOT`) — the same two the agent
+   module's own build needs, and the same pinned revisions.
+8. **Go**, for `status-im/go-wallet-sdk`'s `make static-library`, which is what
+   `logos-wallet-module` links.
+9. **Nim and nimble** on `PATH`, for `liblogosdelivery`. Nimble installs Nim
+   into `~/.nimble/bin` and does not add it to `PATH`; the script does that
+   itself and says so if it still cannot find it.
+10. **A built Logos Storage library** (`STORAGE_SRC`), which
+    `scripts/exercise-nodes.sh` already documents how to produce.
+
+Each is checked by name before anything is built. The heaviest by far is
+`liblogosdelivery`: a large Nim project, several minutes on a warm tree and
+considerably more on a cold one, and it has to be built at the revision
+`logos-delivery-module`'s own `flake.lock` pins rather than at the tip — see
+[`basecamp.md`](basecamp.md) for why and for the one dependency resolution that
+has to be corrected on the way.
+
+**This does not make the criterion conditional.** It was run, it exits 0, and
+the transcript is in `basecamp.md`. What the list above says is what a *reviewer*
+has to install to re-run it, which is the same class of prerequisite as the rest
+of this section and is longer than any of them.
+
 ### What is still not one command
 
 Two things, stated plainly:

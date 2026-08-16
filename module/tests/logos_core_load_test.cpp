@@ -298,6 +298,41 @@ bool resultOk(const QVariant &value, QString *why)
     return result.success;
 }
 
+/// The method names in whatever `getPluginMethods` came back as.
+///
+/// `getPluginMethods` is framework-level: the SDK answers it for every Logos
+/// module before the call ever reaches the module's own dispatch
+/// (`qt_provider_object.cpp` and `module_proxy.cpp` both special-case it), so
+/// it can be asked of a module this harness knows nothing about. What comes
+/// back across the transport is a `QJsonArray` of objects with a `name`, but
+/// which QVariant shape it arrives in depends on the transport, so all three
+/// are read rather than assumed — and an empty list is returned for a QVariant
+/// that carries nothing at all, which is exactly what a module whose host
+/// process is gone answers with.
+QStringList pluginMethodNames(const QVariant &value)
+{
+    QJsonArray table;
+    if (value.canConvert<QJsonArray>()) {
+        table = value.value<QJsonArray>();
+    } else if (value.typeId() == QMetaType::QVariantList) {
+        table = QJsonArray::fromVariantList(value.toList());
+    } else if (value.typeId() == QMetaType::QString
+               || value.typeId() == QMetaType::QByteArray) {
+        table = QJsonDocument::fromJson(value.toString().toUtf8()).array();
+    }
+
+    QStringList names;
+    for (const QJsonValue &entry : table) {
+        const QString name = entry.isObject()
+                                 ? entry.toObject().value(QStringLiteral("name")).toString()
+                                 : entry.toString();
+        if (!name.isEmpty()) {
+            names << name;
+        }
+    }
+    return names;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -335,6 +370,40 @@ int main(int argc, char **argv)
         fprintf(stderr, "  FAIL  policy account must be 64 hex characters, got %zu\n",
                 strlen(policyHex));
         return 2;
+    }
+
+    // The OTHER modules this runtime is to load, named in `$LOGOS_ALONGSIDE` as
+    // a comma-separated list and installed into the same user modules directory
+    // as the agent. Empty by default, so the invocation recorded in
+    // docs/basecamp.md keeps meaning exactly what it meant.
+    //
+    // This exists for one sentence of the prize: "the agent module loads and
+    // runs inside Logos Core ALONGSIDE the wallet, storage, and messaging
+    // modules without requiring modifications to those modules". Passing them
+    // by name rather than by path is what makes the "without modifications"
+    // half checkable somewhere else — `scripts/logos-core-headless.sh` installs
+    // them from packages built out of untouched upstream checkouts and proves
+    // that with `git status --porcelain`, the same way
+    // `examples/agent-console/run.sh` does for `module/`.
+    QStringList companions;
+    const bool companionsRequested = qEnvironmentVariableIsSet("LOGOS_ALONGSIDE");
+    for (const QString &piece :
+         qEnvironmentVariable("LOGOS_ALONGSIDE")
+             .split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString name = piece.trimmed();
+        if (!name.isEmpty()) {
+            companions << name;
+        }
+    }
+    if (companionsRequested) {
+        // An empty list would make every companion check below a loop over
+        // nothing, and a loop over nothing passes. Asking for companions and
+        // naming none is the one way this whole section could report `ok` while
+        // proving that a single module loaded on its own.
+        check(!companions.isEmpty(),
+              QStringLiteral("LOGOS_ALONGSIDE names at least one module: %1")
+                  .arg(companions.isEmpty() ? QStringLiteral("(none)")
+                                            : companions.join(QStringLiteral(", "))));
     }
 
     // Before anything else, and before logos_core_init: the runtime's module
@@ -375,6 +444,24 @@ int main(int argc, char **argv)
     check(contains(known, moduleName),
           "the runtime discovers the module in the user modules directory");
 
+    // ---- the companions, loaded FIRST -------------------------------------
+    //
+    // Before the agent, deliberately. The claim is that the agent works with
+    // the wallet, storage and messaging modules present — not that four modules
+    // each load into an empty runtime one at a time. Loading them first means
+    // every one of the agent's own assertions further down runs in a process
+    // that is already hosting them.
+    for (const QString &name : companions) {
+        const QByteArray n = name.toUtf8();
+        check(contains(known, n.constData()),
+              QStringLiteral("the runtime discovers the companion module '%1' in "
+                             "the same user modules directory")
+                  .arg(name));
+        checkInstalledManifest(QString::fromUtf8(userDir) + "/" + name);
+        check(core_load(n.constData(), true) == 1,
+              QStringLiteral("logos_core_load_module('%1') reports success").arg(name));
+    }
+
     // What the host is about to resolve, checked against what is on disk. This
     // runs before the load so a `main` that names nothing is reported as that,
     // rather than as a load which failed for no stated reason.
@@ -388,6 +475,11 @@ int main(int argc, char **argv)
     show("loaded modules", running);
     check(contains(running, moduleName),
           "the module is in the runtime's loaded set");
+    for (const QString &name : companions) {
+        const QByteArray n = name.toUtf8();
+        check(contains(running, n.constData()),
+              QStringLiteral("and so is '%1' — one runtime, both modules").arg(name));
+    }
 
     // ---- the loaded module, over the runtime's own transport ---------------
     //
@@ -719,6 +811,87 @@ int main(int argc, char **argv)
     check(stranger.contains(QString::fromUtf8(kUnregistered)),
           QStringLiteral("a name nobody registered is refused as unregistered: %1")
               .arg(stranger.left(120)));
+
+    // ---- and the companions are RUNNING, not merely loaded ----------------
+    //
+    // This is the check the whole companion section exists for, and the failure
+    // it exists to catch does not look like a failure. A plugin built against a
+    // Qt whose minor version exceeds the host's makes `logos_core_load_module`
+    // return success and join the loaded set; its `logos_host` is then gone, and
+    // every call to it spends twenty seconds on `Timeout waiting for replica`
+    // before handing back an empty QVariant. Every companion check above passes
+    // for that — docs/basecamp.md records the run where it did, for this very
+    // module. "Loaded" is not the claim; "runs alongside" is.
+    //
+    // `getPluginMethods` is asked because it needs no knowledge of what the
+    // module does, and because only a live module process can answer it. The
+    // answer is required to be a NON-EMPTY method table: `pluginMethodNames`
+    // returns an empty list for a QVariant carrying nothing, so "the call did
+    // not fail" cannot stand in for "the module answered".
+    for (const QString &name : companions) {
+        LogosAPIClient *companion = logosAPI.getClient(name);
+        check(companion != nullptr,
+              QStringLiteral("the SDK hands out a client for '%1'").arg(name));
+        if (!companion) {
+            continue;
+        }
+        const QStringList methods = pluginMethodNames(companion->invokeRemoteMethod(
+            name, QStringLiteral("getPluginMethods"), QVariantList()));
+        note(QStringLiteral("%1 getPluginMethods(): %2 method(s)%3")
+                 .arg(name)
+                 .arg(methods.size())
+                 .arg(methods.isEmpty()
+                          ? QString()
+                          : QStringLiteral(" — ")
+                                + methods.mid(0, 6).join(QStringLiteral(", "))
+                                + (methods.size() > 6 ? QStringLiteral(", …")
+                                                      : QString())));
+        check(!methods.isEmpty(),
+              QStringLiteral("'%1' answers across the runtime's transport with its own "
+                             "method table: it is running, not just loaded")
+                  .arg(name));
+    }
+
+    // Everything above happened while the agent was being driven. This is the
+    // state of the runtime AFTER all of it: the whole set, still up, in one
+    // process.
+    char **together = core_loaded();
+    show("loaded modules, after the agent's skills were exercised", together);
+    check(contains(together, moduleName),
+          "the agent module is still loaded after every skill was invoked");
+    for (const QString &name : companions) {
+        const QByteArray n = name.toUtf8();
+        check(contains(together, n.constData()),
+              QStringLiteral("and '%1' is still loaded beside it").arg(name));
+    }
+
+    // And the agent still answers with all of them up — asked last, so that a
+    // companion that took the runtime down with it fails here rather than
+    // leaving the earlier `meta.status` as the last word.
+    const QJsonObject statusWithCompanions =
+        QJsonDocument::fromJson(client
+                                    ->invokeRemoteMethod(target, QStringLiteral("invoke"),
+                                                         QVariant(QStringLiteral("meta.status")),
+                                                         QVariant(QStringLiteral("{}")))
+                                    .toString()
+                                    .toUtf8())
+            .object();
+    check(statusWithCompanions.value(QStringLiteral("started")).toBool()
+              && statusWithCompanions.value(QStringLiteral("owner")).toString()
+                     == QString::fromUtf8(owner),
+          QStringLiteral("and the agent still reports itself started and bound to %1 with "
+                         "%2 other module(s) loaded in the same runtime")
+              .arg(QString::fromUtf8(owner))
+              .arg(companions.size()));
+
+    // The control for the whole section. Without it, every `contains(...)` line
+    // above would also be green in a runtime that reported every name as known
+    // and every load as successful.
+    static const char *const kGhost = "no_such_module_is_installed";
+    check(!contains(known, kGhost),
+          "a module nobody installed is not in the runtime's known set");
+    check(core_load(kGhost, true) != 1,
+          "and logos_core_load_module() refuses to load it");
 
     fprintf(stderr, "\n%s (%d failure(s))\n",
             failures ? "SOME CHECKS FAILED" : "all steps confirmed", failures);

@@ -29,3 +29,8 @@ app/src/metadata.json
 # The delivery-linked build tree: `cmake -S module -B build-delivery
 # -DLOGOS_DELIVERY_ROOT=...`, which stages a 40 MB library beside the plugin.
 build-delivery/
+
+# scripts/build-companion-modules.sh: the upstream wallet/storage/messaging
+# checkouts, their build trees, the .lgx packages, and the isolated modules
+# directory `logos-core-headless.sh --alongside` installs all four into.
+build-companions/
