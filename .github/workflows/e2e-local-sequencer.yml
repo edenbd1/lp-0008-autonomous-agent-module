@@ -31,13 +31,21 @@ jobs:
   e2e:
     name: policy lifecycle vs standalone sequencer
     runs-on: ubuntu-latest
-    # Two REAL Risc0 proofs are generated on a 4-vCPU runner in this job, and
-    # neither is optional. Measured on the runner: the shielded transfer that
-    # funds the agent takes ~50 min (run 31883398914, 12:07:51 -> 12:57:25) and
-    # the agent's own spend takes ~55 min (run 31867735056, 05:55:22 ->
-    # 06:49:21). At 120 the job was killed mid-proof with the lifecycle
-    # unfinished, which is the same as not running it. Raised with margin for a
-    # cold cache; the ceiling for a GitHub-hosted job is 360.
+    # REAL Risc0 proofs are generated in this job and none of them is optional,
+    # which is where all of the time goes. Measured on the runners we have
+    # actually been given, not estimated: the shielded transfer that funds the
+    # agent took ~50 min (run 31883398914) and the agent's own spend ~55 min
+    # (run 31867735056); the whole lifecycle step has come in at 2h08, 2h56 and
+    # 2h59 on three separate green runs. At 120 the job was killed mid-proof
+    # with the lifecycle unfinished, which is the same as not running it.
+    #
+    # 340 is not a safe number, it is the largest one available: a GitHub-hosted
+    # job cannot exceed 360. On 2026-08-16 a runner took 1h42, 1h50 and 1h42 for
+    # three consecutive proofs -- three to four times the usual -- and this job
+    # was killed at the cap with the lifecycle unfinished. No timeout can cover
+    # that, which is why the script now projects its own finishing time from the
+    # rate it measures and says so in the log rather than leaving it to be
+    # discovered here.
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
@@ -111,6 +119,16 @@ jobs:
             echo "the lifecycle never reached VERIFIED"; exit 1; }
           # And on each stage of it by name, so a future edit that drops one
           # fails here instead of quietly narrowing what this job claims.
+          # The ceiling is READ from the script rather than repeated here. This
+          # list asserted `of 100` while `PER_TX=100` lived in
+          # scripts/e2e-local-sequencer.sh: changing the ceiling there would
+          # have failed this job with "missing from the run", which names the
+          # symptom and not the cause. A literal in one file that depends on a
+          # variable in another is a literal that goes stale.
+          per_tx=$(sed -n 's/^PER_TX=\([0-9][0-9]*\).*/\1/p' \
+                   scripts/e2e-local-sequencer.sh | head -1)
+          [ -n "$per_tx" ] || { echo "no PER_TX= in scripts/e2e-local-sequencer.sh"; exit 1; }
+
           for want in \
             'starting a real sequencer' \
             'funding it from the genesis vault' \
@@ -119,7 +137,7 @@ jobs:
             'a second, unlimited policy for the same agent was refused' \
             '50 (inside the envelope)' \
             '+50, read back from the chain' \
-            'over the per-tx ceiling of 100, and inside the balance) -> refused' \
+            "over the per-tx ceiling of $per_tx, and inside the balance) -> refused" \
             'Program error 6005:' \
             'recipient balance unchanged'; do
             grep -qF "$want" e2e.out || {
