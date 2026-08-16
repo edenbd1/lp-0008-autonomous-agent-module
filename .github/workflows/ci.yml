@@ -217,8 +217,7 @@ jobs:
           LOGOS_CORE_LIB=/nonexistent/liblogos_core \
           LOGOS_HOST_PATH=/nonexistent/logos_host \
           LOGOS_EMBEDDED_MODULES=/nonexistent/modules \
-          QT_ROOT=/nonexistent/qt \
-          LOGOS_CPP_SDK_ROOT=/nonexistent/sdk \
+          LOGOS_APP=/nonexistent/app \
             ./scripts/logos-core-headless.sh storage > headless.out 2>&1 || rc=$?
           cat headless.out
           [ "$rc" -eq 1 ] \
@@ -227,10 +226,22 @@ jobs:
             echo "logos-core-headless.sh reported SKIPPED"; exit 1
           fi
           # Each prerequisite named on its own, with where it was expected.
+          #
+          # Qt is named here as the LOGOS APP'S OWN Qt, not as a Qt SDK. That is
+          # the whole change: the command runs the committed harness, which
+          # resolves Qt out of the runtime the machine already has, so the four
+          # toolchain prerequisites are no longer prerequisites of running it.
+          # The step below asks for the source path and gets the other list.
           for want in "liblogos_core" "logos_host" "embedded modules directory" \
-                      "Qt 6.9.2" "logos-cpp-sdk checkout"; do
+                      "the Logos app's own Qt 6.9.2 libraries"; do
             grep -q "missing: .*$want" headless.out \
               || { echo "the gate did not name: $want"; exit 1; }
+          done
+          for unwanted in "logos-cpp-sdk checkout" "a C++17 compiler"; do
+            if grep -q "missing: .*$unwanted" headless.out; then
+              echo "the gate asked for $unwanted, which running the shipped"
+              echo "harness does not need"; exit 1
+            fi
           done
           grep -q "prerequisite(s) missing" headless.out \
             || { echo "no prerequisite summary was printed"; exit 1; }
@@ -240,6 +251,32 @@ jobs:
             echo "the gate let the run reach the install/build stage"; exit 1
           fi
           rm -f headless.out
+
+      # The other list, from the same gate: what BUILDING the harness needs.
+      # Without this step the change above would be indistinguishable from the
+      # script having quietly stopped checking for Qt and the SDK at all.
+      - name: And names the toolchain when asked to build the harness
+        run: |
+          set -e
+          rc=0
+          LOGOS_CORE_LIB=/nonexistent/liblogos_core \
+          LOGOS_HOST_PATH=/nonexistent/logos_host \
+          LOGOS_EMBEDDED_MODULES=/nonexistent/modules \
+          QT_ROOT=/nonexistent/qt \
+          LOGOS_CPP_SDK_ROOT=/nonexistent/sdk \
+          HARNESS_FROM_SOURCE=1 \
+            ./scripts/logos-core-headless.sh storage > fromsrc.out 2>&1 || rc=$?
+          cat fromsrc.out
+          [ "$rc" -eq 1 ] \
+            || { echo "expected exit 1 from the prerequisite gate, got $rc"; exit 1; }
+          for want in "Qt 6.9.2" "logos-cpp-sdk checkout"; do
+            grep -q "missing: .*$want" fromsrc.out \
+              || { echo "the gate did not name: $want"; exit 1; }
+          done
+          if grep -qE "^install |installed, main=|^build " fromsrc.out; then
+            echo "the gate let the run reach the install/build stage"; exit 1
+          fi
+          rm -f fromsrc.out
 
       # SUBMISSION-DRAFT.md's evidence sections are generated from the chain and
       # from the committed binary by scripts/submission-evidence.py. --check
@@ -826,6 +863,24 @@ jobs:
           echo "literals cross-checked against the shipped binary=${lits:-none}"
           [ -n "$lits" ] && [ "$lits" -ge 400 ] \
             || { echo "the binary was barely read: ${lits:-0} literals"; exit 1; }
+
+          # The OTHER committed binary. scripts/logos-core-headless.sh used to
+          # compile the harness that drives Logos Core, which made a toolchain a
+          # prerequisite of RUNNING the deployment command; it is built once per
+          # variant and committed now, so it needs the same provenance the .lgx
+          # has. One banner per binary: a single "OK" covering both would go
+          # green on the package alone the first time the harness section was
+          # skipped.
+          grep -q "^OK the shipped harness was built from the source" package.out \
+            || { echo "it never checked the committed harness"; exit 1; }
+          # One per variant the package ships a plugin for, and the script
+          # itself fails when those two sets disagree — asserted here as well,
+          # from the package, so the number cannot quietly become one.
+          want=$(python3 -c "import json,tarfile;print(len(json.loads(tarfile.open('module/agent.lgx','r:gz').extractfile('manifest.json').read())['main']))")
+          got=$(sed -n 's/^OK the shipped harness.*commit: \([0-9][0-9]*\) variant(s).*/\1/p' package.out)
+          echo "plugin variants=$want  harnesses=${got:-none}"
+          [ -n "$got" ] && [ "$got" -eq "$want" ] \
+            || { echo "$want plugin variant(s) and ${got:-0} harness(es)"; exit 1; }
           rm -f package.out
 
       # Control 1, and it is the defect itself rather than an analogue of it:
@@ -941,7 +996,84 @@ jobs:
           git checkout -- module/agent.lgx
           rm -f swapped.out
 
-      # Control 4, one level up. docs/basecamp.md quotes the package's root hash
+      # Controls 4 and 5 are the same two for the harness, and they are here
+      # rather than in the linux-headless job because they need no runtime: a
+      # committed binary that nobody can tie to a source is the defect, and this
+      # is the job that exists for it. Both were watched red locally before they
+      # were written down, in the states this repository could actually reach —
+      # somebody edits the harness and forgets the three container builds, and
+      # somebody replaces a binary in a directory full of binaries.
+      - name: Negative control — the harness source moves, the harness does not
+        run: |
+          set -euo pipefail
+          sed -i 's|all steps confirmed|all steps confirmed-v2|' \
+            module/tests/logos_core_load_test.cpp
+          ! git diff --quiet module/tests/logos_core_load_test.cpp \
+            || { echo "the control edited nothing"; exit 1; }
+          set +e
+          ./scripts/check-package-fresh.py > hstale.out 2>&1; rc=$?
+          set -e
+          cat hstale.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a stale harness passed"; exit 1; }
+          grep -q "logos_core_load_test.cpp has changed since the harness was built" hstale.out \
+            || { echo "it went red without naming the source that changed"; exit 1; }
+          # And the second layer caught it on its own, in all three binaries:
+          # the record could have been hand-edited, the binaries could not.
+          n=$(grep -c "literals from module/tests/logos_core_load_test.cpp are absent" hstale.out)
+          [ "$n" -eq 3 ] \
+            || { echo "the literal check fired on $n of 3 harnesses"; exit 1; }
+          git checkout -- module/tests/logos_core_load_test.cpp
+          rm -f hstale.out
+
+      - name: Negative control — a harness binary that was swapped, and one nobody recorded
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          rec = json.load(open("module/harness/harness.sources"))
+          variants = sorted(rec["variants"])
+          assert len(variants) >= 3, "the record names %d variant(s)" % len(variants)
+          for v in variants:
+              p = "module/harness/%s/logos_core_load_test" % v
+              b = bytearray(open(p, "rb").read())
+              # One byte, same length: the size and the record's `bytes` are
+              # untouched, so only the hash can catch it. Every variant, because
+              # the property is "a swapped binary is caught" and there are three.
+              b[0x40000] ^= 0xFF
+              open(p, "wb").write(bytes(b))
+              os.chmod(p, 0o755)
+          print("one byte flipped in each of the %d committed harnesses" % len(variants))
+          PY
+          set +e
+          ./scripts/check-package-fresh.py > hswap.out 2>&1; rc=$?
+          set -e
+          cat hswap.out
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "a swapped harness passed"; exit 1; }
+          n=$(grep -c "the committed harness is not the one that was recorded" hswap.out)
+          [ "$n" -ge 3 ] || { echo "it caught $n of 3"; exit 1; }
+          git checkout -- module/harness
+
+          # And from the other end: a binary in that directory that the record
+          # says nothing about. An unrecorded binary is one nobody can check,
+          # and scripts/logos-core-headless.sh would refuse to run it — but only
+          # if something notices it is there.
+          mkdir -p module/harness/linux-riscv64
+          cp module/harness/linux-arm64/logos_core_load_test module/harness/linux-riscv64/
+          set +e
+          ./scripts/check-package-fresh.py > hextra.out 2>&1; rc=$?
+          set -e
+          echo "exit=$rc"
+          [ "$rc" -ne 0 ] || { echo "an unrecorded harness passed"; exit 1; }
+          grep -q "holds a harness the record says nothing about" hextra.out \
+            || { echo "it went red for some other reason"; cat hextra.out; exit 1; }
+          rm -rf module/harness/linux-riscv64
+          rm -f hswap.out hextra.out
+          git diff --quiet module/harness \
+            || { echo "the controls left module/harness modified"; exit 1; }
+
+      # Control 6, one level up. docs/basecamp.md quotes the package's root hash
       # as evidence, and that citation was found reading cf07408e… — the package
       # whose Agent Cards this repository's own verifier rejects — long after
       # that package had been replaced. Same failure as the three superseded
@@ -1168,6 +1300,39 @@ jobs:
             || { echo "the module loaded and never listed its skills"; exit 1; }
           grep -q "and to the policy account it was configured with" headless.out \
             || { echo "it never read the envelope back out of meta.status"; exit 1; }
+          # This runner HAS a toolchain, so the default path could quietly go
+          # back to compiling one and every assertion above would still pass.
+          # Name which harness ran.
+          grep -q "shipped, sha256" headless.out \
+            || { echo "it did not use the committed harness"; exit 1; }
+          if grep -q "^build .*logos_core_load_test" headless.out; then
+            echo "it compiled a harness on a run that should not have"; exit 1
+          fi
+
+      # The source path, on the one machine in CI that can take it. A developer
+      # who would rather not run a binary this repository built must be able to
+      # build their own, and the shipped harness must not be the only way the
+      # command works — that is the difference between shipping a binary and
+      # depending on one. Same assertions, and it must actually COMPILE.
+      - name: The same run, building the harness from source instead
+        env:
+          QT_ROOT: /opt/Qt/6.9.2/gcc_64
+          LOGOS_CPP_SDK_ROOT: /opt/logos-cpp-sdk
+          HARNESS_FROM_SOURCE: "1"
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/logos-core-headless.sh storage > fromsrc.out 2>&1; rc=$?
+          set -e
+          tail -40 fromsrc.out
+          [ "$rc" -eq 0 ] || { echo "the source-built harness run exited $rc"; exit 1; }
+          grep -q "^build .*build-headless/linux-amd64/logos_core_load_test" fromsrc.out \
+            || { echo "it did not build a harness"; exit 1; }
+          grep -q "all steps confirmed (0 failure(s))" fromsrc.out \
+            || { echo "no confirmation banner"; exit 1; }
+          [ -x build-headless/linux-amd64/logos_core_load_test ] \
+            || { echo "no harness was produced"; exit 1; }
+          rm -f fromsrc.out
 
       # The variant is chosen, not stumbled into. Before this guard the script
       # took the first variant in the archive, so the first Linux run after
@@ -1219,6 +1384,67 @@ jobs:
           grep -q "FAIL  logos_core_load_module() reports success" absent.out \
             || { echo "it went red without failing the load"; exit 1; }
           rm -f absent.out headless.out
+
+  # The job above proves the command works on a machine this repository
+  # PREPARED — it installs Qt and clones the SDK in its own first two steps.
+  # That is exactly what "on any machine" cannot be argued from, and for the
+  # whole life of this submission it was the gap: the command compiled its
+  # harness, so a machine that could run Logos Core still could not run the
+  # command until it had a compiler, Qt 6.9.2 with qtremoteobjects, a
+  # logos-cpp-sdk checkout and nlohmann/json.
+  #
+  # This job installs none of them. `scripts/harness-no-toolchain.sh` runs the
+  # deployment command inside a stock `ubuntu:24.04` container, having first
+  # required that the container has no compiler at all — it refuses to report
+  # anything if it finds one, because a proof performed on a prepared machine is
+  # not a proof. Everything it does is in that script rather than in these
+  # steps, so it can be re-run by anyone with docker and is not a property of
+  # this workflow.
+  #
+  # Watched locally, both architectures, before it was written down: green on
+  # linux/arm64 (native) and on linux/amd64 (emulated, which additionally needs
+  # squashfs-tools because an AppImage extracts itself by running); red when the
+  # container is asked to build the harness, when the harness bytes are not the
+  # recorded ones, and — the way it first passed — when docker was run without
+  # `-i`, so `bash -s` read an empty program and the container exited 0 having
+  # done nothing. That last one is why the script's assertion is the marker line
+  # it prints and not its exit code.
+  toolchain-free:
+    name: The same command, on a machine with no compiler at all
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The runner's own toolchain is not in the container
+        run: |
+          set -euo pipefail
+          # Named here because it is the point: ubuntu-latest has gcc, cmake and
+          # make. None of them is visible inside the image the script uses, and
+          # the script checks that itself rather than trusting this comment.
+          echo "runner has: $(cc --version | head -n1)"
+          docker --version
+
+      - name: Deploy and configure the agent in Logos Core, headless, with no toolchain
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/harness-no-toolchain.sh linux-amd64 > free.out 2>&1; rc=$?
+          set -e
+          cat free.out
+          [ "$rc" -eq 0 ] || { echo "the toolchain-free run exited $rc"; exit 1; }
+          # The exit code is not the assertion; the script's own marker is.
+          grep -qx "TOOLCHAIN-FREE-RUN-COMPLETE" free.out \
+            || { echo "the container exited 0 without running to the end"; exit 1; }
+          grep -q "all steps confirmed (0 failure(s))" free.out \
+            || { echo "no confirmation banner"; exit 1; }
+          grep -q "no compiler, no Qt SDK and no logos-cpp-sdk checkout were needed" free.out \
+            || { echo "it did not run the shipped harness"; exit 1; }
+          grep -q "refused, naming all three, before touching anything" free.out \
+            || { echo "the source-path control did not run"; exit 1; }
+          grep -q "refused before the runtime was started" free.out \
+            || { echo "the swapped-harness control did not run"; exit 1; }
+          rm -f free.out
 
   use-cases:
     name: The illustrative use cases verify against the public testnet

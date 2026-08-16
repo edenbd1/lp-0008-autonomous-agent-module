@@ -89,6 +89,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tarfile
@@ -98,6 +99,23 @@ import tarfile
 # like a corrupt package and is not.
 PACKAGE = "module/agent.lgx"
 RECORD = "module/agent.lgx.sources"
+
+# The second committed binary, and it arrived for the same reason the first one
+# did: `scripts/logos-core-headless.sh` used to COMPILE the harness that drives
+# Logos Core, which made a C++17 compiler, Qt 6.9.2, a logos-cpp-sdk checkout and
+# nlohmann/json prerequisites of *running* the deployment command. It is now
+# built once per variant and committed — and a committed binary is a claim about
+# a build, which is the thing this file exists to stop anyone having to take on
+# trust. Same two layers, same source-literal corroboration, plus three
+# properties that are specific to an executable somebody else will run:
+# it must be for the architecture its variant names, it must carry no rpath
+# (every rpath this build can offer names a directory on the machine that
+# compiled it), and there must be one for every variant the package ships a
+# plugin for — otherwise "on any machine" has a hole exactly where nobody looks.
+HARNESS_DIR = "module/harness"
+HARNESS_RECORD = "module/harness/harness.sources"
+HARNESS_SOURCE = "module/tests/logos_core_load_test.cpp"
+HARNESS_NAME = "logos_core_load_test"
 
 # Everything the build reads. module/CMakeLists.txt names each file in
 # module/src explicitly, but the set is taken from the directory rather than
@@ -283,6 +301,151 @@ def in_binary(needle, blob):
         return needle.decode("utf-8").encode("utf-16-le") in blob
     except UnicodeDecodeError:
         return False
+
+
+# --------------------------------------------------------------------------
+# What an executable says about itself, read out of its own bytes.
+#
+# Written here, in struct.unpack, rather than shelled out to readelf/otool, for
+# the reason the whole harness change exists: this check has to run on a machine
+# that has no toolchain, and `otool` does not exist on Linux while `readelf`
+# does not exist on a stock macOS. A binary that can only be checked where
+# binutils is installed is a binary nobody checks.
+#
+# Three questions, and each one is a defect this repository has already met in
+# another form:
+#
+#   arch    — the variant directory says `linux-arm64`; is the file inside it
+#             actually aarch64? The install path made exactly this mistake with
+#             the plugin (`tar tzf | head -n1` installed the *dylib* on Linux),
+#             and a wrong-architecture executable fails with `cannot execute
+#             binary file`, which reads like a corrupt download.
+#   rpath   — a shipped binary that carries `-rpath /Users/<someone>/logos/Qt`
+#             works on one computer and is a lie everywhere else. It must have
+#             none: the run step supplies the app's own Qt through the
+#             environment.
+#   needs   — which libraries and which symbol versions. This is what says
+#             whether "any machine that can run Logos Core can run this" is a
+#             measurement or a hope.
+# --------------------------------------------------------------------------
+
+_ELF_MACHINE = {0x3E: "x86-64", 0xB7: "aarch64", 0x28: "arm", 0xF3: "riscv"}
+_MACHO_CPU = {0x0100000C: "arm64", 0x01000007: "x86-64"}
+
+
+def _elf_shape(blob):
+    if blob[4] != 2 or blob[5] != 1:
+        raise ValueError("only 64-bit little-endian ELF is understood here")
+    machine = struct.unpack_from("<H", blob, 0x12)[0]
+    phoff, = struct.unpack_from("<Q", blob, 0x20)
+    phentsize, phnum = struct.unpack_from("<HH", blob, 0x36)
+    loads, dyn = [], None
+    for i in range(phnum):
+        off = phoff + i * phentsize
+        p_type, = struct.unpack_from("<I", blob, off)
+        p_offset, p_vaddr = struct.unpack_from("<QQ", blob, off + 0x08)
+        p_filesz, = struct.unpack_from("<Q", blob, off + 0x20)
+        if p_type == 1:                      # PT_LOAD
+            loads.append((p_vaddr, p_filesz, p_offset))
+        elif p_type == 2:                    # PT_DYNAMIC
+            dyn = (p_offset, p_filesz)
+
+    def at(vaddr):
+        for vstart, size, off in loads:
+            if vstart <= vaddr < vstart + size:
+                return off + (vaddr - vstart)
+        raise ValueError("address 0x%x is in no PT_LOAD segment" % vaddr)
+
+    shape = {"format": "ELF", "arch": _ELF_MACHINE.get(machine, hex(machine)),
+             "rpaths": [], "needed": [], "version_needs": {}}
+    if dyn is None:
+        return shape
+    entries, strtab, verneed, verneednum = [], None, None, 0
+    off, end = dyn[0], dyn[0] + dyn[1]
+    while off + 16 <= end:
+        tag, val = struct.unpack_from("<qQ", blob, off)
+        off += 16
+        if tag == 0:                         # DT_NULL
+            break
+        entries.append((tag, val))
+        if tag == 5:
+            strtab = val
+        elif tag == 0x6FFFFFFE:
+            verneed = val
+        elif tag == 0x6FFFFFFF:
+            verneednum = val
+
+    def s(offset):
+        base = at(strtab) + offset
+        return blob[base:blob.index(b"\0", base)].decode("utf-8", "replace")
+
+    if strtab is not None:
+        for tag, val in entries:
+            if tag == 1:
+                shape["needed"].append(s(val))
+            elif tag in (15, 29):            # DT_RPATH, DT_RUNPATH
+                shape["rpaths"].extend(s(val).split(":"))
+    if verneed is not None and strtab is not None:
+        vn = at(verneed)
+        for _ in range(verneednum):
+            _ver, cnt, file_off, aux, nxt = struct.unpack_from("<HHIII", blob, vn)
+            lib = s(file_off)
+            a = vn + aux
+            for _i in range(cnt):
+                _hash, _flags, _other, name, anext = struct.unpack_from(
+                    "<IHHII", blob, a)
+                shape["version_needs"].setdefault(lib, []).append(s(name))
+                if not anext:
+                    break
+                a += anext
+            if not nxt:
+                break
+            vn += nxt
+    for lib in shape["version_needs"]:
+        shape["version_needs"][lib] = sorted(set(shape["version_needs"][lib]))
+    return shape
+
+
+def _macho_shape(blob):
+    magic, = struct.unpack_from("<I", blob, 0)
+    if magic in (0xCAFEBABE, 0xBEBAFECA):
+        raise ValueError("this is a fat Mach-O; the shipped harness is thin")
+    if magic != 0xFEEDFACF:
+        raise ValueError("not a 64-bit little-endian Mach-O")
+    cputype, = struct.unpack_from("<I", blob, 4)
+    ncmds, = struct.unpack_from("<I", blob, 16)
+    shape = {"format": "Mach-O", "arch": _MACHO_CPU.get(cputype, hex(cputype)),
+             "rpaths": [], "needed": [], "version_needs": {}}
+    off = 32
+    for _ in range(ncmds):
+        cmd, cmdsize = struct.unpack_from("<II", blob, off)
+        if cmd == 0x8000001C:                # LC_RPATH
+            p, = struct.unpack_from("<I", blob, off + 8)
+            raw = blob[off + p:off + cmdsize]
+            shape["rpaths"].append(raw.split(b"\0")[0].decode("utf-8", "replace"))
+        elif cmd in (0x0C, 0x8000001F):      # LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB
+            p, = struct.unpack_from("<I", blob, off + 8)
+            raw = blob[off + p:off + cmdsize]
+            shape["needed"].append(raw.split(b"\0")[0].decode("utf-8", "replace"))
+        off += cmdsize
+    return shape
+
+
+def binary_shape(blob):
+    """{format, arch, rpaths, needed, version_needs} for an ELF or a Mach-O."""
+    if blob[:4] == b"\x7fELF":
+        return _elf_shape(blob)
+    return _macho_shape(blob)
+
+
+# What each variant's name asserts about the file inside it. A dict rather than
+# a parse of the name, so a new variant has to be added here deliberately: an
+# unknown variant is a failure below, not a check that quietly passes.
+VARIANT_ARCH = {
+    "darwin-arm64": ("Mach-O", "arm64"),
+    "linux-amd64": ("ELF", "x86-64"),
+    "linux-arm64": ("ELF", "aarch64"),
+}
 
 
 def read_package(path):
@@ -483,19 +646,285 @@ def check(repo, rebuild_dir=None):
     if rebuild_dir is not None:
         rebuild_and_compare(repo, rebuild_dir, binaries, r)
 
+    package_failures = len(r.failures)
+    package_banner = (
+        "OK the shipped package was built from the source in this commit: "
+        "%d build input(s) recorded and unchanged, %d literal(s) found in the "
+        "shipped binary" % (len(on_disk), len(lits) - len(LITERAL_EXCLUSIONS)))
+
+    # ---- and the other committed binary -----------------------------------
+    print()
+    check_harness(repo, r, set(binaries))
+    harness_failures = len(r.failures) - package_failures
+
     print()
     if r.blocked and len(r.blocked) == len(r.failures):
         print("%d failure(s): the check could not be completed, which is not a "
               "pass" % len(r.failures))
         return 1
-    if r.failures:
+    if package_failures:
         print("%d failure(s): the committed package does not agree with the "
-              "committed source" % len(r.failures))
-        return 1
-    print("OK the shipped package was built from the source in this commit: "
-          "%d build input(s) recorded and unchanged, %d literal(s) found in the "
-          "shipped binary" % (len(on_disk), len(lits) - len(LITERAL_EXCLUSIONS)))
-    return 0
+              "committed source" % package_failures)
+    else:
+        print(package_banner)
+    if harness_failures:
+        print("%d failure(s): the committed harness does not agree with the "
+              "committed source" % harness_failures)
+    else:
+        print("OK the shipped harness was built from the source in this commit: "
+              "%d variant(s), each for the architecture it names, each carrying "
+              "no rpath, and every literal of %s in each"
+              % (len(record_variant_count(repo)), HARNESS_SOURCE))
+    return 1 if r.failures else 0
+
+
+def record_variant_count(repo):
+    """The variants the harness record names, for the banner. Empty if there is
+    no record — in which case check_harness has already failed and the banner is
+    not printed."""
+    path = os.path.join(repo, HARNESS_RECORD)
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh).get("variants") or {}
+
+
+# The floor upstream's own libraries set, measured out of the published AppImage
+# with the reader above rather than taken from a changelog:
+#
+#   liblogos_core.so        GLIBC_2.38   GLIBCXX_3.4.29   CXXABI_1.3.15
+#   libQt6Core.so.6.9.2                                   CXXABI_1.3.15
+#   libQt6Positioning.so                 GLIBCXX_3.4.32
+#   libsystemd.so.0         GLIBC_2.39
+#
+# So a machine that can run Logos Core on Linux already has at least these. The
+# shipped harness must not need MORE than the runtime it drives — if it did,
+# "any machine that can run Logos Core can run this" would be false, and it
+# would be false silently, on somebody else's distribution, months from now.
+# Measured on the committed binaries, both architectures:
+# GLIBC_2.38, GLIBCXX_3.4.29, CXXABI_1.3.9.
+LINUX_SYMBOL_FLOOR = {
+    "GLIBC_": (2, 38),
+    "GLIBCXX_": (3, 4, 32),
+    "CXXABI_": (1, 3, 15),
+}
+
+
+def _version_tuple(name, prefix):
+    try:
+        return tuple(int(p) for p in name[len(prefix):].split("."))
+    except ValueError:
+        return None
+
+
+def check_harness(repo, r, package_variants):
+    """The committed harness binaries were built from the committed source.
+
+    Same two layers as the package — a record that is recomputed, and the
+    binary's own bytes read back for the source's string literals — plus what
+    is specific to an executable this repository asks a stranger to run: the
+    architecture its variant claims, no rpath, a dependency floor no higher than
+    the runtime's own, and one harness for every variant the package ships a
+    plugin for.
+    """
+    src_path = os.path.join(repo, HARNESS_SOURCE)
+    rec_path = os.path.join(repo, HARNESS_RECORD)
+    if not os.path.isfile(src_path):
+        r.fail("%s is missing; it is what the shipped harness is built from"
+               % HARNESS_SOURCE)
+        return
+    if not os.path.isfile(rec_path):
+        r.fail("%s is missing, so no committed harness can be checked against "
+               "the source it came from. scripts/logos-core-headless.sh refuses "
+               "to run an unrecorded one, which means the deployment command "
+               "needs a compiler again." % HARNESS_RECORD)
+        return
+    with open(rec_path, encoding="utf-8") as fh:
+        record = json.load(fh)
+
+    # ---- layer 1: the record describes THIS source ------------------------
+    on_disk = {HARNESS_SOURCE: sha256_file(src_path)}
+    recorded = record.get("built_from") or {}
+    if set(recorded) != set(on_disk):
+        r.fail("the harness record's build inputs are %s; the source tree's are "
+               "%s" % (sorted(recorded), sorted(on_disk)))
+    for path, digest in sorted(on_disk.items()):
+        if recorded.get(path) == digest:
+            r.ok("the shipped harness was recorded against this %s (sha256 %s)"
+                 % (path, digest[:16]))
+        else:
+            r.fail("%s has changed since the harness was built (%s -> %s). "
+                   "Rebuild it on each platform: "
+                   "./scripts/logos-core-headless.sh --build-harness"
+                   % (path, str(recorded.get(path))[:12], digest[:12]))
+
+    # ---- the file set: a binary nobody recorded is not shipped ------------
+    hdir = os.path.join(repo, HARNESS_DIR)
+    on_disk_variants = set()
+    if os.path.isdir(hdir):
+        for entry in sorted(os.listdir(hdir)):
+            if os.path.isdir(os.path.join(hdir, entry)):
+                on_disk_variants.add(entry)
+    recorded_variants = set(record.get("variants") or {})
+    for extra in sorted(on_disk_variants - recorded_variants):
+        r.fail("%s/%s holds a harness the record says nothing about; an "
+               "unrecorded binary is one nobody can check"
+               % (HARNESS_DIR, extra))
+    for gone in sorted(recorded_variants - on_disk_variants):
+        r.fail("the record names a %s harness and there is no %s/%s directory"
+               % (gone, HARNESS_DIR, gone))
+
+    # ---- every variant the package ships a plugin for needs one -----------
+    #
+    # This is the criterion's own clause, as an assertion. A package that can be
+    # installed on a platform whose harness was never built is a platform where
+    # the deployment command silently needs a compiler again.
+    hole = sorted(package_variants - recorded_variants)
+    if hole:
+        r.fail("module/agent.lgx ships a plugin for %s and there is no harness "
+               "for it, so on that platform the deployment command falls back "
+               "to compiling one" % ", ".join(hole))
+    elif package_variants:
+        r.ok("every variant the package ships a plugin for has a harness beside "
+             "it: %s" % ", ".join(sorted(recorded_variants)))
+
+    # ---- layer 1 + the executable's own bytes -----------------------------
+    lits = literals(repo, [HARNESS_SOURCE])
+    if len(lits) < 60:
+        r.fail("only %d literals of >= %d bytes were extracted from %s; the "
+               "scanner found essentially nothing and would agree with any "
+               "binary" % (len(lits), MIN_LITERAL, HARNESS_SOURCE))
+
+    for variant, info in sorted((record.get("variants") or {}).items()):
+        rel = "%s/%s/%s" % (HARNESS_DIR, variant, HARNESS_NAME)
+        path = os.path.join(repo, rel)
+        if not os.path.isfile(path):
+            r.fail("the record names a %s harness and %s is not there"
+                   % (variant, rel))
+            continue
+        with open(path, "rb") as fh:
+            blob = fh.read()
+        got = sha256_bytes(blob)
+        if got == info.get("sha256") and len(blob) == info.get("bytes"):
+            r.ok("%s is the binary the record was written for (sha256 %s, %d "
+                 "bytes)" % (rel, got[:16], len(blob)))
+        else:
+            r.fail("%s hashes to %s (%d bytes), the record says %s (%s bytes): "
+                   "the committed harness is not the one that was recorded"
+                   % (rel, got[:16], len(blob), str(info.get("sha256"))[:16],
+                      info.get("bytes")))
+
+        # It has to be runnable. A mode bit is easy to lose — `git` keeps only
+        # the execute bit, and a harness without it fails with "Permission
+        # denied" in the middle of a deployment.
+        if not os.access(path, os.X_OK):
+            r.fail("%s is not executable; the deployment command cannot run it"
+                   % rel)
+
+        try:
+            shape = binary_shape(blob)
+        except Exception as exc:              # noqa: BLE001 - reported, not raised
+            r.fail("%s could not be read as an executable: %s" % (rel, exc))
+            continue
+
+        want = VARIANT_ARCH.get(variant)
+        if want is None:
+            r.fail("%s is a variant this check does not know the architecture "
+                   "of; add it to VARIANT_ARCH deliberately rather than letting "
+                   "it through" % variant)
+        elif (shape["format"], shape["arch"]) == want:
+            r.ok("%s really is %s %s, which is what the variant name claims"
+                 % (rel, shape["format"], shape["arch"]))
+        else:
+            r.fail("%s is %s %s and the variant name says %s %s — a binary for "
+                   "another machine, which fails at exec time with a message "
+                   "about the file format rather than about the platform"
+                   % (rel, shape["format"], shape["arch"], want[0], want[1]))
+
+        if shape["rpaths"]:
+            r.fail("%s carries rpath(s) %s. Every one of them names a directory "
+                   "on the machine that compiled it; a shipped binary must find "
+                   "Qt and the runtime through the environment "
+                   "scripts/logos-core-headless.sh sets, out of the Logos app "
+                   "itself" % (rel, ", ".join(shape["rpaths"])))
+        else:
+            r.ok("%s carries no rpath: nothing in it names the machine it was "
+                 "built on" % rel)
+
+        # What it is linked to, and the two platforms differ here for a reason
+        # the harness's own header explains.
+        #
+        # Qt on both: the runtime assumes its host application already created a
+        # QCoreApplication before logos_core_init, and the harness is that host.
+        #
+        # `liblogos_core` on ELF only. On Mach-O it is dlopen'd from the app by
+        # path — "what runs is the shipped binary, not a rebuild of it" — and
+        # `-undefined dynamic_lookup` defers the rest. There is no ELF
+        # equivalent of that for an executable, so the Linux link is real, which
+        # is asserted here rather than remembered. A darwin harness that HAD
+        # linked it would be one that needs the app at its link-time path.
+        needed = " ".join(shape["needed"])
+        qt_soname = "Qt6Core" if shape["format"] == "ELF" else "QtCore"
+        if qt_soname in needed:
+            r.ok("%s links Qt, which is what creates the QCoreApplication the "
+                 "runtime assumes its host already made" % rel)
+        else:
+            r.fail("%s does not link Qt; its dependencies are %s"
+                   % (rel, ", ".join(shape["needed"]) or "none"))
+        if shape["format"] == "ELF":
+            if "logos_core" in needed:
+                r.ok("%s links liblogos_core, as an ELF harness must: "
+                     "`-undefined dynamic_lookup` is Mach-O only" % rel)
+            else:
+                r.fail("%s does not link liblogos_core; its dependencies are %s"
+                       % (rel, ", ".join(shape["needed"]) or "none"))
+        elif "logos_core" in needed:
+            r.fail("%s links liblogos_core at a fixed path. The darwin harness "
+                   "dlopen's the runtime out of the app instead, so that what "
+                   "runs is the binary the app shipped and not a rebuild of it: "
+                   "%s" % (rel, ", ".join(shape["needed"])))
+        else:
+            r.ok("%s does not link liblogos_core: it dlopen's the runtime out "
+                 "of the app, by path, at run time" % rel)
+
+        if shape["format"] == "ELF":
+            worst = {}
+            for lib, versions in sorted(shape["version_needs"].items()):
+                for v in versions:
+                    for prefix, floor in LINUX_SYMBOL_FLOOR.items():
+                        if not v.startswith(prefix):
+                            continue
+                        got_v = _version_tuple(v, prefix)
+                        if got_v is None:
+                            continue
+                        if got_v > worst.get(prefix, (0,)):
+                            worst[prefix] = got_v
+                        if got_v > floor:
+                            r.fail("%s needs %s, and the Logos Core runtime "
+                                   "itself needs only %s%s. A machine that can "
+                                   "run Logos Core would not be able to run "
+                                   "this harness, which is the whole claim."
+                                   % (rel, v, prefix,
+                                      ".".join(str(n) for n in floor)))
+            r.note("%s needs at most %s — the runtime's own floor is "
+                   "GLIBC_2.38, GLIBCXX_3.4.32, CXXABI_1.3.15"
+                   % (rel, ", ".join("%s%s" % (p, ".".join(str(n) for n in v))
+                                     for p, v in sorted(worst.items())) or "nothing"))
+
+        # ---- layer 2: the shipped binary carries this source's strings ----
+        missing = [(lit, sites) for lit, sites in sorted(lits.items())
+                   if not in_binary(lit, blob)]
+        if not missing:
+            r.ok("every one of the %d literals in %s is in the %s harness"
+                 % (len(lits), HARNESS_SOURCE, variant))
+        else:
+            r.fail("%d of %d literals from %s are absent from the %s harness, "
+                   "so that binary was not built from this source:"
+                   % (len(missing), len(lits), HARNESS_SOURCE, variant))
+            for lit, sites in missing[:12]:
+                print("          %-46r  %s" % (lit[:44], ", ".join(sites)))
+            if len(missing) > 12:
+                print("          ... and %d more" % (len(missing) - 12))
 
 
 def rebuild_and_compare(repo, build_dir, binaries, r):

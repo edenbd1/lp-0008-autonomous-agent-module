@@ -853,6 +853,83 @@ the variant this machine needs and names what the package has when that is
 missing. There is no fallback: a module directory holding another platform's
 binary is one that looks complete and can never load.
 
+### The harness, built once per variant
+
+The run above needs a program that drives `liblogos_core`'s C API and then calls
+the loaded module across the runtime's transport — the C API can *load* a module
+and cannot *call a method* on one. `scripts/logos-core-headless.sh` used to
+compile it on every machine it ran on, which made the whole Qt/SDK/compiler list
+above a prerequisite of **running** the deployment command rather than of
+building anything. It is built once per variant instead, in the same three
+places the three plugin variants are built:
+
+```sh
+# macOS, on the machine that has Qt and the SDK checkout
+./scripts/logos-core-headless.sh --build-harness
+
+# each Linux architecture, in its container (the images docs above describe)
+docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work lp8-linux:amd64 \
+  ./scripts/logos-core-headless.sh --build-harness
+docker run --rm --platform linux/arm64 -v "$PWD:/work" -w /work lp8-linux:arm64 \
+  ./scripts/logos-core-headless.sh --build-harness
+```
+
+Each run writes `module/harness/<variant>/logos_core_load_test` and **merges**
+its entry into `module/harness/harness.sources`, carrying the other variants
+forward only if their bytes are still the recorded ones and still contain every
+string literal of the harness source. `scripts/check-package-fresh.py` checks
+all of it afterwards, from the binaries' own bytes and with nothing but
+`python3`.
+
+Three things about that build differ from the one a developer does for
+themselves, and each is asserted rather than remembered:
+
+- **No rpath.** The link drops `-Wl,-rpath,$QT_ROOT/lib` and the runtime's
+  directory, because both name paths on the machine that ran the compiler. The
+  shipped harness finds Qt through `LD_LIBRARY_PATH=$APP/usr/lib`
+  (`DYLD_FRAMEWORK_PATH=$APP/Contents/Frameworks` on macOS), which the run step
+  sets — the app's own Qt 6.9.2, the same one `logos_host` loads the plugin
+  under. `write-harness-record.py` refuses to record a binary that has an rpath
+  and `check-package-fresh.py` refuses to pass one.
+- **One recipe, two destinations.** The same `compile_harness()` produces the
+  shipped binary and the one `HARNESS_FROM_SOURCE=1` builds; the flags differ
+  only by those rpaths. A second recipe for the shipped binary would be a second
+  recipe to drift, and "you can rebuild it yourself" would stop meaning
+  anything.
+- **The build directory is per variant** (`build-headless/<variant>`). These
+  three builds share one checkout through a bind mount, and with a single
+  directory the Mach-O `.o` files from the macOS build are newer than the SDK
+  sources the Linux build reads — so the Linux build skips them and hands Mach-O
+  objects to `ld`.
+
+**And the run that the whole change exists for**, on a machine that has none of
+the toolchain:
+
+```sh
+./scripts/harness-no-toolchain.sh linux-arm64     # or linux-amd64
+```
+
+It copies the repository into a stock `ubuntu:24.04` container, refuses to
+continue if it finds a compiler, a Qt SDK, a `logos-cpp-sdk` checkout or
+`nlohmann/json` there, installs `python3` and nothing else, unpacks the
+published AppImage, and runs `./scripts/logos-core-headless.sh storage`:
+
+```
+harness   /work/module/harness/linux-arm64/logos_core_load_test
+          shipped, sha256 aa9c9ca53f732f39, as recorded in module/harness/harness.sources
+          no compiler, no Qt SDK and no logos-cpp-sdk checkout were needed
+  <-    ... 40 assertions
+all steps confirmed (0 failure(s))
+```
+
+Both Linux variants pass it. Two controls run in the same container: the same
+command with `HARNESS_FROM_SOURCE=1` must be refused there, naming the compiler,
+Qt and the SDK; and a harness whose bytes are not the recorded ones must not be
+run. On an arm64 host the `linux/amd64` leg additionally installs
+`squashfs-tools`, because an AppImage extracts itself by *running* and an
+emulated container cannot run an x86-64 ELF — the script says so when it does,
+and a decompressor is not a compiler.
+
 ### The generated glue is committed
 
 `module/generated_code/` holds `logos-cpp-generator`'s output for this module —

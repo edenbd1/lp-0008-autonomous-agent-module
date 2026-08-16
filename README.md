@@ -389,10 +389,10 @@ closes it:
 
 It installs `module/agent.lgx` into the user modules directory Logos Core reads
 (flattening the platform variant, which is what an installed module is — Basecamp
-0.2.2 has no "install from file" button), builds the headless harness if it is
-not already built, and then drives the **real `liblogos_core` shipped inside the
-Logos app** through the same C API and in the same order as the app's own
-`main.cpp`:
+0.2.2 has no "install from file" button), takes the headless harness for this
+platform out of `module/harness/`, and then drives the **real `liblogos_core`
+shipped inside the Logos app** through the same C API and in the same order as
+the app's own `main.cpp`:
 
 ```
 logos_core_init → logos_core_add_modules_dir (embedded, then user)
@@ -432,10 +432,20 @@ package.** `module/agent.lgx` carries `darwin-arm64`, `linux-amd64` and
 transcript above is the macOS run; both Linux runs make the same 40 assertions
 with the same result, and are in [`docs/basecamp.md`](docs/basecamp.md).
 
-**It needs a prepared machine, and it says which piece is missing when it is
-not.** A Logos Core runtime, Qt 6.9.2 with `qtremoteobjects`, a `logos-cpp-sdk`
-checkout, and `nlohmann/json`. On **Linux** the runtime is one command and no
-install:
+**It needs a Logos Core runtime and nothing else — no build toolchain.** It used
+to compile that harness on every machine it ran on, so a C++17 compiler, Qt 6.9.2
+with `qtremoteobjects`, a `logos-cpp-sdk` checkout and `nlohmann/json` were
+prerequisites of *running* it. The harness is built once per variant and
+committed now, next to the plugin and checked the same way: the same command
+runs to `all steps confirmed (0 failure(s))` inside a stock `ubuntu:24.04`
+container that has no compiler, no Qt SDK, no `logos-cpp-sdk` checkout and no
+`nlohmann/json` — `./scripts/harness-no-toolchain.sh`, which refuses to report
+anything if it finds a compiler on the machine it is checking. Rebuilding the
+harness rather than trusting the shipped one is `--build-harness`, and running
+your own is `HARNESS_FROM_SOURCE=1`; both need the four things above, and both
+say which one is missing.
+
+On **Linux** the runtime is one command and no install:
 
 ```sh
 ./scripts/fetch-logos-core.sh      # ~278 MB, checksum-pinned
@@ -1150,6 +1160,16 @@ way, in a native `linux/arm64` container against the `aarch64` AppImage — 40
 assertions, 0 failures — which is stated rather than added as a second job
 nothing has watched run.
 
+That job runs on a runner this repository *prepared*, which is the one thing it
+cannot prove about "any machine". `./scripts/harness-no-toolchain.sh` is the
+other side of it and is a script rather than a job, so it can be run by anyone
+with docker: it runs the same command in a stock `ubuntu:24.04` container with
+nothing installed but `python3`, refuses to report anything if it finds a
+compiler there, and requires three things — the confirmation banner out of the
+**shipped** harness, a refusal when the same command is asked to build one, and
+a refusal to run a harness whose bytes are not the recorded ones. Watched pass
+on both Linux architectures and watched fail in each of those three ways.
+
 [`.github/workflows/e2e-local-sequencer.yml`](.github/workflows/e2e-local-sequencer.yml)
 runs the whole policy lifecycle against a real standalone LEZ sequencer with
 `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a competing submission
@@ -1195,6 +1215,10 @@ module/agent.lgx                  the loadable package (darwin-arm64, linux-amd6
                                   linux-arm64)
 module/agent.lgx.sources          what that package was built from, written by
                                   package-basecamp.sh and checked by CI
+module/harness                    the headless harness, built once per variant
+                                  and committed, so §4 needs no toolchain
+module/harness/harness.sources    what each of those was built from, written by
+                                  --build-harness and checked by CI
 app/src                           the Basecamp `ui` plugin: the owner console,
                                   which drives the loaded module and holds no
                                   agent logic of its own
