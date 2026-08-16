@@ -21,7 +21,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJzZWNwMjU2azEtYmlwMzQwIiwia2lkIjoiNVNhMTNOeU5Gc1RxQWozQXRkb1E3a3pDNlpaSkpONTdBWXFoTmRkSHRqbloifQ",
-      "signature": "GcMaWSCkI1fYAMSs8tNYov29fwnPjoqw00wK7xCAqxVeRTtgrb4fCDMilrSOso1M4bQuJXE8KNfOXxsYk4_8eA"
+      "signature": "Oog5_4etpbC-ABMLSZDYomKr-i9TqyBEEtPohbYejScJPQa8pfU02vnZH3QDSyWFMZItPf3Dj_VEKgvlX2_vyw"
     }
   ],
   "skills": [
@@ -45,7 +45,7 @@
   "x-logos": {
     "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
     "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
-    "pricePerTask": 5,
+    "pricePerTask": 1,
     "settlement": "lez-chained-authenticated-transfer",
     "shieldedPaymentKeys": {
       "npk": "c10c15ac4eb5df874a10b8262e3b5db2c2e22ee2f3957d0a630fd2e6f416a55d",
