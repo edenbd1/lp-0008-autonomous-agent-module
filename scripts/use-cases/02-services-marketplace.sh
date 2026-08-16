@@ -402,7 +402,7 @@ if [ -s "$SETTLEMENTS" ]; then
       # first. A shielded payment is the same instruction against the same
       # account; counting only this file reported a settlement the chain has and
       # the repository does not. lib.sh counts them, by ledger and by block.
-      SB=$(shielded_before "$PROGRAM_HASH" "$(kv "$F" block)" "$LEDGER" "$SH_LEDGER")
+      SB=$(shielded_before "$PROGRAM_HASH" "$(kv "$F" block)" "$LEDGER" "$SH_LEDGER" "$(kv "$F" ledger_period_blocks)")
       if [ "$SPENT" -eq "$((PRICE_K + SB))" ]; then
         if [ "${SB:-0}" -gt 0 ]; then
           ok "  it moved $PRICE_K: its ledger reads $SPENT, $SB of it charged by shielded spend before this"
@@ -434,7 +434,12 @@ if [ -s "$SETTLEMENTS" ]; then
     # the superseded program charged a different account, and adding its price to
     # a total that account never saw would make the live comparison below false
     # for a reason that has nothing to do with anything moving.
-    [ "$LEDGER" = "$PREV_LEDGER" ] || SUM=0
+    # Reset on a new PERIOD as well as a new ledger. The live ledger counts
+    # only the current window, so carrying a previous period's prices into
+    # the comparison made the sum exceed it the moment the period rolled --
+    # a red run caused by the clock, not by anything in the repository.
+    [ "$LEDGER" = "$PREV_LEDGER" ] && [ "$WIN" = "$PREV_WINDOW" ] || SUM=0
+    PREV_PB=$(kv "$F" ledger_period_blocks)
     PREV_BAL=$BAL; PREV_SPENT=$SPENT; PREV_WINDOW=$WIN; PREV_LEDGER=$LEDGER
     SUM=$((SUM + PRICE_K))
   done
@@ -479,7 +484,7 @@ if [ -n "$PREV_LEDGER" ]; then
   else
     # Plus anything charged to this same ledger and recorded in another manifest.
     # The ledger counts spends, not rows of this file.
-    SB_TOTAL=$(shielded_before "$PROGRAM_HASH" 999999999 "$PREV_LEDGER" "$SH_LEDGER")
+    SB_TOTAL=$(shielded_before "$PROGRAM_HASH" "$((LIVE_WINDOW + PREV_PB))" "$PREV_LEDGER" "$SH_LEDGER" "$PREV_PB")
     if [ "$LIVE_SPENT" -eq "$((SUM + SB_TOTAL))" ]; then
       if [ "${SB_TOTAL:-0}" -gt 0 ]; then
         ok "it still reads $LIVE_SPENT for period $LIVE_WINDOW: $SUM from this manifest, $SB_TOTAL from artifacts/shielded-settlement.tsv"

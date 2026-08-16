@@ -289,11 +289,18 @@ shielded_payer_ledger() {  # <idl> <program-bin> -> the ledger those spends char
   policy_account_of "$1" "$2" "$payer" 2>/dev/null
 }
 
-shielded_before() {  # <deploy-tx> <block> <ledger> <shielded-ledger> -> amount
-  local f=artifacts/shielded-settlement.tsv
+shielded_before() {  # <deploy-tx> <block> <ledger> <shielded-ledger> [<period-blocks>] -> amount
+  local f=artifacts/shielded-settlement.tsv pb="${5:-0}"
   [ -f "$f" ] && [ -n "$4" ] && [ "$3" = "$4" ] || { echo 0; return; }
-  awk -F'\t' -v prog="$1" -v before="$2" '
+  # Same PERIOD as well as same ledger and earlier block. The ledger's running
+  # total is per period and resets when the window rolls, so a spend from an
+  # earlier window is not in the reading a later settlement sees -- counting it
+  # made a correct run red the moment the chain crossed a period boundary.
+  awk -F'\t' -v prog="$1" -v before="$2" -v pb="$pb" '
+    function win(b) { return pb > 0 ? int(b / pb) * pb : 0 }
     NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
-    $h["role"]=="settlement" && $h["program"]==prog && ($h["block"]+0) < (before+0) { s += $h["amount"] }
+    $h["role"]=="settlement" && $h["program"]==prog \
+      && ($h["block"]+0) < (before+0) \
+      && (pb == 0 || win($h["block"]+0) == win(before+0)) { s += $h["amount"] }
     END { print s+0 }' "$f" 2>/dev/null
 }

@@ -295,7 +295,7 @@ else
       else
         bad "  it charged the ledger $d for a price of $price"
       fi
-    elif [ -n "$spent" ] && sb=$(shielded_before "$DEPLOY_TX" "$(kv "$f" block)" "$ledger" "$SH_LEDGER") \
+    elif [ -n "$spent" ] && sb=$(shielded_before "$DEPLOY_TX" "$(kv "$f" block)" "$ledger" "$SH_LEDGER" "$PERIOD") \
          && [ "$spent" -eq "$((price + sb))" ]; then
       if [ "${sb:-0}" -gt 0 ]; then
         ok "  its ledger reads $spent after this: $price here, $sb charged by shielded spend before it"
@@ -303,9 +303,12 @@ else
         ok "  period $window opened at zero and its ledger reads $spent after this"
       fi
     else
-      bad "  the ledger reads ${spent:-<none>} after the first settlement of period ${window:-?}, for a price of $price plus $(shielded_before "$DEPLOY_TX" "$(kv "$f" block)" "$ledger" "$SH_LEDGER") charged before it"
+      bad "  the ledger reads ${spent:-<none>} after the first settlement of period ${window:-?}, for a price of $price plus $(shielded_before "$DEPLOY_TX" "$(kv "$f" block)" "$ledger" "$SH_LEDGER" "$PERIOD") charged before it"
     fi
-    [ "$ledger" = "$prev_ledger" ] || total=0
+    # Reset on a new PERIOD as well as a new ledger, for the same reason: the
+    # live ledger counts one window, so a previous window's prices must not
+    # be carried into the comparison.
+    [ "$ledger" = "$prev_ledger" ] && [ "$window" = "$prev_window" ] || total=0
     prev_spent=$spent; prev_window=$window; prev_ledger=$ledger
     total=$((total + price))
   done
@@ -322,16 +325,19 @@ else
   # balance to compare against. Summing one manifest against a total that counts
   # both reported a missing settlement that does not exist. Add the shielded
   # spends charged to this same ledger by the same payer.
+  LIVE_SPENT=$(policy_record "$prev_ledger" spent)
+  LIVE_WINDOW=$(policy_record "$prev_ledger" window_start)
+  # After LIVE_WINDOW is known, because the window is what bounds the sum: the
+  # ledger's running total is per period, so only shielded spends in the window
+  # it is currently reporting belong in the comparison.
   SHIELDED=artifacts/shielded-settlement.tsv
-  if [ -f "$SHIELDED" ]; then
-    extra=$(shielded_before "$DEPLOY_TX" 999999999 "$prev_ledger" "$SH_LEDGER")
+  if [ -f "$SHIELDED" ] && [ -n "$LIVE_WINDOW" ]; then
+    extra=$(shielded_before "$DEPLOY_TX" "$((LIVE_WINDOW + PERIOD))" "$prev_ledger" "$SH_LEDGER" "$PERIOD")
     if [ "${extra:-0}" -gt 0 ]; then
       note "plus $extra LEZ of shielded spend charged to the same ledger ($SHIELDED)"
       total=$((total + extra))
     fi
   fi
-  LIVE_SPENT=$(policy_record "$prev_ledger" spent)
-  LIVE_WINDOW=$(policy_record "$prev_ledger" window_start)
   [ "$prev_ledger" = "$POLICY" ] \
     || note "those were paid by another agent, so this is its ledger, not $CAT's"
   echo "  ledger $prev_ledger"
