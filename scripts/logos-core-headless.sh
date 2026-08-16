@@ -601,7 +601,33 @@ $name: tracked files differ from the published revision in $repo:
 $dirty
 The criterion is 'without requiring modifications to those modules'. Revert
 them, or the run below would be proving something else."
-    echo "unmodified $name @ ${head:0:7}  ($repo)"
+    # AND IT IS THE PUBLISHED REVISION, which this did not check. The two lines
+    # above establish "a git checkout, with nothing modified in it" -- true of a
+    # clean checkout of ANY commit, including one carrying changes that were
+    # committed rather than left in the working tree. The header above claims
+    # this compares against the published revision; until now only
+    # build-companion-modules.sh knew what that was.
+    #
+    # The pin is read from that script rather than copied here, so there is one
+    # place to change it. A pin that cannot be READ is a failure, not a skip:
+    # otherwise renaming the variable upstream would silently retire the check.
+    pinvar="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')_REV"
+    pin="$(sed -n "s/^${pinvar}=\"\${${pinvar}:-\([0-9a-f]\{7,40\}\)}\".*/\1/p" \
+           "$ROOT/scripts/build-companion-modules.sh" | head -1)"
+    [ -n "$pin" ] || die "
+$name: no ${pinvar} could be read out of scripts/build-companion-modules.sh, so
+'the published revision' has no value to compare against. That file is where the
+revisions are pinned; if the variable was renamed, rename it here too rather
+than letting this check pass on nothing."
+    case "$head" in
+      "$pin"*) : ;;
+      *) die "
+$name is at ${head:0:7} and the pinned revision is ${pin:0:7}.
+The criterion is that the agent loads alongside these modules UNMODIFIED, and a
+clean checkout of a different commit is not that. Re-run
+./scripts/build-companion-modules.sh, which fetches each one at its pin." ;;
+    esac
+    echo "unmodified $name @ ${head:0:7}, the revision pinned for it  ($repo)"
   done
   echo
   for name in "${COMPANIONS[@]}"; do
