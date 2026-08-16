@@ -371,10 +371,43 @@ package_module wallet_module "$WM"
 # modules", so this is the half that has to be checked rather than asserted.
 # Same mechanism as examples/agent-console/run.sh's `git status --porcelain
 # module/`: a tracked file that changed fails the script.
+#
+# WHAT THIS BLOCK USED TO BE, AND WHY IT IS NOT THAT ANY MORE
+#
+# It read `git status --porcelain` into a variable and passed when the variable
+# was empty. `git status` writes its diagnostics to stderr and its exit code
+# went nowhere, so a directory that is not a git checkout — or one that is not
+# there at all — produced an empty string and printed
+#
+#   ok    storage_module @ : no tracked file changed; 0 added path(s), all
+#         under lib/ or generated_code/
+#
+# Measured, both cases. That is the criterion's own half ("without requiring
+# modifications to those modules") reporting a pass having examined nothing, in
+# the shape this repository has now removed twice: a claim whose pass condition
+# is the absence of a bad string is satisfied by nothing having run.
+#
+# So the revision is resolved FIRST and has to be the one this script pinned,
+# and the added-path count has to be non-zero: a build that staged no external
+# library and generated no glue is a build that did not happen, and its clean
+# `git status` is a fact about an empty directory.
 say "[6/6] the three checkouts, unmodified"
 dirty=0
-for pair in "storage_module:$SM" "delivery_module:$DM" "wallet_module:$WM"; do
-  name="${pair%%:*}"; dir="${pair#*:}"
+for pair in "storage_module:$SM:$STORAGE_MODULE_REV" \
+            "delivery_module:$DM:$DELIVERY_MODULE_REV" \
+            "wallet_module:$WM:$WALLET_MODULE_REV"; do
+  name="${pair%%:*}"; rest="${pair#*:}"; dir="${rest%%:*}"; want="${rest#*:}"
+  head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+  if [ -z "$head" ]; then
+    echo "  FAIL  $name: $dir is not a git checkout, so 'unmodified' cannot be read off it" >&2
+    dirty=1
+    continue
+  fi
+  if [ "$head" != "$want" ]; then
+    echo "  FAIL  $name: $dir is at $head, not the pinned $want" >&2
+    dirty=1
+    continue
+  fi
   tracked="$(git -C "$dir" status --porcelain --untracked-files=no)"
   if [ -n "$tracked" ]; then
     echo "  FAIL  $name: tracked files changed in $dir" >&2
@@ -393,7 +426,15 @@ for pair in "storage_module:$SM" "delivery_module:$DM" "wallet_module:$WM"; do
     continue
   fi
   added="$(git -C "$dir" status --porcelain --untracked-files=all | wc -l | tr -d ' ')"
-  echo "  ok    $name @ $(git -C "$dir" rev-parse --short HEAD): no tracked file changed;" \
+  if [ "$added" -lt 1 ]; then
+    echo "  FAIL  $name: the build added nothing to $dir — no external library under" >&2
+    echo "        lib/, no generated glue under generated_code/. A clean tree here" >&2
+    echo "        means the build did not run, not that it ran without touching" >&2
+    echo "        anything." >&2
+    dirty=1
+    continue
+  fi
+  echo "  ok    $name @ ${head:0:7} (the pinned revision): no tracked file changed;" \
        "$added added path(s), all under lib/ or generated_code/"
 done
 [ "$dirty" -eq 0 ] || die "a companion module was modified — that is the criterion, not a detail"

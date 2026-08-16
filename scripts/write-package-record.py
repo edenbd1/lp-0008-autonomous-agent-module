@@ -101,6 +101,23 @@ def carried_forward(repo, packaged, members):
                 % member)
         if lits is None:
             lits = _checker.literals(repo, sorted(_checker.source_inventory(repo)))
+            # The floor check-package-fresh.py's layer 2 has had all along, and
+            # this side did not. `missing` is empty when the scanner found
+            # nothing, so a blind scanner made every sibling "carry forward:
+            # same bytes, and they still contain every source literal" having
+            # corroborated zero literals — measured, by making literals() return
+            # {}: this file printed two `ok` lines and exited 0 while
+            # check-package-fresh.py, sharing the very same helper, went red
+            # with "the scanner found essentially nothing and would agree with
+            # any binary". A recorder that blesses on a check that examined
+            # nothing writes the record CI then reads back.
+            if len(lits) < 300:
+                sys.exit(
+                    "  FAIL  only %d source literal(s) of >= %d bytes were "
+                    "extracted, so 'the sibling binary still contains every "
+                    "one of them' would be true of any binary at all. Refusing "
+                    "to carry a variant forward on a corroboration that checked "
+                    "nothing." % (len(lits), _checker.MIN_LITERAL))
         missing = [lit for lit in lits
                    if lit not in _checker.LITERAL_EXCLUSIONS
                    and not _checker.in_binary(lit, blob)]
@@ -110,8 +127,8 @@ def carried_forward(repo, packaged, members):
                 "already in the package, so it was not built from the source "
                 "being recorded now. Rebuild and repackage it before adding "
                 "another variant." % (len(missing), len(lits), variant))
-        print("  ok    %s carries forward: same bytes, and they still contain "
-              "every source literal" % variant)
+        print("  ok    %s carries forward: same bytes, and all %d source "
+              "literal(s) are still in them" % (variant, len(lits)))
         kept[variant] = info
     return kept
 

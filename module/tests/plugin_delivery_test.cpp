@@ -357,9 +357,19 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
         QStringLiteral("/lp-0008/1/task-") + me + "-" + theirTask + "/json";
     QJsonObject inbox =
         call(p, "messaging.receive", QStringLiteral(R"({"topic":"%1"})").arg(myInbox));
-    check(inbox.value("ok").toBool(), "messaging.receive answers, and subscribes on first use");
-    check(inbox.value("total").toInt() == 0,
-          "and its first answer is empty, because neither agent has opened a task yet");
+    check(inbox.value("ok").toBool() &&
+              inbox.value("topic").toString() == myInbox,
+          "messaging.receive answers about the topic it was handed, and subscribes on first "
+          "use");
+    // `contains` first. `toInt()` on an absent key is 0, so `total == 0` was
+    // satisfied by every reply that carries no `total` at all — including
+    // `{"ok":false,"error":"delivery node is not started"}`. The neighbour above
+    // catches that today; the line itself has to say what it means, which is
+    // that a counted answer came back and the count was zero.
+    check(inbox.contains(QStringLiteral("total")) && inbox.value("total").toInt() == 0 &&
+              inbox.value("messages").toArray().isEmpty(),
+          "and its first answer is a counted empty one, because neither agent has opened a "
+          "task yet");
 
     step("3. publish it, and watch the topic for the other agent's card");
     note("topic " + topic);
@@ -626,7 +636,16 @@ int runPeer(const QString &path, const QString &runId, const QString &me,
     check(u.value("from").toString() == me,
           "signed with its own account — which agent.update reads off this module's "
           "configuration, not off the call: " + u.value("from").toString());
-    check(u.value("final").toBool() == false, "and not final, because `working` is not terminal");
+    // `u.contains("final")` and not `u.value("final").toBool() == false` alone:
+    // an absent key reads back as `false`, so that form passed for a reply
+    // carrying no `final` at all. `agent.update` DERIVES this member from the
+    // state — a caller that could type it would be able to say "completed, and
+    // there is more coming" — so the assertion is that it is present and says
+    // `working` is not terminal. `module/tests/agent_skills_test.cpp` states the
+    // same thing as `value("final", true) == false`, which fails on absence.
+    check(u.contains(QStringLiteral("final")) && u.value("final").toBool() == false &&
+              u.value("state").toString() == QLatin1String("working"),
+          "and it is marked not-final for `working`, which is not a terminal state");
     u = publish(QStringLiteral("completed"), QStringLiteral("done"));
     check(u.value("ok").toBool() && u.value("final").toBool(),
           "then `completed`, which agent.update marks final because the state is");
@@ -948,6 +967,22 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
     // been about a field that was not there.
     const QString outcome = sent.value("outcome").toString();
     const bool approved = sent.value("approved").toBool();
+    // Did a RUNNING agent answer about THIS spend? Asked once, here, so that
+    // every `!…toBool()` and `!= "owner_unreachable"` below is a statement
+    // about a reply rather than about an absent key. Same rule, and the same
+    // wording, as `module/tests/logos_core_load_test.cpp`'s `spendWasAnswered`:
+    // `submitted` absent reads back as `false`, so "nothing was submitted"
+    // passed for `{"ok":false,"error":"agent is not started"}`.
+    const bool spendWasAnswered =
+        sent.contains(QStringLiteral("submitted")) &&
+        sent.value("recipient").toString().endsWith(recipient) &&
+        sent.value("amount").toString() == amount;
+    check(spendWasAnswered,
+          spendWasAnswered
+              ? QStringLiteral("a running agent answered the spend, naming the recipient and "
+                               "amount it was asked about")
+              : QStringLiteral("wallet.send was not answered by a running agent: every check "
+                               "below is about what a running one does"));
     note("outcome: " + outcome + ", approved: " + (approved ? "true" : "false") +
          ", attempts: " + QString::number(sent.value("attempts").toInt()) +
          ", waited: " + QString::number(sent.value("waited_ms").toInt()) + " ms");
@@ -968,7 +1003,7 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
         check(sent.value("attempts").toInt() >= 2,
               "and it retried before timing out, which is the reliability half of the same "
               "criterion");
-        check(!sent.value("submitted").toBool(),
+        check(spendWasAnswered && !sent.value("submitted").toBool(),
               "nothing was submitted: an unreachable owner is terminal, never a fallback to "
               "acting alone");
         // And the counter that shows the control was not vacuous. `relay_seen`
@@ -980,10 +1015,21 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
         const int relaySeen = deliveryStatus(p)
                                   .value("frames").toObject()
                                   .value("relay_seen").toInt();
-        check(relaySeen >= sent.value("attempts").toInt(),
+        const int asked = sent.value("attempts").toInt();
+        // `relaySeen >= asked` ALONE is 0 >= 0, and both are `toInt()` on keys
+        // that are absent when nothing ran. Measured: pointing this step at a
+        // skill the module does not have printed
+        //   ok  its own 0 request(s) came back to it off the network (0 relay
+        //       frame(s) seen) and none of them was an answer
+        // which is the `ok (0 checked)` shape sitting on the counter whose
+        // whole job is to show that this control was not vacuous. The frames
+        // have to have been there: with nobody else on the topic, every one of
+        // them is this process's own request coming back, so >= 1 is the fact
+        // that makes "and none of them was an answer" worth saying.
+        check(relaySeen >= 1 && asked >= 1 && relaySeen >= asked,
               QStringLiteral("its own %1 request(s) came back to it off the network (%2 relay "
                              "frame(s) seen) and none of them was an answer")
-                  .arg(sent.value("attempts").toInt())
+                  .arg(asked)
                   .arg(relaySeen));
         std::fprintf(stderr, "\n%s (%d failure(s))\n",
                      failures ? "FAILED"
@@ -991,9 +1037,14 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
                      failures);
         return failures ? 1 : 0;
     }
-    check(outcome != QLatin1String("owner_unreachable"),
+    // Not `outcome != "owner_unreachable"` alone: an absent `outcome` is `""`,
+    // which is also not that string, so the old form was satisfied by a reply
+    // carrying no outcome at all. The key has to be there and name one of the
+    // outcomes that means the owner answered.
+    check(sent.contains(QStringLiteral("outcome")) &&
+              outcome != QLatin1String("owner_unreachable") && !outcome.isEmpty(),
           "the owner was reached — the assertion that was impossible while the module sent "
-          "an empty marker seed");
+          "an empty marker seed: " + outcome);
     const bool expectDeny = qEnvironmentVariableIsSet("LP0008_EXPECT_DENY");
     if (expectDeny) {
         // The control. An owner who says no must produce a denial, not an
@@ -1006,7 +1057,7 @@ int runApproval(const QString &path, const QString &me, const QString &owner,
               "and approved these exact terms: " + outcome);
     }
     check(sent.value("attempts").toInt() >= 1, "the request was really put on the wire");
-    check(!sent.value("submitted").toBool(),
+    check(spendWasAnswered && !sent.value("submitted").toBool(),
           "nothing was submitted: an approval unlocks the spend_approved path, it does not "
           "move money, and this module wires no wallet");
 
@@ -1081,7 +1132,12 @@ int runOwner(const QString &path, const QString &owner, const QString &agent,
     check(r.value("channel").toString() ==
               QStringLiteral("/lp-0008/1/owner-channel/%1/%2").arg(owner, agent),
           "and its id is the one the agent derives from the same two accounts");
-    check(!r.value("rewatched").toBool(), "nothing was replaced: this is the first watch");
+    // Present AND false. `toBool()` on an absent key is false, and `owner.watch`
+    // answers a REPEAT watch with `{"already":true}` and no `rewatched` member
+    // at all — so the bare form was equally satisfied by the reply that means
+    // the opposite of what this line claims.
+    check(r.contains(QStringLiteral("rewatched")) && !r.value("rewatched").toBool(),
+          "nothing was replaced: this is the first watch");
 
     step("5. wait for an agent to ask");
     QJsonObject asked;
@@ -1182,8 +1238,10 @@ int runOwner(const QString &path, const QString &owner, const QString &agent,
           "and none of its own frames: this transport does not echo reliable-channel sends "
           "back to their sender, which is why the authorship rule is exercised in "
           "owner_skills_test.cpp and not here");
-    check(r.value("unverifiable").toArray().isEmpty(),
-          "and nothing arrived whose terms this app could not verify");
+    check(r.contains(QStringLiteral("unverifiable")) &&
+              r.value("unverifiable").toArray().isEmpty(),
+          "and nothing arrived whose terms this app could not verify — the key is required to "
+          "be there, because an absent one also reads as an empty array");
 
     std::fprintf(stderr, "\n%s (%d failure(s))\n",
                  failures ? "FAILED"

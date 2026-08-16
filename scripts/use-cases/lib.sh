@@ -280,26 +280,41 @@ finish() {
 # a ledger address is PDA(program, agent), so a spend by one agent says nothing
 # about another's ledger; and a shielded spend can land BETWEEN two settlements,
 # so only the ones before a given block are in that settlement's reading.
-shielded_payer_ledger() {  # <idl> <program-bin> -> the ledger those spends charge
-  local f=artifacts/shielded-settlement.tsv payer
+shielded_payer() {  # -> the account whose shielded spends the helpers below count
+  local f=artifacts/shielded-settlement.tsv
   [ -f "$f" ] || { echo ""; return; }
-  payer=$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next}
-                       $h["role"]=="settlement"{print $h["payer_account"];exit}' "$f")
+  awk -F'\t' 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next}
+              $h["role"]=="settlement"{print $h["payer_account"];exit}' "$f"
+}
+
+shielded_payer_ledger() {  # <idl> <program-bin> -> the ledger those spends charge
+  local payer
+  payer=$(shielded_payer)
   [ -n "$payer" ] || { echo ""; return; }
   policy_account_of "$1" "$2" "$payer" 2>/dev/null
 }
 
 shielded_before() {  # <deploy-tx> <block> <ledger> <shielded-ledger> [<period-blocks>] -> amount
-  local f=artifacts/shielded-settlement.tsv pb="${5:-0}"
+  local f=artifacts/shielded-settlement.tsv pb="${5:-0}" payer
   [ -f "$f" ] && [ -n "$4" ] && [ "$3" = "$4" ] || { echo 0; return; }
+  # BY PAYER as well, which the comment above has always claimed and the awk did
+  # not do. `shielded_payer_ledger` derives the ledger from the FIRST settlement
+  # row's payer and this then summed EVERY settlement row's amount into it, so a
+  # second shielded payer would have had its spends charged to the first one's
+  # ledger. There is one payer in the manifest today, which is exactly why the
+  # rule was unexercised: "no row belongs to another payer" is true of a file
+  # with one payer in it, and stays true right up until it is not.
+  payer=$(shielded_payer)
+  [ -n "$payer" ] || { echo 0; return; }
   # Same PERIOD as well as same ledger and earlier block. The ledger's running
   # total is per period and resets when the window rolls, so a spend from an
   # earlier window is not in the reading a later settlement sees -- counting it
   # made a correct run red the moment the chain crossed a period boundary.
-  awk -F'\t' -v prog="$1" -v before="$2" -v pb="$pb" '
+  awk -F'\t' -v prog="$1" -v before="$2" -v pb="$pb" -v payer="$payer" '
     function win(b) { return pb > 0 ? int(b / pb) * pb : 0 }
     NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
     $h["role"]=="settlement" && $h["program"]==prog \
+      && $h["payer_account"]==payer \
       && ($h["block"]+0) < (before+0) \
       && (pb == 0 || win($h["block"]+0) == win(before+0)) { s += $h["amount"] }
     END { print s+0 }' "$f" 2>/dev/null

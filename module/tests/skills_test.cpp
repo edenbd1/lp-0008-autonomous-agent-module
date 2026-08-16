@@ -75,6 +75,15 @@ static std::string errOf(const std::string &r)
     return j.is_discarded() ? "" : j.value("error", std::string{});
 }
 
+/// A skill's answer as JSON, or an empty object when it was not JSON at all —
+/// so a `value(key, default)` on the result reads the default rather than
+/// throwing out of an assertion.
+static json jsonOf(const std::string &r)
+{
+    auto j = json::parse(r, nullptr, false);
+    return (j.is_discarded() || !j.is_object()) ? json::object() : j;
+}
+
 #ifdef LP0008_MODULE_TESTS
 namespace {
 
@@ -260,6 +269,67 @@ int main()
               "and create_group refuses to invite onto a forged topic");
         check(created2 == 0 && sends == 0,
               "before the channel is opened, so no half-built group is left behind");
+    }
+    {
+        // messaging.receive, which had no assertion anywhere a toolchain alone
+        // can run. Measured, on this file as it stood: delete its "delivery node
+        // is not started" guard AND its negative-`since` guard, and every free
+        // suite stays green — this one printed "all skill behaviours hold".
+        // That is the same shape the last sweep found on storage.upload's
+        // readiness guard, in the skill added since, and it matters more here:
+        // `agent.poll` reads the A2A task topic through this port, so a receive
+        // that answers on a stopped node is a task lifecycle advancing off an
+        // empty inbox.
+        //
+        // The port is crippled ONE WAY AT A TIME and the error is pinned, for
+        // the reason the storage block below spells out: a port that is both
+        // stopped and unwired makes `!okOf(...)` satisfied by either guard.
+        std::vector<std::string> inbox{"first", "second", "third"};
+        std::string readTopic;
+        const auto reader = [&](const std::string &t) { readTopic = t; return inbox; };
+
+        DeliveryPort stopped{[] { return false; }, {}, {}, {}, reader};
+        const auto rs = ReceiveSkill(stopped).invoke(R"({"topic":"/lp-0008/1/task-a-b/json"})");
+        check(!okOf(rs) && errOf(rs).find("not started") != std::string::npos,
+              "receive refuses while the node is not started, and blames the stopped node");
+        check(readTopic.empty(), "without having read anything off the topic");
+
+        DeliveryPort unwired{[] { return true; }, {}, {}, {}, {}};
+        const auto ru = ReceiveSkill(unwired).invoke(R"({"topic":"/lp-0008/1/task-a-b/json"})");
+        check(!okOf(ru) && errOf(ru).find("receive path") != std::string::npos,
+              "a build with no read path says so, rather than reporting a quiet topic");
+
+        DeliveryPort up{[] { return true; }, {}, {}, {}, reader};
+        ReceiveSkill r(up);
+        const auto all = jsonOf(r.invoke(R"({"topic":"/lp-0008/1/task-a-b/json"})"));
+        check(all.value("ok", false) && readTopic == "/lp-0008/1/task-a-b/json",
+              "and with a node it reads the topic it was handed, exactly as given");
+        check(all.value("count", std::size_t{0}) == 3 &&
+                  all.value("total", std::size_t{0}) == 3 &&
+                  all.value("next_since", std::size_t{0}) == 3,
+              "reporting what arrived, how much there is, and where to resume");
+        check(all["messages"].size() == 3 &&
+                  all["messages"][0].value("message", std::string{}) == "first" &&
+                  all["messages"][2].value("index", std::size_t{0}) == 2,
+              "with each payload carried as the bytes it is, under its own index");
+
+        const auto rest = jsonOf(r.invoke(R"({"topic":"/lp-0008/1/task-a-b/json","since":2})"));
+        check(rest.value("count", std::size_t{9}) == 1 &&
+                  rest.value("total", std::size_t{0}) == 3 &&
+                  rest["messages"][0].value("message", std::string{}) == "third",
+              "`since` skips what the caller already read and still reports the total");
+        const auto caught = jsonOf(r.invoke(R"({"topic":"/lp-0008/1/task-a-b/json","since":3})"));
+        check(caught.value("ok", false) && caught["messages"].empty() &&
+                  caught.value("total", std::size_t{0}) == 3,
+              "a caller that is caught up gets an empty list, not an error");
+
+        // A negative `since` becomes 2^64-1 if it is taken as unsigned, and a
+        // read that starts past the end answers `count: 0` — an empty inbox
+        // that is a parsing accident, on the topic an A2A request arrives on.
+        check(!okOf(r.invoke(R"({"topic":"/lp-0008/1/task-a-b/json","since":-1})")),
+              "a negative `since` is refused rather than wrapping to 2^64-1 and reading nothing");
+        check(!okOf(r.invoke(R"({"since":0})")), "a receive with no topic names nothing to read");
+        check(!okOf(r.invoke("not json")), "malformed parameters are refused, not thrown");
     }
 
     std::printf("storage\n");

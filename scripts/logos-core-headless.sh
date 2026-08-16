@@ -549,14 +549,25 @@ modules' lists what it needs on the machine."
       delivery_module) repo="$COMPANIONS_DIR/src/logos-delivery-module" ;;
       wallet_module)   repo="$COMPANIONS_DIR/src/logos-wallet-module" ;;
     esac
-    [ -d "$repo/.git" ] || die "$name: no checkout at $repo to check for modifications"
+    # The revision FIRST, and not `[ -d "$repo/.git" ]`. That test is satisfied
+    # by an empty directory called `.git`, `git status` then writes its
+    # complaint to stderr and hands back an empty string, and an empty string
+    # reads as "clean" — measured: `mkdir -p fake/.git` printed
+    # `unmodified storage_module @   (fake)` and exited 0. An assertion whose
+    # pass condition is the absence of a bad string is satisfied by nothing
+    # having run, and this one is half of a prize criterion.
+    head="$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
+    [ -n "$head" ] || die "
+$name: $repo is not a git checkout, so 'unmodified' cannot be read off it.
+Build the companion modules with ./scripts/build-companion-modules.sh, which
+fetches each one at the revision it pins."
     dirty="$(git -C "$repo" status --porcelain --untracked-files=no)"
     [ -z "$dirty" ] || die "
 $name: tracked files differ from the published revision in $repo:
 $dirty
 The criterion is 'without requiring modifications to those modules'. Revert
 them, or the run below would be proving something else."
-    echo "unmodified $name @ $(git -C "$repo" rev-parse --short HEAD)  ($repo)"
+    echo "unmodified $name @ ${head:0:7}  ($repo)"
   done
   echo
   for name in "${COMPANIONS[@]}"; do
