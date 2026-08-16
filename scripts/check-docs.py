@@ -46,9 +46,37 @@ Five classes of rot, all of which this repository has shipped:
      A symbol is stable under a refactor in a way a line is not, but only if it
      is real, which is what this checks.
 
+  6. A skill the module registers that a documented catalogue does not list.
+     `docs/architecture.md`'s table listed 24 of 28 for as long as the three
+     `owner.*` skills and `meta.skills` had existed, and the skill-count gate
+     below went green over it on every run — because a table short by four rows
+     contains no wrong NUMBER. A count gate reads numbers; this reads names.
+
+  7. A variant claim that disagrees with the packages. Both `.lgx` files went
+     one variant, then two, then three, and "two variants", "one darwin-arm64
+     variant" and "the packages are macOS arm64 only" all survived the moves —
+     the last of them three lines above a transcript listing three. The tarball
+     is the authority, not another sentence.
+
+  8. A settlement on chain that `docs/DEPLOYMENT.md`'s ledger does not account
+     for. That ledger opens "every transaction that has ever touched any of the
+     three is listed below in block order" and was missing ten, four of which
+     had taken an account the same document called one that "has never received
+     a payment" from 0 to 4. `verify-deployment.sh` checks each settlement is on
+     chain and never that the ledger mentions it.
+
+  9. A truncated hash citation whose tail is not that hash's tail.
+
+ 10. A file under `module/tests/` that no workflow runs or names, against
+     README §10's claim that CI "accounts for every file under module/tests/".
+     Three of them — the transport harnesses — were in neither workflow at all.
+
 WHAT THIS CANNOT DO, stated so nobody reads a green run as more than it is:
 it cannot tell whether a line that exists is the line the sentence meant. Only
-class 3 is immune to that, which is the argument for preferring it.
+class 3 is immune to that, which is the argument for preferring it. Classes 6-10
+are immune for the same reason class 3 is — each compares a document against an
+artefact rather than against prose — which is why they were worth adding as
+checks rather than as corrected sentences.
 """
 
 import os
@@ -646,6 +674,256 @@ for rel in sorted(set(SKILL_FILES)):
 
 print("checked %d skill-count mention(s) against the %d the module registers"
       % (counted, expected_count))
+
+# ---------------------------------------------------------------------------
+# The five checks below were added after a coherence pass found things every
+# gate above went green over. Each one exists because a WRONG SENTENCE SHIPPED,
+# and each is written so that the same wrong sentence fails it. A check that
+# cannot fail is this repository's most-repeated defect, so the falsification
+# for each is named beside it.
+# ---------------------------------------------------------------------------
+
+import tarfile
+
+extra = {"catalogue": 0, "variant": 0, "ledger": 0, "trunc": 0, "suite": 0}
+
+
+def package_variants(rel):
+    """The variant directory names actually inside a committed .lgx."""
+    with tarfile.open(os.path.join(ROOT, rel), "r:gz") as t:
+        return sorted({n.split("/")[1] for n in t.getnames()
+                       if n.startswith("variants/") and len(n.split("/")) > 2})
+
+
+# 6. A SKILL THE MODULE REGISTERS AND NO CATALOGUE LISTS.
+#
+# docs/architecture.md's skill table listed 24 of 28 for as long as the three
+# `owner.*` skills and `meta.skills` had existed. Every count-shaped mention in
+# the tree agreed with the module the whole time, because the count gate reads
+# NUMBERS and a table that is short by four rows contains no wrong number. The
+# reference in docs/skills.md §7 is checked by examples/agent-console/run.sh
+# against the running module; this checks the other catalogue, which nothing did.
+#
+# Falsification: delete a row from either table and this goes red.
+SKILL_NAME_RE = re.compile(r'return "([a-z_]+\.[a-z_]+)"')
+CATALOGUES = ["docs/architecture.md", "docs/skills.md"]
+
+registered = set()
+for _f in sorted(os.listdir(os.path.join(ROOT, "module/src"))):
+    if _f.endswith((".cpp", ".h")):
+        registered |= set(SKILL_NAME_RE.findall(
+            open(os.path.join(ROOT, "module/src", _f), encoding="utf-8").read()))
+
+for rel in CATALOGUES:
+    body = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+    for name in sorted(registered):
+        if "`%s`" % name in body:
+            extra["catalogue"] += 1
+        else:
+            failures.append(
+                "%s  does not name the registered skill `%s`. A catalogue with a "
+                "row missing carries no wrong number, so the skill-count gate "
+                "above cannot see it." % (rel, name))
+
+# 7. A DOCUMENT THAT MISCOUNTS OR MISNAMES THE PACKAGE VARIANTS.
+#
+# Both .lgx files went from one variant to two to three. Sentences saying "two
+# variants", "one darwin-arm64 variant" and "the packages are macOS arm64 only"
+# survived in five documents — one of them three lines above a transcript
+# listing three. The packages are the authority: a variant claim is checked
+# against the tarball rather than against another sentence.
+#
+# Falsification: add a fourth variant, or write "two variants" anywhere.
+VARIANTS = {rel: package_variants(rel)
+            for rel in ("module/agent.lgx", "app/agent-ui.lgx")}
+ALL_VARIANTS = sorted(set().union(*VARIANTS.values()))
+N_VARIANTS = len(ALL_VARIANTS)
+WORD = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+
+# A claim about how many variants a package has, in either spelling.
+VARIANT_COUNT = re.compile(
+    r"\b(one|two|three|four|five|\d)\s+(?:platform\s+)?variants?\b", re.I)
+# The claim that shipped hardest and is not count-shaped at all.
+PLATFORM_ONLY = re.compile(
+    r"packages are\s+\*{0,2}(?:macOS arm64|darwin-arm64)\s*only", re.I)
+
+for doc in DOCS + ["app/README.md"]:
+    full = os.path.join(ROOT, doc)
+    if not os.path.exists(full):
+        continue
+    lines = open(full, encoding="utf-8").read().splitlines()
+    for i, raw in enumerate(lines):
+        lineno = i + 1
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if HISTORICAL in raw:
+            continue
+        # THE LINE BREAK, which this gate got wrong first time round and which
+        # the skill-count gate above already documents as its failure mode 3.
+        # These documents wrap at about 80 columns, and the sentence this check
+        # was written for wrapped exactly through the middle of the claim:
+        #     the packages are **macOS arm64
+        #     only**, and the storage … skills have no ports wired
+        # A one-line read sails past it, which is what the first version of this
+        # check did — verified by putting the original sentence back and
+        # watching it go green. Adjacent lines are joined before matching.
+        window = EMPHASIS.sub("", raw.rstrip()) + " " + \
+            EMPHASIS.sub("", nxt.lstrip()) if HISTORICAL not in nxt else \
+            EMPHASIS.sub("", raw)
+        if PLATFORM_ONLY.search(window):
+            failures.append(
+                "%s:%d  says the packages are macOS-only, but module/agent.lgx "
+                "carries %s" % (doc, lineno, ", ".join(ALL_VARIANTS)))
+        for m in VARIANT_COUNT.finditer(EMPHASIS.sub("", raw)):
+            tok = m.group(1).lower()
+            said = int(tok) if tok.isdigit() else \
+                {v: k for k, v in WORD.items()}.get(tok)
+            if said is None:
+                continue
+            extra["variant"] += 1
+            if said != N_VARIANTS:
+                failures.append(
+                    "%s:%d  says %r where both packages carry %d variants (%s). "
+                    "Either a variant was added and this did not move, or the "
+                    "line needs %s on it."
+                    % (doc, lineno, m.group(0).strip(), N_VARIANTS,
+                       ", ".join(ALL_VARIANTS), HISTORICAL))
+
+# Every variant a package holds must also be NAMED somewhere, or a reviewer on
+# that platform is never told the variant exists. This is what caught
+# README's layout block still listing agent-ui as two variants.
+for rel, vs in VARIANTS.items():
+    named = " ".join(open(os.path.join(ROOT, d), encoding="utf-8").read()
+                     for d in ("README.md", "docs/basecamp.md", "app/README.md",
+                               "docs/limitations.md"))
+    for v in vs:
+        if v not in named:
+            failures.append(
+                "%s carries a %s variant that no document names" % (rel, v))
+
+# 8. A SETTLEMENT ON CHAIN THAT DEPLOYMENT.md's LEDGER DOES NOT ACCOUNT FOR.
+#
+# docs/DEPLOYMENT.md's ledger opens by promising "every transaction that has
+# ever touched any of the three is listed below in block order". It was missing
+# ten, including four that took an account the same document called one that
+# "has never received a payment" from 0 to 4. Nothing noticed, because
+# verify-deployment.sh checks that each settlement is ON CHAIN and never that
+# the ledger MENTIONS it.
+#
+# This needs no network: the manifests already name every settlement, so the
+# ledger is checked against them. A settlement appended by a2a-task.sh and not
+# written up goes red on the next run.
+#
+# Falsification: delete a row from the ledger, or add one to a2a-task.tsv.
+LEDGER_DOC = "docs/DEPLOYMENT.md"
+_ledger = open(os.path.join(ROOT, LEDGER_DOC), encoding="utf-8").read()
+
+
+def tsv_column(rel, header):
+    path = os.path.join(ROOT, rel)
+    if not os.path.exists(path):
+        return []
+    rows = [l.rstrip("\n").split("\t") for l in open(path, encoding="utf-8")]
+    if not rows or header not in rows[0]:
+        return []
+    i = rows[0].index(header)
+    return [r[i] for r in rows[1:] if len(r) > i]
+
+
+for rel, header in (("artifacts/a2a-task.tsv", "settlement_tx"),
+                    ("artifacts/shielded-settlement.tsv", "tx")):
+    for tx in tsv_column(rel, header):
+        if len(tx) != 64:
+            continue
+        # The ledger cites hashes truncated first8…last8, the way every table in
+        # these documents does; the full form counts too.
+        if tx in _ledger or ("%s…%s" % (tx[:8], tx[-8:])) in _ledger:
+            extra["ledger"] += 1
+        else:
+            failures.append(
+                "%s: %s…%s is in %s but %s's ledger does not account for it, "
+                "and that ledger's own words are \"every transaction that has ever "
+                "touched any of the three\"." % (rel, tx[:8], tx[-8:], rel,
+                                                 LEDGER_DOC))
+
+# 9. A TRUNCATED HASH WHOSE HALVES BELONG TO DIFFERENT TRANSACTIONS.
+#
+# These documents cite hashes as `first8…last8`, dozens of times, and a reader
+# checking one against the chain is the only thing that would notice a wrong
+# tail. That is decidable by machine wherever the repository records the full
+# hash, so it is decided here.
+#
+# WHAT THIS CANNOT SEE, stated because the gap is most of the ledger: it only
+# checks a citation whose prefix matches a hash in artifacts/. The funding
+# transfers and shielded spends in docs/DEPLOYMENT.md's ledger are named nowhere
+# else, so nothing offline can confirm their tails — verify-deployment.sh is
+# where that would have to go, and it would cost a getBlock per row.
+#
+# Falsification: change one character of the tail of any citation whose
+# transaction is in a manifest — e.g. a settlement hash in a2a-task.tsv.
+KNOWN_HASHES = set()
+for _rel in ("artifacts/a2a-task.tsv", "artifacts/shielded-settlement.tsv",
+             "artifacts/agents.tsv", "artifacts/anchored.tsv",
+             "artifacts/adversarial.tsv", "artifacts/notary.tsv",
+             "artifacts/alerts.tsv"):
+    _p = os.path.join(ROOT, _rel)
+    if os.path.exists(_p):
+        KNOWN_HASHES |= set(re.findall(
+            r"\b[0-9a-f]{64}\b", open(_p, encoding="utf-8").read()))
+
+TRUNC = re.compile(r"`([0-9a-f]{8})…([0-9a-f]{6,9})`")
+BY_PREFIX = {}
+for h in KNOWN_HASHES:
+    BY_PREFIX.setdefault(h[:8], set()).add(h)
+
+for doc in DOCS:
+    full = os.path.join(ROOT, doc)
+    if not os.path.exists(full):
+        continue
+    for lineno, raw in enumerate(open(full, encoding="utf-8"), 1):
+        for m in TRUNC.finditer(raw):
+            head, tail = m.group(1), m.group(2)
+            cands = BY_PREFIX.get(head)
+            if not cands:
+                continue          # not a hash this repository records: not ours
+            extra["trunc"] += 1
+            if not any(h.endswith(tail) for h in cands):
+                failures.append(
+                    "%s:%d  cites `%s…%s`, but the hash starting %s ends %s"
+                    % (doc, lineno, head, tail, head,
+                       "/".join(sorted(h[-8:] for h in cands))))
+
+# 10. A SUITE UNDER module/tests/ THAT CI NEITHER RUNS NOR NAMES.
+#
+# README §10 says ci.yml "accounts for every file under module/tests/ so that a
+# suite absent from CI cannot be mistaken for one that passed". Three files —
+# plugin_delivery_test.cpp, logos_core_delivery_test.cpp and owner_responder.cpp
+# — appeared in neither workflow at all, so that sentence was false about the
+# three harnesses that cost the most to run.
+#
+# Falsification: add a file to module/tests/ and this goes red until CI runs it
+# or the accounting block names it and says what it needs.
+WORKFLOWS = " ".join(
+    open(os.path.join(ROOT, ".github/workflows", w), encoding="utf-8").read()
+    for w in sorted(os.listdir(os.path.join(ROOT, ".github/workflows")))
+    if w.endswith((".yml", ".yaml")))
+
+for _f in sorted(os.listdir(os.path.join(ROOT, "module/tests"))):
+    if not _f.endswith((".cpp", ".c")):
+        continue
+    if _f in WORKFLOWS:
+        extra["suite"] += 1
+    else:
+        failures.append(
+            "module/tests/%s is neither run by nor named in any workflow. "
+            "README §10 claims every file here is accounted for, so either "
+            "run it or name it in ci.yml's accounting block with what it needs."
+            % _f)
+
+print("checked %d catalogue entr(ies), %d variant claim(s) against %d packaged "
+      "variant(s), %d settlement(s) against the ledger, %d truncated hash(es), "
+      "%d test file(s) against the workflows"
+      % (extra["catalogue"], extra["variant"], N_VARIANTS, extra["ledger"],
+         extra["trunc"], extra["suite"]))
 
 print("checked %d paths, %d link targets, %d line citations, %d symbol "
       "citations, %d lines of two hash-free documents, across %d documents"

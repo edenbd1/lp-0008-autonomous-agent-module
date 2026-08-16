@@ -2,9 +2,9 @@
 
 The prize lists nine illustrative use cases and asks that at least three be
 "demonstrated end-to-end on LEZ testnet". Four of the nine are demonstrated
-here — 1, 2, 4 and 5 below — each by a script that computes or fetches every claim
+here — 1, 2, 4 and 5 — each by a script that computes or fetches every claim
 it makes in front of the reader, and each of which exits non-zero when its use
-case does not hold. Script 3 is a fourth script for a different criterion.
+case does not hold. Script 3 is a fifth script, for a different criterion.
 
 | | use case, as the prize words it | script | on chain? |
 |---|---|---|---|
@@ -21,7 +21,7 @@ written third, and it stays numbered 3 because its transactions and accounts are
 cited by hash elsewhere in this repository.
 
 **Which parts are on chain and which are not, stated once and plainly.** Use
-cases 2, 3 and 4 run against the public LEZ testnet at
+cases 2, 3, 4 and 5 run against the public LEZ testnet at
 `https://testnet.lez.logos.co` and every transaction and account they mention can
 be re-read with `getTransaction` and `getAccount` by anyone. Use case 1 touches no
 chain at all: it drives a real Logos Storage node and a real Logos Delivery node
@@ -30,22 +30,30 @@ file and sending a message are not chain operations in this stack — nor are th
 in the prize's own wording of that use case, which ends at "content address".
 Saying "demonstrated on testnet" of use case 1 would be false, so it is not said.
 Use case 4 is the one that does both halves: the same real Storage node, and then
-a transaction in a block.
+a transaction in a block. Use case 5 reads the chain and writes to it only in its
+`claim` mode, which is the event the watcher is there to detect.
 
 ## What any of this costs
 
 A settlement costs real testnet balance and the funder holds 10 LEZ. So:
 
 - **Use case 1 spends nothing.** No chain, no transaction.
-- **Use case 3 spends nothing.** Its three refusals fail while the proof is being
-  built, so no transaction is ever produced to submit — and each asks for 201 LEZ
-  from an agent holding 25, so even a ceiling that failed completely could not
-  move money. Its accepted side reads settlements that already landed.
+- **Use case 3 spends nothing.** Its **two** refusals fail while the proof is
+  being built, so no transaction is ever produced to submit. The first asks for
+  201 LEZ against a ceiling of 200 and the second asks for 1 in a window that
+  does not start on a period boundary — so neither could move money even if the
+  ceiling failed completely, the first because the agent does not hold that much
+  and the second because no block will include it. Its accepted side reads
+  settlements that already landed. (There were three attempts once; the third can
+  no longer be expressed, because `spend` carries no limits to disagree with.)
 - **Use case 2 spends nothing by default.** It verifies the settlements the
   marketplace has already produced against the chain. Run it as
   `SETTLE=1 ./scripts/use-cases/02-services-marketplace.sh` to pay for a fresh
   task; it prints the price, the payer, the payee and the payee's current balance
   before it signs anything, and hands off to `scripts/a2a-task.sh`.
+- **Use case 5 spends nothing in the mode CI runs.** `ALERTER_VERIFY_ONLY=1`
+  re-reads every alert in `artifacts/alerts.tsv` off the chain and writes
+  nothing. Its `claim` mode lands a `claim_agent`, which moves no value.
 - **Use case 4 spends nothing, and it does write to the chain.** Its
   notarisation is an account-creation transaction that moves no value, and LEZ
   v0.2.4 charges no execution fee — so it costs 0 LEZ. That is not an argument
@@ -388,18 +396,33 @@ curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json'
 
 ### What this use case does *not* show
 
-- **The card cannot be verified by a stranger.** A LEZ account id is not its
-  public key, and neither the card nor the RPC carries the mapping, so
-  `verify-agent-card.py` reads `pk` out of a wallet that holds the account. That
-  is a real limit on who can check a card today, and `--wallet-home` is the gap
-  rather than a convenience.
+- **The card is not self-contained, and the key has to travel beside it.** A LEZ
+  account id is not its public key and neither the card nor the RPC carries the
+  mapping, so a verifier needs the x-only key from somewhere. This bullet used to
+  conclude from that "the card cannot be verified by a stranger", which stopped
+  being true when the key was published: `artifacts/agent-cards/<category>.pub`
+  sits beside the card, `verify-agent-card.py --public-key` checks the signature
+  and the payment-account binding with no wallet at all, and that is the path CI
+  runs. What is still missing is an *in-band* binding from the key to the account
+  id — see [`a2a-binding.md`](a2a-binding.md) §3.6.
 - The card is written to `artifacts/agent-cards/` and read back from there;
   publishing it to a Logos Messaging discovery topic is what `agent.card()` does
   in the module, and this script does not drive that node.
-- The three settlements were produced by `scripts/a2a-task.sh`. The first two are
-  under the superseded program `b028eabf…`; the third, `5a488f28…`, is under the
-  current `8c87cc9b…`. All three are still on chain, and all three moved balance;
-  the program a settlement was made under does not change either fact. See
+- **The settlements in the transcript above were made under more than one
+  program, and this bullet used to get that wrong in the worst available way.**
+  It read "the third, `5a488f28…`, is under the current `8c87cc9b…`" —
+  `8c87cc9b…` is a *superseded* program, and calling it current is the exact
+  defect that once had four documents describing a dead deployment as live. The
+  shipped program is `697746f5…`; `./scripts/verify-deployment.sh` attributes
+  every row of `artifacts/a2a-task.tsv` by reading the ImageID out of the
+  transaction rather than out of the manifest, and prints which rows are under
+  the shipped program and which are earlier history. No count is written here
+  either, for the reason the ledger in
+  [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) gives: settlements are appended by
+  `scripts/a2a-task.sh`, so any number on this line is wrong the next time one
+  lands — and this line said "three" while the transcript above it counted four.
+  All of them are still on chain and all of them moved balance; the program a
+  settlement was made under does not change either fact. See
   [`docs/limitations.md`](limitations.md), "Superseded programs are on the
   testnet".
 
@@ -633,6 +656,61 @@ sentence the script prints.
 
 ---
 
+## 5. On-chain event alerter
+
+> "agent monitors a LEZ program or account for state changes and notifies the
+> owner via Logos Messaging."
+
+`scripts/use-cases/05-event-alerter.sh`. Spends nothing.
+
+**This section did not exist while the table at the top of this document
+promised it**, which is the same class of defect as the rest of the file: the
+script was written, wired into CI's `use-cases` job and given a manifest, and
+the document went on listing four use cases in a table and describing three.
+
+**Which event, which is the whole question for an alerter.** Pointing a watcher
+at something that changes on its own — the chain rewrites
+`/LEZ/ClockProgramAccount/0000001` every block — produces a green transcript that
+demonstrates polling and nothing else. The event here is a `claim_agent`: on this
+deployment an agent names the one account allowed to anchor a policy over it, and
+that claim costs nothing, needs no permission from the account it names, and is
+`#[account(init)]` so it can never be rewritten. An owner therefore has a real
+interest in learning that an agent has named them, and nothing in the stack tells
+them. That is a step of the shipped flow rather than an event invented for a
+demo.
+
+**Why the event comes from a second invocation.** A demonstration that causes the
+event it then detects reads as a loop even when it is not, so by default the
+watcher does not make the claim — it prints the command and a second process, run
+by the reader, makes it. `ALERTER_SELF_TRIGGER=1` runs both in one process, which
+is what CI does, where orchestrating two is not worth the machinery.
+
+```sh
+./scripts/use-cases/05-event-alerter.sh prepare   # a fresh agent to watch
+./scripts/use-cases/05-event-alerter.sh           # terminal A: watch
+./scripts/use-cases/05-event-alerter.sh claim     # terminal B: the event
+ALERTER_VERIFY_ONLY=1 ./scripts/use-cases/05-event-alerter.sh   # re-check, no wallet
+```
+
+Each alert is recorded in [`artifacts/alerts.tsv`](../artifacts/alerts.tsv) with
+the agent, the claim account it appeared at, the owner it named, the transaction
+and the block. `ALERTER_VERIFY_ONLY=1` re-reads every one of them off the chain —
+the transaction from `getTransaction`, the claim account and its 33 bytes from
+`getAccount` — and needs no wallet and no messaging node, which is why it is the
+mode CI can run.
+
+**What it costs: nothing.** `auth-transfer init` and `claim_agent` both move zero
+value and LEZ v0.2.4 charges no execution fee, so a full run is 0 LEZ. The agent
+it creates is funded with nothing and never needs to be.
+
+**What this use case does *not* show.** The detection is a poll of `getAccount`,
+not a subscription — this chain publishes no event stream, so "monitors" is
+implemented as "reads the account until its bytes change". And the notification
+half shares the limit use case 1 has: the address goes out on a real Logos
+Messaging topic, and a second node receiving it is not asserted.
+
+---
+
 ## Where each script's evidence comes from
 
 | | reads | writes |
@@ -641,6 +719,7 @@ sentence the script prints.
 | 02 | `artifacts/agents.tsv`, `artifacts/agent-cards/`, `artifacts/a2a-task.tsv`, the testnet RPC | nothing, unless `SETTLE=1`, in which case `scripts/a2a-task.sh` appends to `artifacts/a2a-task.tsv` |
 | 03 | `artifacts/agents.tsv`, `artifacts/a2a-task.tsv`, `artifacts/programs/agent_verifier.bin`, the testnet RPC | nothing |
 | 04 | `_external/logos-storage-nim`, `artifacts/notary.tsv`, the testnet RPC | one row in `artifacts/notary.tsv`, and one transaction on the testnet — neither unless the transaction was produced |
+| 05 | `artifacts/alerts.tsv`, the testnet RPC, and a Delivery node for the notification | one row in `artifacts/alerts.tsv`, and — in `claim` mode only — one `claim_agent` on the testnet, which moves no value. Nothing at all under `ALERTER_VERIFY_ONLY=1` |
 
 The helpers each script leans on, all under `scripts/use-cases/`:
 `lib.sh` (manifest columns by name, RPC shapes, the control hash),

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Drive a real Logos Delivery node through the lifecycle the agent skills use.
+# Drive a real Logos Delivery node AND a real Logos Storage node through the
+# lifecycles the agent skills use. Four steps, and the Storage half is the
+# second two — this line named only Delivery while step [4/4] has always driven
+# storage_node_drive.c.
 #
 #   ./scripts/exercise-nodes.sh
 #
@@ -24,7 +27,7 @@ DYLIB="$DELIVERY_SRC/build/liblogosdelivery.dylib"
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { echo "error: $*" >&2; exit 1; }
 
-say "[1/3] the Delivery library"
+say "[1/4] the Delivery library"
 if [ ! -f "$DYLIB" ]; then
   cat >&2 <<TXT
   not built at $DYLIB
@@ -41,7 +44,7 @@ fi
 echo "  $DYLIB"
 echo "  $(cd "$DELIVERY_SRC" && git rev-parse --short HEAD 2>/dev/null || echo '?')  $(du -h "$DYLIB" | cut -f1)"
 
-say "[2/3] build the driver against it"
+say "[2/4] build the driver against it"
 BIN="${TMPDIR:-/tmp}/lp0008_delivery_drive"
 cc -o "$BIN" module/tests/delivery_node_drive.c \
    -I"$DELIVERY_SRC/library" -L"$DELIVERY_SRC/build" \

@@ -556,8 +556,11 @@ Stated plainly, because a reviewer will check.
   cannot wire them". The premise is right and the conclusion was wrong — see
   §"The ports a loaded module builds for itself" above.
   `module/src/delivery_runtime.cpp` opens `liblogosdelivery` with `dlopen` at
-  the moment a node is asked for, `module/agent.lgx` carries the library and its
-  licence beside the plugin, and the messaging, discovery and task transports
+  the moment a node is asked for, `module/agent.lgx`'s **`darwin-arm64`** variant
+  carries the library and its licence beside the plugin — the two Linux variants
+  carry the code path and no library, because upstream publishes no
+  `liblogosdelivery.so`, so `meta.configure("delivery","on")` there names the
+  file it could not open — and the messaging, discovery and task transports
   work in a module Logos Core loaded. `libstorage.h` is still included by
   nothing, so `storage.*` still refuses.
 - **`logos_protocol_version`.** The runtime logs
@@ -782,8 +785,9 @@ counterpart and it is not a shortcut: upstream publishes **no**
 API when this was written). The header is the build input; the library is opened
 by name at run time. So the `linux-amd64` plugin carries the delivery code path
 — every one of its string literals is in the binary, which is what
-`scripts/check-package-fresh.py` asserts against **both** variants — and there
-is no library beside it for `dlopen` to find. Without the flag CMake refuses,
+`scripts/check-package-fresh.py` asserts against **all three** variants — and
+there is no library beside it for `dlopen` to find. The same is true of
+`linux-arm64`, built the same way. Without the flag CMake refuses,
 and says which of the three states to ask for.
 
 `package-basecamp.sh` **adds** the variant rather than replacing the package:
@@ -847,7 +851,7 @@ The environments both were performed in are recorded in `docs/limitations.md`.
 
 **The variant is chosen, not stumbled into.** `logos-core-headless.sh` used to
 install `tar tzf … | head -n1`, which was correct for exactly as long as the
-package held one variant; the first Linux run after `linux-amd64` was added
+package held one variant (count-as-it-was); the first Linux run after `linux-amd64` was added
 installed the **dylib**, because tar lists `darwin-arm64` first. It now requires
 the variant this machine needs and names what the package has when that is
 missing. There is no fallback: a module directory holding another platform's
@@ -1030,10 +1034,12 @@ a CI step. It fails loudly when the toolchain is absent rather than passing.
 
 ### The 16 MB in it, and why it is committed rather than downloaded
 
-The committed package is `module/agent.lgx` (16 MB at the moment of writing; one
-`darwin-arm64` variant). It was 674 KB, and 589 KB before that, and nobody
-noticed either change — which is the whole argument for the checked record
-above. This one is not an accident and it is not free, so the reasoning is here
+The committed package is `module/agent.lgx`. It was 674 KB, then 589 KB, then
+16 MB with one `darwin-arm64` variant, and it is larger again now that it
+carries three — and nobody noticed the first two changes, which is the whole
+argument for the checked record above. No byte count is written here any more
+for the same reason: it moved three times without this sentence moving, and
+`ls -l module/agent.lgx` answers it. This one is not an accident and it is not free, so the reasoning is here
 rather than in a commit message nobody re-reads.
 
 **What is in it.** `liblogosdelivery.dylib`, 42 MB uncompressed, because the
@@ -1090,7 +1096,7 @@ directory this document had already named:
 ```sh
 LGX="${LGX_BIN:-$HOME/logos/src/logos-package/build/lgx}"
 $LGX verify   module/agent.lgx    # contents match the manifest hashes
-$LGX manifest module/agent.lgx    # type: core, two variants
+$LGX manifest module/agent.lgx    # type: core, three variants
 ```
 
 `manifest` prints three variants now — one for every platform the Logos app is
@@ -1925,8 +1931,11 @@ ok    wallet_module @ f6f9c16: no tracked file changed; 2 added path(s), all und
 
 ### What this does not claim
 
-- **`darwin-arm64` only**, like everything else packaged here. No `linux-amd64`
-  variant of the companions is built.
+- **`darwin-arm64` only** — and, unlike the agent's own two packages, which now
+  carry all three variants, no `linux-amd64` or `linux-arm64` variant of the
+  companions is built. This bullet used to read "like everything else packaged
+  here", which stopped being true when `module/agent.lgx` and
+  `app/agent-ui.lgx` gained their Linux variants.
 - **They are loaded and answering, not driven.** The criterion is about
   coexistence, and nothing here has the agent *call* `storage_module` or
   `wallet_module`. The agent's own `storage.*` skills still have no ports wired

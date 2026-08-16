@@ -12,8 +12,12 @@
 # What makes it autonomous is not that no human is watching — it is that the
 # chain would have rejected the transfer if it had needed a human. The payment
 # is inside the client agent's anchored envelope, so `spend` takes the
-# autonomous branch. Push the price above the per-transaction limit and the same
-# call fails without an owner approval account, which is the point.
+# autonomous branch. Push the price above the per-transaction limit and THIS
+# SCRIPT refuses at step 2, before it builds anything — it prints "ABOVE the
+# envelope" and exits 1, so what a reader sees is a local refusal and not the
+# chain's. The chain's refusal of the same call is real and is shown where it can
+# be executed: `crates/agent-verifier-adversarial` against the deployed binary,
+# and `scripts/use-cases/03-spending-threshold.sh` against the live program.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
@@ -29,10 +33,13 @@ PROGRAM=artifacts/programs/agent_verifier.bin
 # the sequencer runs: ImageID 22c496fe… = the `authenticated_transfer` id the
 # chain reports from `getProgramIds`.
 AUTH_TRANSFER=artifacts/programs/authenticated_transfer.bin
-# Overridable because `deploy-agents.sh` truncates this file at the start of a
-# run and fills it in over the following minutes. A settlement that reads it
-# mid-run sees a header and no agents, and reports that the server has no
-# receiving account — which is true of the file and false of the chain.
+# Overridable so a run can be pointed at a manifest of its own without touching
+# the committed one. The reason this used to give — that `deploy-agents.sh`
+# truncates this file at the start of a run, so a settlement reading it mid-run
+# sees a header and no agents — is NO LONGER TRUE: that script builds into a
+# mktemp beside the manifest and `mv`s it over only once all three agents have
+# anchored, precisely so a failed run cannot delete the record of the one that
+# worked.
 AGENTS="${A2A_AGENTS:-artifacts/agents.tsv}"
 CARDS=artifacts/agent-cards
 OUT="${A2A_MANIFEST:-artifacts/a2a-task.tsv}"

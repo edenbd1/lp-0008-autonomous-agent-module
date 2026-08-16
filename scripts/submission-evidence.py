@@ -642,13 +642,17 @@ def section_program(chain, root, agents, ident):
     for ins, shape in sorted(seeds.items()):
         by_shape.setdefault(shape, []).append(ins)
     d("Read out of the shipped `idl/agent_verifier.idl.json` rather than "
-      "described — the address derivation is the security argument, so it is "
-      "quoted from the interface the repository actually ships:")
+      "described — the address derivation is the security argument, so the "
+      "seeds are quoted from the interface the repository actually ships. "
+      "`program` is the deployment identified above: a PDA is scoped to the "
+      "program that owns it, which is why every one of these addresses moves "
+      "when the ImageID does, and why the superseded settlements further down "
+      "charge accounts that no longer exist.")
     d()
     d("| instruction | policy account address |")
     d("|---|---|")
     for shape, inss in sorted(by_shape.items(), key=lambda kv: kv[1]):
-        d("| %s | `PDA(%s)` |"
+        d("| %s | `PDA(program, %s)` |"
           % (", ".join("`%s`" % i for i in inss), shape))
     d()
     d("There is **one policy account per agent**: the seed is the agent, and "
@@ -694,6 +698,18 @@ def section_agents(chain, root, agents, anchors):
                 disagreements.append(
                     "%s: the chain holds %s = %d, the manifest says %s"
                     % (a["category"], field, rec[field], a[field]))
+        # The owner is the record's FIRST field and no part of the address --
+        # which is precisely the derivation this section spent three deployments
+        # stating backwards. It is compared rather than described: `agents.tsv`
+        # has carried the `owner` column all along and nothing here read it, so
+        # a policy anchored under the wrong owner would have gone unremarked
+        # while the paragraph below asserted otherwise.
+        if rec["record_owner"] != b58decode(a["owner"]).hex():
+            disagreements.append(
+                "%s: the policy record on chain names owner %s, the manifest "
+                "says %s"
+                % (a["category"], b58encode(bytes.fromhex(rec["record_owner"])),
+                   a["owner"]))
         c = confirm(chain, a["create_tx"])
         d("| %s | `%s…` | `%s…` | %s | %s | %s blocks | %s, block %d |"
           % (a["category"], a["agent_id"][:8], a["policy_account"][:8],
@@ -706,12 +722,23 @@ def section_agents(chain, root, agents, anchors):
                     + "; ".join(disagreements))
 
     d("Each `create_policy` above was confirmed present in the block named and "
-      "absent from both neighbours. The limits are the chain's own copy: the "
-      "address of a policy account is "
-      "`PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so "
-      "raising a limit does not edit this record — it names a different address "
-      "that `create_policy` never initialised, and the state machine rejects the "
-      "spend before the program body runs.")
+      "absent from both neighbours. The limits are the chain's own copy, and "
+      "they are the account's *data* rather than part of its name: the address "
+      "of a policy account is `PDA(program, [\"agent-policy/v1\", agent_id])` — "
+      "the program and the agent, and nothing else. No limit and no owner is in "
+      "that preimage, so there is exactly **one** such account per agent, "
+      "raising a ceiling rewrites this record in place rather than naming a "
+      "second one, and `init` gives the address to whoever anchors first. The "
+      "owner is the record's own first field, and this generator compares it "
+      "against the `owner` column above rather than describing it. What keeps "
+      "the numbers honest is therefore not the address but who may write it: "
+      "LEZ rule 6 (`UnauthorizedDataModification`) lets only the owning program "
+      "touch that data, `update_policy` is the one instruction that rewrites "
+      "the limits and it refuses any signer that is not the owner the record "
+      "names, and `spend` seeds this same address from the *signing* agent's "
+      "account instead of from an argument — so an agent presenting a roomier "
+      "policy account fails the PDA check the macro emits before the program "
+      "body runs.")
     d()
     d("The ledger's *running total* — `window_start` and `spent`, the halves only "
       "the owning program may write — is deliberately **not** in that table, and "

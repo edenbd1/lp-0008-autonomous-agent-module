@@ -26,11 +26,16 @@
 # fresh unlimited policy and spend under it — executed, accepted, and recorded in
 # artifacts/adversarial.tsv. Section 4 is what replaced it.
 #
-# WHAT IT COSTS: nothing. It submits no transaction. The three refusals below
-# fail while the proof is being built, so no transaction is ever produced to
-# submit — and each of them asks for 201 LEZ from an agent that holds far less
-# than that, so even a ceiling that failed completely could not move money. The
-# accepted side is not re-paid either: it reads settlements that already landed.
+# WHAT IT COSTS: nothing. It submits no transaction. The TWO refusals below fail
+# while the proof is being built, so no transaction is ever produced to submit.
+# The first asks for 201 LEZ against a ceiling of 200, from an agent that holds
+# far less than either, so a ceiling that failed completely still could not move
+# money; the second asks for 1 in a window that does not start on a period
+# boundary, which no block will include. (This header said "three refusals" and
+# "each of them asks for 201" for several commits after the third attempt was
+# deleted — section 4 replaced it, because `spend` now carries no limits to
+# disagree with. The body's own comment above the attempts says so.)
+# The accepted side is not re-paid either: it reads settlements that already landed.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 . scripts/use-cases/lib.sh

@@ -283,10 +283,19 @@ conforming implementation therefore MUST do one of:
 2. use `storeQuery` with `contentTopics: ["/lp-0008/1/discovery-<ns>/json"]` and
    accept the stability warning.
 
-`DiscoveryPort.fetch` (`DiscoveryPort` in `agent_skills.h`) is the seam where either goes.
-**Nothing in this repository wires it.** The skill refuses with "no discovery
-transport is configured" when it is empty (`DiscoverSkill` in `agent_skills.cpp`), which is the
-correct failure and is not the same as working.
+`DiscoveryPort.fetch` (`DiscoveryPort` in `agent_skills.h`) is the seam where either goes,
+and this paragraph used to say **nothing in this repository wires it**. That is
+no longer true: `installBuiltinSkills` (`installBuiltinSkills` in
+`agent_module_plugin.cpp`) binds it to `DeliveryRuntime::received(topic)`, which
+is option 1 — subscribe and read, with the warm-up window that implies. Two
+loaded modules discovering each other's signed cards over the public network is
+that binding working, and `docs/basecamp.md` carries the run.
+
+What is still absent is option 2: no `storeQuery` backfill, so a card published
+before this node subscribed is not recovered. The refusal "no discovery
+transport is configured" (`DiscoverSkill` in `agent_skills.cpp`) is now reachable
+only for a caller that supplies an empty port ahead of the module's own — it is
+still the correct failure, and it is no longer the ordinary one.
 
 ### 3.4 Validation
 
@@ -361,7 +370,7 @@ document that reads like a signed card and is not one is worse than no card.
 **The two signers in this repository disagree with each other**, and a third
 party must know which to follow. See §7.5.
 
-### 3.6 Verification — and why nobody can do it yet
+### 3.6 Verification, and the one binding it still lacks
 
 A verifier MUST:
 
@@ -385,9 +394,19 @@ defect in the binding as shipped, and it was found by trying it:
 - `getAccount` returns `program_owner`, `balance`, `data`, `nonce` and no public
   key, so the chain does not close the gap through the documented RPC.
 
-The docstring at `scripts/sign-agent-card.py` claims "a reader who has the
-card has everything needed to check it". **That claim is false** and is recorded
-here rather than repeated.
+The docstring at `scripts/sign-agent-card.py` used to claim "a reader who has the
+card has everything needed to check it". That claim was false, it stood in the
+signer while this section recorded it as false, and it has now been corrected in
+the file itself rather than only contradicted here.
+
+**What does close it, out of band.** The x-only key is published *beside* the
+card — [`artifacts/agent-cards/storage.pub`](../artifacts/agent-cards/storage.pub)
+— and `scripts/use-cases/verify-agent-card.py --public-key` performs steps 4, 5
+and 6 against it with no wallet at all. That is what CI runs on every push, on a
+runner that has no agent wallet and must never be given one. So "nobody can
+verify a card" is not the state of this repository, and this section used to be
+headed as though it were; what is missing is the *in-band* binding below, which
+is a different and smaller claim.
 
 The fix this binding specifies, and which is not implemented:
 
@@ -532,16 +551,29 @@ yet wired where it matters most:
 | Owner approval channel | reliable channel — `channelCreate(channelId, contentTopic, agentAccount)`, `channelSend` | wired, `owner_channel.cpp` |
 | `messaging.create_group` | reliable channel — `channelCreate(group)` | wired, `messaging_skills.cpp` |
 | `messaging.send` | bare topic — `send(ownerTopic(recipient), payload)` | wired, `messaging_skills.cpp` |
-| A2A task traffic | **`TaskPort.send(topic, json)` — an unbound seam** | **not wired by anything in this repository** |
+| A2A task traffic | `TaskPort.send(topic, json)` | wired by the module itself, `agent_module_plugin.cpp` — **to the bare-topic path**, not the reliable channel this section requires |
 
 `TaskPort` (`TaskPort` in `agent_skills.h`) is shaped as "publish this JSON to this
 content topic". That shape admits either mechanism: a host may bind it to
 `send()` and get a bare topic, or to `channelCreate` + `channelSend` and get a
 reliable channel. **A host implementing this binding MUST bind it to the
-reliable-channel path.** No shipped code binds it at all — `SkillPorts.task`
-(`SkillPorts` in `agent_module_plugin.h`) is default-constructed to nothing, the skills refuse
-with "delivery node is not started", and §7.1 records what that means for the
-end-to-end claim.
+reliable-channel path.**
+
+**This row used to read "an unbound seam — not wired by anything in this
+repository", and that stopped being true without this table moving.**
+`installBuiltinSkills` (`installBuiltinSkills` in `agent_module_plugin.cpp`)
+now binds nine `TaskPort` members out of the module's own `DeliveryRuntime` —
+`ready`, `send`, `subscribe`, `receive`, `selfAccount`, `pay`, `perTxLimit`,
+`perPeriodLimit`, `spentThisPeriod` — which is why §7.1 already said `TaskPort`
+is wired by the module itself, and why two sections of one document disagreed.
+
+So the honest status is worse than "unwired" and more useful: it *is* wired, and
+it is wired to the mechanism this section says a conforming host MUST NOT use.
+`DeliveryRuntime::publish` (`publish` in `delivery_runtime.cpp`) emits a bare
+relay `send`, so A2A task traffic on this binding is best-effort today and a
+dropped `working` is indistinguishable from a peer that never started. Moving it
+to `channelCreate` + `channelSend` is the open work, and it is named here rather
+than in a row that reads as if nothing had been built.
 
 ### 4.3 Delivery readiness is not optional
 
@@ -731,25 +763,22 @@ Order of operations, and it is deliberate: *check, post, pay.*
    request. It is accepted only if the task is `input-required` or
    `auth-required`, it is with the same peer, and it carries a `message` or
    `params`. A retried `agent.task` on a task still in `submitted` is a duplicate
-   request and is refused as one (`:879-883`).
+   request and is refused as one.
 2. If a peer `card` is supplied, it is validated as an Agent Card, it MUST
    advertise the requested `skill`, and its `x-logos.lezAccount` MUST equal
    `agent_address`. The price and payment account are taken **from the card**,
-   because that is the figure the peer published and the only one it is bound to
-   (`:919-940`). Without a card, the caller may pass `price` and `pay_account`
-   directly.
+   because that is the figure the peer published and the only one it is bound to.
+   Without a card, the caller may pass `price` and `pay_account` directly.
 3. `max_price` is checked before anything is sent and long before anything is
-   signed. A task above it is refused (`:950-958`): proving time on a transfer
-   the owner's envelope would refuse is paid for whether or not the chain accepts
-   it.
+   signed. A task above it is refused: proving time on a transfer the owner's
+   envelope would refuse is paid for whether or not the chain accepts it.
 4. `ready()` is checked, and only then is the task created. A transport that is
    down means **no task is opened at all**.
 5. The request is published. If the publish fails, the task is moved to `failed`
-   with "the request could not be delivered", and **nothing is paid**
-   (`:980-987`).
+   with "the request could not be delivered", and **nothing is paid**.
 6. Only now is the price paid (§6.4).
-7. The task is returned in **`submitted`** (`:1010-1018`). It has posted a
-   request; it has not seen the other agent start work. `working` arrives as a
+7. The task is returned in **`submitted`**. It has posted a request; it has not
+   seen the other agent start work. `working` arrives as a
    status update or not at all.
 
 **`agent.subscribe(agent_address, task_id)`** — `SubscribeSkill` in `agent_skills.cpp`. Refuses
@@ -850,10 +879,22 @@ subscription flag, full state history and last note; and `restore(json)`
 malformed JSON, a duplicate id or a state name A2A does not define leaves the
 store **untouched**. A half-restored store is worse than an empty one.
 
-A host that must survive a restart owns the store and passes it in through
-`SkillPorts.tasks` (`SkillPorts` in `agent_module_plugin.h`); the module's internal store
-runs fine but cannot be snapshotted from outside. Persisting the snapshot is the
-host's job and is not implemented here.
+**Persisting the snapshot used to be described here as the host's job and "not
+implemented".** It is implemented, in the module.
+`TaskPersistence` (`TaskPersistence` in `task_persistence.h`) renders the store
+to one file atomically — temp file, flush, rename, flush the parent —
+`onContextReady` opens it under the host's `instancePersistencePath()`, `start()`
+recovers from it, and `invoke()` checkpoints whenever the store moved. The
+recovery decision is the load-bearing one: a snapshot that cannot be read
+**refuses the start**, because coming up with an empty task list on top of an
+unreadable one is how a paid task gets paid twice. `meta.status` reports the
+path, the recovery outcome and the count of payments the restart could not
+resolve.
+
+What remains true is the narrower half: a host that would rather own the store
+passes one in through `SkillPorts.tasks`
+(`SkillPorts` in `agent_module_plugin.h`), and **that** store the module does not
+checkpoint — persisting a store the host owns is the host's job.
 
 ---
 
@@ -893,8 +934,13 @@ round-trip, and no negotiation. A client that will not pay more than *N* passes
 A payee can be named two ways, and the card carries both.
 
 **Publicly, by account id.** `x-logos.paymentAccount` is an ordinary public
-account, initialised once under the transfer program. Four of this repository's
-five settlements pay one. It is the only form whose credit a stranger can check
+account, initialised once under the transfer program. Every settlement recorded
+in `artifacts/a2a-task.tsv` pays one; the shielded form below is recorded apart,
+in `artifacts/shielded-settlement.tsv`, because nothing in the first file's
+vocabulary can describe it. Neither count is written here on purpose — this
+sentence read "four of this repository's five settlements" for several commits
+after the fifth, sixth and seventh landed, and `./scripts/verify-deployment.sh`
+prints the current list with each block. It is the only form whose credit a stranger can check
 with `getAccount`, which is exactly why it is also the form that leaks.
 
 **Privately, by keys.** `x-logos.shieldedPaymentKeys` carries the agent's `npk`
@@ -1316,7 +1362,11 @@ From [`docs/limitations.md`](limitations.md), the ones a payment path inherits:
 - Deployment is content-addressed and superseded programs remain on testnet;
   a policy account is a PDA of the program, so rebuilding the guest orphans every
   anchor made under the old one.
-- The Delivery and Storage node drivers are local commands, not CI. A skipped or
+- The **Delivery** node driver is a local command, not CI — there is no prebuilt
+  `liblogosdelivery` for Linux to download, so a CI run would have to compile Nim
+  on the runner and then depend on live public peers. The **Storage** one is a CI
+  job (`storage-node`), against upstream's own checksum-pinned release asset;
+  this line used to name both and was wrong about the second. A skipped or
   perpetually-flaky CI step counts as not run, which is the standard applied to
   everything else here.
 
@@ -1373,8 +1423,13 @@ A checklist for someone writing a peer, in the order the work has to happen.
 3. **Build a card** per §3.1 and validate it against §3.4 before publishing.
 4. **Sign it** per §3.5: `alg` `secp256k1-bip340`, `kid` the payment account,
    payload the compact key-sorted card without `signatures`, message
-   `SHA-256(signing input)`, signature base64url. Carry the x-only public key in
-   the card (§3.6) or your card cannot be verified by anyone.
+   `SHA-256(signing input)`, signature base64url. Publish the x-only public key —
+   in the card, or beside it the way
+   [`artifacts/agent-cards/storage.pub`](../artifacts/agent-cards/storage.pub)
+   does — or nobody without your wallet can check the signature (§3.6). This
+   clause used to read "or your card cannot be verified by anyone", which was
+   wrong about the repository it ships in: the key is published beside the card
+   here, and CI verifies against it on every push with no wallet on the runner.
 5. **Publish it** on `/lp-0008/1/discovery-<ns>/json`, and republish on a timer
    (§3.3).
 6. **Subscribe to your own task topics.** For each task you accept, that is
@@ -1402,11 +1457,22 @@ A checklist for someone writing a peer, in the order the work has to happen.
 
 ## Where the code is
 
-Symbols, not line numbers — and as of this revision, **this document contains no
-line citations at all.** It used to carry about seventy, and they had drifted by
+Symbols, not line numbers. **This document carries no live line citation**; the
+only `:NNN` forms left in it are inside this paragraph, quoting the stale ones it
+is about. That sentence used to read "contains no line citations at all", and it
+was false when written: five survived in §5.3, all five pointing into
+`CardSkill::invoke` while the prose around them was about `TaskSkill::invoke` —
+a citation that is both stale and misattributed, in the section explaining why
+line citations were abandoned. They are gone.
+
+The seventy this document used to carry had drifted by
 between +87 and +326 lines: `agent_skills.cpp:640` for a `protocolVersion` that
-had moved to 875, `:734` for an `alg` default at 979, `canTransition` cited at
-`:161-197` and living at 248. A table of line numbers was not merely stale, it
+had moved, `:734` for an `alg` default that had moved, `canTransition` cited at
+`:161-197` and living at 248. (Those "moved to" figures are deliberately not
+written out any more: two of the three were themselves stale within a few
+commits — the `protocolVersion` line and the `alg` default have both moved again
+since — which is the defect this paragraph is about, committed inside the
+paragraph describing it.) A table of line numbers was not merely stale, it
 was stale by a *different amount* in every row, which is the kind of wrong that
 survives a spot-check.
 

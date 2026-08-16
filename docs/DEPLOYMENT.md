@@ -269,30 +269,41 @@ print('window_start ', le(73,81))
 print('spent        ', le(81,97))"
 ```
 
-which prints, today:
+which prints the shape below. **The two numbers at the bottom are deliberately
+left as `<…>`, and that is the correction this block needed:**
 
 ```
 owner         H3VSrUkvPRqU1ruS2bpqrhETE9364hfeapXQReA9yaTZ
 per_tx        25
 per_period    250
 period_blocks 1000
-window_start  8000
-spent         50
+window_start  <the window the last spend declared>
+spent         <that window's running total>
 ```
 
-`spent` is the sum of every price this ledger has been charged, against a
-`per_period` of 250, and it is the per-period defect's fix measured rather than
-described. **The number in that block is a snapshot, and it moves every time an
-agent settles** — it read 50 when this decode was first pasted here and it reads
-more now. That is the field working, not the document rotting, and it is why
-`./scripts/verify-deployment.sh` reads the running total off the chain and prints
-it (`window … spent …`) instead of this page asserting one. Run that rather than
-believing this block; the shape is the point, the value is today's.
+`spent` is the sum of every price this ledger has been charged inside
+`window_start`, against a `per_period` of 250, and it is the per-period defect's
+fix measured rather than described.
+
+This block used to print `window_start 8000, spent 50` and say "it read 50 when
+this decode was first pasted here and it reads more now". The first half was a
+snapshot, which the page admitted; the second half was **wrong about the
+mechanism**, and that is worse. `spent` is per *window*, not cumulative — when
+the window rolls, the ledger starts again at zero, so the number goes **down**.
+It reads a smaller figure in a later window than it did in period 8000, and a
+document that told a reader to expect a larger one taught them to distrust the
+chain instead of the page. `./scripts/verify-deployment.sh` prints the live
+`window … spent …` for all three agents; run that rather than believing any
+figure here.
+
 `owner` is the account that signed `create_policy`, and it is the account the
 messaging agent itself named in `claim_agent` before any policy existed: read
 `Qg4NvAVrZ4fMwTAomeX7q8sbvnTHmuF9BvBsxUJ7hoW` and compare. The storage and
-blockchain agents' policies are the same 97-byte shape with `window_start 0,
-spent 0`: anchored, never spent under.
+blockchain agents' policies are the same 97-byte shape. The blockchain agent's
+has never been spent under (`window_start 0, spent 0`); **the storage agent's
+has**, since it began buying tasks from the blockchain agent — which is another
+line this page carried as "anchored, never spent under" after it had stopped
+being true of one of the two.
 
 **The 24-byte decoder that used to be printed here belonged to the superseded
 program.** Its records were `window_start(8) spent(16)` with no version and no
@@ -587,9 +598,14 @@ their own initialisations, so nothing precedes the table.
 | 8774 | `483dbe55…2304a164` | `authenticated_transfer` of **40** to the messaging pay account | 55 |
 | 8794 | `7fc6c9af…9a022228` | receives **65** — step 2 of the bypass against the messaging agent: it moves its whole balance under the unlimited policy anchored at 8785, and this account is the recipient ([`adversarial.tsv`](../artifacts/adversarial.tsv)) | 120 |
 | 8803 | `a7987634…42a1f493` | `authenticated_transfer` of **65** to the messaging pay account | 55 |
-| 8847 | `6563e8d1…15f9a96e3` | spends **10** into shielded notes — **this is what let the storage agent claim an owner** under the live program. Its shielded balance had been recycled to zero, and `claim_agent` is signed by that account, so it had no note to spend. A shielded transfer mints a new note with a new id, which is why the storage agent is now `9Xpkkvos…` | 45 |
+| 8847 | `6563e8d1…5f9a96e3` | spends **10** into shielded notes — **this is what let the storage agent claim an owner** under the live program. Its shielded balance had been recycled to zero, and `claim_agent` is signed by that account, so it had no note to spend. A shielded transfer mints a new note with a new id, which is why the storage agent is now `9Xpkkvos…` | 45 |
 | 8892 | `e691f593…26631047` | settlement, **live** program `697746f5…` — third row of `a2a-task.tsv` | 70 |
 | 8901 | `aef14146…8bcb70b8` | settlement, **live** program — fourth row of `a2a-task.tsv` | 95 |
+| 8939 | `16df5055…a1ff9dde` | settlement, **live** program, 5 LEZ | 100 |
+| 8964 | `ffafd2b0…721bb2da` | settlement, **live** program, 5 LEZ | 105 |
+| 9938 | `52ef56ad…4ed873e6` | settlement, **live** program, 1 LEZ | 106 |
+| 10081 | `071d25d7…1412057a` | settlement, **live** program, 1 LEZ | 107 |
+| 10102 | `54f85182…e2f47115` | settlement, **live** program, 1 LEZ — the one filmed for the video | 108 |
 
 Six of these were signed by the account itself — the initialisation, the 55
 spend, the `create_policy`, the two transfers and the 10 that re-funded the
@@ -608,20 +624,28 @@ are credits, which do not move a nonce.
 | 8783 | `83df9249…191443e5` | spends **40** into shielded notes | 0 |
 | 8785 | `e530e0ba…399d462d` | `create_policy` against the **superseded** program, `per_tx = per_period = u128::MAX`, creating `AsvAU2Lf…` — the same bypass, against the messaging agent ([`adversarial.tsv`](../artifacts/adversarial.tsv)) | 0 |
 | 8803 | `a7987634…42a1f493` | receives **65** from the storage pay account | 65 |
+| 8820 | `d4d4d0a7…40c69fef` | spends **65** into shielded notes | 0 |
 
 ### blockchain, `BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu`
 
 | Block | Transaction | What it is | Balance after |
 |---|---|---|---|
 | 8595 | `d97d6346…eaee9cd4` | `auth-transfer init` | 0 |
+| 9373 | `e2c59e8a…c61ef3be` | settlement, **live** program — a loaded module pays for the task it was served, 1 LEZ | 1 |
+| 9389 | `23046b54…ce6ca3fc` | settlement, **live** program, 1 LEZ | 2 |
+| 9456 | `31b185e2…19942531` | settlement, **live** program, 1 LEZ | 3 |
+| 9477 | `ed8c3514…374b8cb3` | settlement, **live** program, 1 LEZ | 4 |
 
-And nothing else, ever. **This account has never received a payment**: balance 0,
-nonce 1. It is listed as the blockchain agent's receiving address because that is
-what its Agent Card advertises and what a payment to it would credit, but in this
-repository's flow the blockchain agent is the one that *pays* — it is the client
-in both settlements — so nothing has ever been sent to it. The row above is the
-whole of its history, and "Paid at" in the agents table means "would be paid at",
-not "has been paid at".
+**This account has now been paid, and this section used to say it never had
+been.** It read "nothing else, ever … balance 0, nonce 1", on the reasoning that
+the blockchain agent is the client in every settlement and so only ever pays.
+That stopped being true when the storage agent started buying from it: the four
+rows above are `./scripts/delivery-in-plugin.sh settle` runs, in which a **loaded
+module** discovers this agent's card, opens a task and pays the advertised 1 LEZ
+into this account. `getAccount` reports balance 4, nonce 1 — the nonce is still 1
+because every one of the four is a credit, and a credit does not move a nonce.
+So "Paid at" in the agents table now means "has been paid at" for all three
+agents.
 
 ### What the ledger says about the evidence
 

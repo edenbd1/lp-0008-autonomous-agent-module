@@ -257,8 +257,20 @@ model. A real dependency cannot be made to fail on demand; a fake can.
 | Blockchain | `wallet.balance`, `wallet.send`, `wallet.history` | `WalletPort` (+ owner channel) |
 | Blockchain | `program.query`, `program.call`, `program.deploy` | `ProgramPort`, `SequencerPort` |
 | Agent / A2A | `agent.card`, `agent.discover`, `agent.task`, `agent.subscribe`, `agent.update`, `agent.poll`, `agent.cancel` | `CardPort`, `DiscoveryPort`, `TaskPort` |
-| Meta | `meta.status`, `meta.configure` | `StatusPort`, `ConfigPort` |
+| Owner's end | `owner.watch`, `owner.pending`, `owner.answer` | `OwnerResponder` |
+| Meta | `meta.status`, `meta.configure`, `meta.skills` | `StatusPort`, `ConfigPort`, `RegistryPort` |
 | Optional | `agent.evaluate_task` | `HttpTransport` |
+
+That table is the whole registry, and it is checked: `scripts/check-docs.py`
+fails if a skill `installBuiltinSkills` registers is missing from it. It had
+been missing four — the three `owner.*` and `meta.skills` — while every
+count-shaped mention of "28 skills" in this repository agreed with the module,
+because a count gate cannot see a catalogue with a row absent.
+
+The `owner.*` three are not for the agent at all: they are what a **second**
+Logos app calls to hear a spend request and answer it, and they are skills rather
+than module methods because `invoke()` is the only thing a `ui` plugin can call
+across the plugin boundary.
 
 `storage.share` deserves a note, because its shape is forced by the protocol
 rather than chosen: content addressing means there is nothing to copy and no
@@ -315,15 +327,27 @@ settable at runtime through `meta.configure`, and are the only two keys that
 skill reports as `effective` — everything else it accepts is a mirror of
 something anchored on chain.
 
-**The owner channel a loaded plugin actually has** is built out of the runtime's
-own surface, because that is what crosses the boundary: the module emits
+**A loaded plugin has two owner channels, and the distinction is worth keeping.**
+The first is built out of the runtime's own surface: the module emits
 `ownerApprovalRequested(requestJson, attempt, timestamp)` — once per attempt,
 byte-identical, under one correlation id — and the owner answers with the module
 method `approveSpend(requestId, verdict)`. Neither half needs an intermediary
-server, and neither half is Logos Messaging, so this is not yet the "separate
-Logos app instance over Logos Messaging" the Usability criterion asks for. It is
-the notification and answer path the shipped artefact has, and it is exercised
-against Basecamp 0.2.2's runtime in `module/tests/logos_core_load_test.cpp`.
+server and neither half is Logos Messaging, so that one answers "accessible from
+the Logos app" and not the transport clause. It is exercised against Basecamp
+0.2.2's runtime in `module/tests/logos_core_load_test.cpp`.
+
+**The second is Logos Messaging, and this paragraph used to say it could not
+exist.** It read "this is not yet the separate Logos app instance over Logos
+Messaging the Usability criterion asks for", and that stopped being true: the
+module builds its own `OwnerChannelPort` from its own Delivery node
+(`AgentModuleImpl::publishApprovalOverDelivery`), and the owner's end is three
+registered skills — `owner.watch`, `owner.pending`, `owner.answer` — because
+`invoke()` is the only thing a `ui` plugin can call. Two LogosBasecamp 0.2.2
+processes, each with its own user directory and its own node, now mint a spend in
+one and answer it from the other's window; `docs/basecamp.md` §"Two Basecamps,
+and the owner in the second one" is the record, and
+`./scripts/delivery-in-plugin.sh two-modules` is the headless form. What that
+still does not do is hold a key — see [`limitations.md`](limitations.md).
 
 ### Pending task state, across a restart
 
@@ -411,9 +435,12 @@ Two things about that build are worth knowing before trying it: `make` installs
 `nimble` outside `PATH`, which is the whole reason the documented command
 exports it; and `librln` is a **downloaded release asset** for the host triple,
 not a cargo build — an earlier version of `skills.md` claimed the cargo path as
-fact and was wrong. The driver runs are local rather than CI, because building
-the libraries takes tens of minutes and the runs need live peers, and a job that
-depends on someone else's uptime teaches everyone to ignore it.
+fact and was wrong. The **Delivery** driver run is local rather than CI, because
+there is no prebuilt Linux `liblogosdelivery` to download, building it takes tens
+of minutes, and the run needs live peers — a job that depends on someone else's
+uptime teaches everyone to ignore it. The **Storage** one is a CI job
+(`storage-node`), against upstream's own checksum-pinned release asset; this
+sentence used to say "the driver runs" of both and was wrong about the second.
 
 The ports above are the seam that keeps this honest: the skills are written
 against the real signatures, and "compiles against the real ABI" is stated as
@@ -453,11 +480,16 @@ from.
 
 Two CI workflows, split by what they can honestly assert:
 
-- `.github/workflows/ci.yml` — minutes, gates every push: the policy crate and
-  its adversarial tests, the committed binary still hashing to the deployed
-  transaction *and* that transaction being live on the public testnet with a
-  cannot-exist hash as the control, `demo.sh` from a clean clone, and each C++
-  suite against fake ports as its own step so a red X names the suite.
+- `.github/workflows/ci.yml` — minutes, gates every push, in seven jobs: the
+  policy crate and its adversarial tests (`rust`); the committed binary still
+  hashing to the deployed transaction *and* that transaction being live on the
+  public testnet with a cannot-exist hash as the control, plus `demo.sh` from a
+  clean clone (`binaries`); each C++ suite against fake ports as its own step so
+  a red X names the suite (`skills`); the shipped `.lgx` against the source
+  committed beside it (`package`); a real Logos Storage node (`storage-node`);
+  Logos Core loading, configuring and starting the committed module headless on
+  Linux, out of the published AppImage (`linux-headless`); and the illustrative
+  use cases against the public testnet (`use-cases`).
 - `.github/workflows/e2e-local-sequencer.yml` — an hour or more, scheduled: the
   whole policy lifecycle against a real standalone LEZ sequencer with
   `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a job that completes

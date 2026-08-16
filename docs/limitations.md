@@ -257,11 +257,20 @@ the chain's side is unreachable on testnet today for the reason above.**
 Three things that used to be in this file are gone from it, because they were
 fixed rather than reworded: `spend` moved no balance at all, a second
 `create_policy` from one signer was silently dropped, and a repeat A2A
-settlement could not be produced. The last one is now two settlements under the
-current program, `5a488f28…` at block 8677 and `f780df62…` at block 8686, with
-the recipient going 50 → 75 → 100 by `getAccount` (it had already reached 50
-under the previous program, in blocks 8605 and 8624). What replaced them is
-recorded in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md); what is still true is below.
+settlement could not be produced.
+
+The last one was first shown by `5a488f28…` at block 8677 and `f780df62…` at
+block 8686, with the recipient going 50 → 75 → 100 by `getAccount` (it had
+already reached 50 in blocks 8605 and 8624, under the program before that).
+**This paragraph called those two "under the current program", and they are
+not.** Both carry the ImageID of `8c87cc9b…`, which is superseded — readable off
+the transactions themselves, which is how it was caught, and which is the same
+defect that once had four documents describing a dead deployment as live.
+Repeat settlement under the *shipped* program `697746f5…` is a longer list now
+and it is deliberately not counted here;
+[`docs/DEPLOYMENT.md`](DEPLOYMENT.md)'s ledger carries every one with its block,
+and `./scripts/verify-deployment.sh` re-attributes each from the chain rather
+than from the manifest. What is still true is below.
 
 ## The policy bounds the policy path, not the agent's balance
 
@@ -518,12 +527,17 @@ previously false in our favour.
   assert len(d)==97 and d[0]==1, 'not a record this program wrote: %d bytes' % len(d)
   le=lambda a,b: int.from_bytes(d[a:b],'little')
   print('period', le(73,81), 'spent', le(81,97))"
-  # period 8000 spent 50
   ```
 
-  That is the messaging agent's policy account under the live program: 0 at
-  anchoring (block 8876), 25 after `e691f593…` (block 8892), 50 after
-  `aef14146…` (block 8901), against an anchored `per_period` of 250.
+  That is the messaging agent's policy account under the live program. In period
+  8000 it read 0 at anchoring (block 8876), 25 after `e691f593…` (block 8892) and
+  50 after `aef14146…` (block 8901), against an anchored `per_period` of 250.
+  **No current output is pasted here on purpose.** `spent` is per *window*, so it
+  does not only grow — it starts again at zero every `period_blocks`, and a
+  printed `period 8000 spent 50` left under this command reads as today's answer
+  and stops being one the moment the window rolls.
+  `./scripts/verify-deployment.sh` prints the live `window … spent …` for all
+  three agents, which is the form that cannot go stale.
 
   The record is 97 bytes —
   `version(1) owner(32) per_tx(16) per_period(16) period_blocks(8) window_start(8) spent(16)`
@@ -802,11 +816,20 @@ blocks — a proof, a confirmation, an owner wait — moves every later step pas
 events that used to follow it, and the assertions written against the fast mode
 keep their shape while losing their meaning.
 
-## The node runs are local, not CI
+## The Delivery node runs are local, not CI
 
-Building the Delivery and Storage libraries takes tens of minutes and the runs
-need live peers, so `scripts/exercise-nodes.sh` is a local command. The
-reasoning is in [`docs/skills.md`](skills.md).
+Building `liblogosdelivery` takes tens of minutes — there is no prebuilt Linux
+library anywhere public to download — and the run needs live peers, so
+`scripts/exercise-nodes.sh` is a local command. The reasoning is in
+[`docs/skills.md`](skills.md).
+
+**The Storage half of that sentence was wrong and this heading used to carry
+it.** `logos-storage-nim` publishes a full release asset matrix, so the
+`storage-node` job in `.github/workflows/ci.yml` downloads a checksum-pinned
+`libstorage`, builds `module/tests/storage_node_drive.c` against it, and drives a
+real node on the runner with two negative controls under it. The libraries are
+not alike in what upstream ships, and treating them as one is what produced a
+false "not in CI" for both.
 `scripts/owner-channel-live.sh` is local for the same reason and one more: it
 needs *two* nodes to find each other through public relays, so it depends on the
 health of a network this repository does not run. A required job that goes amber
@@ -829,7 +852,7 @@ shipped binary, so the refusal *messages* those harnesses assert on cannot drift
 away from the binary a reviewer downloads. That is a check on the words, not on
 the behaviour.
 
-## The owner in the live owner-channel run is a node, not a second Basecamp
+## The owner in the live owner-channel run is a node — and, separately, a second Basecamp
 
 `scripts/owner-channel-live.sh` answers the transport half of "the owner can
 interact with the agent in real time from a separate Logos app instance using
@@ -997,16 +1020,17 @@ at. Nothing in either package changes.
 ## CLOSED: both packages now carry every variant the Logos app is published for
 
 This section used to say that `app/agent-ui.lgx` and `module/agent.lgx` each
-carried one variant and "a reviewer on Linux cannot open either", and that
-closing it was "one container build per package". That estimate was right about
+carried a single variant — `darwin-arm64` — and that "a reviewer on Linux cannot
+open either", and that closing it was "one container build per package". That
+estimate was right about
 the shape and wrong about the cost, and the difference is worth recording
 because three separate things had to be found first.
 
-Both packages now carry `darwin-arm64` **and** `linux-amd64`:
+Both packages now carry all three:
 
 ```
 $ lgx manifest module/agent.lgx
-Variants:       darwin-arm64, linux-amd64
+Variants:       darwin-arm64, linux-amd64, linux-arm64
                 darwin-arm64 -> agent_plugin.dylib
                 linux-amd64 -> agent_plugin.so
                 linux-arm64 -> agent_plugin.so
@@ -1159,8 +1183,6 @@ invoked. The shim is not decoration: with the same `PATH` and
   file arrived, not of the file, and applies to every unsigned binary anyone
   publishes. Not measured here: this repository is cloned, not downloaded as a
   zip, in every procedure it documents.
-
-## deploy-agents.sh is one command, plus four things it cannot do for you
 
 ## Two commands, not one, and what each needs before it will run
 

@@ -61,10 +61,15 @@ The window's own transcript, from a run inside the app:
 ```
 
 That count is the one this window read on the day it was captured. The module
-registers 25 now — `agent.update` and `agent.poll` were added after this run —
-and the window reads whatever the installed module offers rather than a number
-of its own, so the transcript is left as it was rather than edited to agree with
-a run that did not happen.
+registers more now — `messaging.receive`, `agent.update`, `agent.poll` and the
+three `owner.*` skills were all added after this run — and the window reads
+whatever the installed module offers rather than a number of its own, so the
+transcript is left as it was rather than edited to agree with a run that did not
+happen. No current figure is written into this paragraph either: it said "25 now"
+against a module registering 28, because a sentence naming a count next to a
+transcript that names a different one is read as a correction and goes stale
+silently. `docs/skills.md` §7 carries the number, and `scripts/check-docs.py`
+holds it to the registry.
 
 and then the owner channel, which is the part the criterion is actually about:
 
@@ -190,8 +195,8 @@ loads nowhere:
 and `linux-arm64`, one per platform the Logos app is published for. The Linux
 ones are built the same way, in a container, against the same official Qt
 6.9.2 (`linux_gcc_64` and `linux_gcc_arm64` respectively) — see
-[`../docs/basecamp.md`](../docs/basecamp.md), "Linux, and the `linux-amd64`
-variant", which covers the whole toolchain once for both packages:
+[`../docs/basecamp.md`](../docs/basecamp.md), "Linux, and the two Linux
+variants", which covers the whole toolchain once for both packages:
 
 ```sh
 cmake -S app -B build-ui -DCMAKE_PREFIX_PATH=$QT_ROOT \
@@ -308,5 +313,5 @@ repository was in before this directory existed.
 | `metadata.json` | The manifest. `type: ui` puts it in the plugins directory; `dependencies: ["agent"]` is what makes Basecamp load the core module |
 | `src/plugin.{h,cpp}` | The Qt plugin object and the ABI-critical `IComponent` declaration |
 | `src/agent_console.{h,cpp}` | The console: every button is one call on the loaded module |
-| `package-ui.sh` | Packaging, with the five refusals above |
+| `package-ui.sh` | Packaging, with the seven refusals above |
 | `tests/ui_plugin_load_test.cpp` | The load harness |

@@ -7,8 +7,16 @@
 A notarisation has to be checkable by a third party, and the thing that makes it
 checkable is that the key which signs it is a FUNCTION of the document. So:
 
-    secret = sha256("lp0008-notary/v1" || content_address)   reduced mod n
-    pubkey = x-only secp256k1 public key of that secret      (BIP-340)
+    secret = sha256("lp0008-notary/v1" || "|" || content_address)
+    pubkey = x-only secp256k1 public key of (secret mod n)   (BIP-340)
+
+The `"|"` is a literal separator byte and it is load-bearing to anyone
+reimplementing this: without it the digest is a different 32 bytes and the
+verification fails against every notarisation ever made. It was missing from this
+formula while the whole argument of this file is that a third party can rewrite
+it from the spec. Note also that `secret` is the raw digest — the reduction mod n
+applies only to the scalar the public key is computed from, which is why the
+`--verify` path recomputes rather than compares reduced values.
 
 and the public key is what ends up on chain, in the witness of the transaction
 that records the notarisation. A verifier who holds the document recomputes the

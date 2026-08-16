@@ -484,7 +484,7 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Agent | `agent.update`, `agent.poll` | **demonstrated between two loaded modules** — `./scripts/delivery-in-plugin.sh peers`, where each agent's own `TaskStore` reaches `completed` on updates the other account published, and a self-authored one on the same topic is counted and refused |
 | Messaging | `messaging.send`, `messaging.receive`, `messaging.join` | **run against live Delivery nodes** from a loaded plugin — `send` and `receive` between two of them on the public network (`delivery-in-plugin.sh peers`), `join` against a started node (`delivery-in-plugin.sh`, no argument) |
 | Messaging | `messaging.create_group` | **written against the Delivery API**, compiled; the one messaging skill not yet exercised against a running node |
-| Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node |
+| Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node — the node itself is driven in CI by `storage_node_drive.c`, which is the library proven and not the skills |
 | Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
 | Meta | `meta.status` | answers in the loaded module, including its `durability` block — the task snapshot's path and what the last recovery found |
@@ -645,7 +645,8 @@ capability needing a backend the core module has never heard of, registered
 through `ISkill` without a line changing in `agent_module_plugin.cpp`". The last
 clause was false. `installBuiltinSkills` constructs it —
 `std::make_shared<EvaluateTaskSkill>(ports.inference, limits)` — in the same
-vector as the other twenty-seven, in `agent_module_plugin.cpp`. It is a built-in that
+vector as the other twenty-seven skills, in `agent_module_plugin.cpp`. It is a
+built-in that
 happens not to be on the prize's list, and it demonstrated nothing about
 third-party extensibility. §4 of this document is that demonstration instead: a
 skill outside `module/src`, separately compiled against one header, `dlopen`ed,
@@ -773,11 +774,13 @@ Not `wakuMessage`, and not base64; that is the *channel* encoding, and it is wha
 upstream file rather than the wire is how you get it wrong. Measured here against
 a live node ([`a2a-binding.md` §4.3](a2a-binding.md), which carries the frame).
 
-### Why this is not in CI
+### Why the Delivery half is not in CI
 
-Deliberately. Building the library from scratch takes tens of minutes — it
-builds the Nim compiler first — and the run itself needs live peers on a public
-network, so a green result depends on someone else's uptime.
+Deliberately, and for a reason specific to this library rather than to node runs
+in general. There is no prebuilt `liblogosdelivery` for Linux published
+anywhere, so CI would have to build it from scratch: tens of minutes, the Nim
+compiler first, and the run itself then needs live peers on a public network, so
+a green result depends on someone else's uptime.
 
 A job like that goes amber on a bad afternoon, and an amber job teaches everyone
 to ignore it. The e2e sequencer job in CI is different: it talks to a service
@@ -810,9 +813,16 @@ so a transcript that reproduced them exactly would be the suspicious one.
 
 ### Storage
 
-Same shape, same answer: `libstorage` comes from
+Same shape and **not** the same answer, which is the correction this section
+needed: `libstorage` comes from
 [`logos-storage/logos-storage-nim`](https://github.com/logos-storage/logos-storage-nim)
-at `v0.4.4`, also Nim, also buildable from source with no privileged step.
+at `v0.4.4`, also Nim, also buildable from source with no privileged step — but
+that organisation publishes a full release-asset matrix, so nothing has to be
+built to run it. The `storage-node` job in `.github/workflows/ci.yml` downloads
+the checksum-pinned `libstorage` on every push, builds
+`module/tests/storage_node_drive.c` against it and drives a real node on the
+runner, with two negative controls. The section above used to be read as
+covering both libraries; it covers Delivery.
 
 ```
 git clone --depth 1 --recurse-submodules --shallow-submodules -b v0.4.4 \

@@ -117,7 +117,13 @@ def selftest():
 
 
 def read_policy(url, policy_account):
-    """`per_tx`, `per_period`, `period_blocks`, `window_start`, `spent`, `block`.
+    """`per_tx`, `per_period`, `period_blocks`, `window_start`, `spent`, `block`,
+    plus `policy`, `owner` and `record_window_start` — nine keys, not six.
+
+    `record_window_start` is the one that must not be dropped from this list,
+    because the paragraph below is entirely about the difference between it and
+    `window_start`: the first is what the account literally holds, the second is
+    the period this read is answering for.
 
     `spent` is what has been spent IN THE CURRENT PERIOD, which is not always
     what the account holds: `SpendPolicy::authorize` treats a later window as a

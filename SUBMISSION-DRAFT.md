@@ -372,12 +372,12 @@ Every step of that is a chain fact, and none of it depends on a tool being insta
 
 `spend` moves no balance itself — LEZ rule 5 refuses any post-state that decreases the balance of an account the executing program does not own — so it chains a call into the authenticated transfer program, which does own them. `artifacts/programs/authenticated_transfer.bin` is committed because the circuit resolves the callee by ImageID; it is not deployed by this repository. `getProgramIds` reports `authenticated_transfer` as `583309054,2344528779,3806558405,2890696795,2257354672,3978764116,2273929063,1518858078`, and that is exactly the `program_owner` the chain gives every agent's receiving account — which is why the policy program cannot move those balances itself and has to chain the call.
 
-Read out of the shipped `idl/agent_verifier.idl.json` rather than described — the address derivation is the security argument, so it is quoted from the interface the repository actually ships:
+Read out of the shipped `idl/agent_verifier.idl.json` rather than described — the address derivation is the security argument, so the seeds are quoted from the interface the repository actually ships. `program` is the deployment identified above: a PDA is scoped to the program that owns it, which is why every one of these addresses moves when the ImageID does, and why the superseded settlements further down charge accounts that no longer exist.
 
 | instruction | policy account address |
 |---|---|
-| `approve_spend`, `create_policy`, `update_policy` | `PDA("agent-policy/v1", agent_id (arg))` |
-| `spend`, `spend_approved` | `PDA("agent-policy/v1", agent (account))` |
+| `approve_spend`, `create_policy`, `update_policy` | `PDA(program, "agent-policy/v1", agent_id (arg))` |
+| `spend`, `spend_approved` | `PDA(program, "agent-policy/v1", agent (account))` |
 
 There is **one policy account per agent**: the seed is the agent, and every limit is the account's *data*, which LEZ rule 6 (`UnauthorizedDataModification`) lets only this program write. Where the seed is `(account)` it comes from the pre-state the state machine built and there is no argument to lie about; where it is `(arg)` it is caller-supplied, which is why `create_policy` is `#[account(init, …)]` and the first anchor for an agent is the only one.
 
@@ -1384,7 +1384,7 @@ Read from `artifacts/agents.tsv` **by column name**, then checked against the ch
 | messaging | `GpRdooEW…` | `7HH46tXh…` | 25 | 250 | 1,000 blocks | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918), block 8876 |
 | blockchain | `A7UBoMbS…` | `2RK4dPwz…` | 200 | 1,000 | 1,000 blocks | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda), block 8884 |
 
-Each `create_policy` above was confirmed present in the block named and absent from both neighbours. The limits are the chain's own copy: the address of a policy account is `PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so raising a limit does not edit this record — it names a different address that `create_policy` never initialised, and the state machine rejects the spend before the program body runs.
+Each `create_policy` above was confirmed present in the block named and absent from both neighbours. The limits are the chain's own copy, and they are the account's *data* rather than part of its name: the address of a policy account is `PDA(program, ["agent-policy/v1", agent_id])` — the program and the agent, and nothing else. No limit and no owner is in that preimage, so there is exactly **one** such account per agent, raising a ceiling rewrites this record in place rather than naming a second one, and `init` gives the address to whoever anchors first. The owner is the record's own first field, and this generator compares it against the `owner` column above rather than describing it. What keeps the numbers honest is therefore not the address but who may write it: LEZ rule 6 (`UnauthorizedDataModification`) lets only the owning program touch that data, `update_policy` is the one instruction that rewrites the limits and it refuses any signer that is not the owner the record names, and `spend` seeds this same address from the *signing* agent's account instead of from an argument — so an agent presenting a roomier policy account fails the PDA check the macro emits before the program body runs.
 
 The ledger's *running total* — `window_start` and `spent`, the halves only the owning program may write — is deliberately **not** in that table, and the reason is the same one that keeps `getAccount` out of the settlement balances. Those two fields move every time an agent spends. Reading them with `getAccount` puts a number in this document that is current only until the next settlement, so `--check` would fail on ordinary agent activity with nothing in the repository changed — a gate that cries wolf is one people learn to skip, and it drifted under this document once already, from 50 to 55, while it was being written. The limits above are safe to state because they are anchored and the manifest records them, so a disagreement is a real defect rather than the clock. The running total appears in the settlement table below instead, taken from each transaction's own committed post-state, where it is immutable.
 
@@ -1679,9 +1679,9 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   `.github/workflows/e2e-local-sequencer.yml` builds the LEZ workspace at pinned
   revision `47eba25`, installs `r0vm` 3.0.5, and runs the full lifecycle against a
   real standalone sequencer with `RISC0_DEV_MODE: 0`. It has **no skip path**,
-  deliberately: a submission in this programme was closed with "the
-  standalone-sequencer E2E did not run in CI; the job completed through its
-  explicit skip path".
+  deliberately: a job that completes through one reports green without having
+  run, which is worse than red because nobody looks at it again. If this cannot
+  run, it fails.
 
   **Green on `main`:**
   [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823),

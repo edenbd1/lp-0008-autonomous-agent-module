@@ -17,7 +17,7 @@ examples/agent-console/run.sh
 
 A C++17 compiler, a checkout of
 [`logos-cpp-sdk`](https://github.com/logos-co/logos-cpp-sdk) (two Qt-free
-headers are reached; README §9 pins the revision CI uses), and
+headers are reached; README §10 pins the revision CI uses), and
 `nlohmann/json.hpp` — which the *module* needs, not the skill. No node, no keys,
 no network: the self-test runs `--offline`.
 

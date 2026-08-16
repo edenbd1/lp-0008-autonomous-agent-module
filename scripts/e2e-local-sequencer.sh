@@ -11,24 +11,36 @@
 #
 # This script makes that one. It starts the actual `sequencer_service` binary in
 # standalone mode, points a throwaway wallet at it, and drives the whole
-# lifecycle over JSON-RPC — deploy both programs, commit a distribution, and
-# submit a real privacy-preserving claim whose Risc0 receipt the sequencer
-# verifies against PRIVACY_PRESERVING_CIRCUIT_ID — then reads the resulting
-# marker PDA back off that local chain and checks it is owned by the verifier.
-# Nothing is mocked and RISC0_DEV_MODE is 0 throughout.
+# lifecycle over JSON-RPC: deploy `agent_verifier.bin`, anchor a policy with the
+# two signatures this program now requires (`claim_agent`, then `create_policy`),
+# prove a second anchor is refused, and then spend twice — once inside the
+# anchored envelope and once outside it — with the sequencer verifying a real
+# Risc0 receipt each time. Nothing is mocked.
 #
 #   ./scripts/e2e-local-sequencer.sh
-#   COUNT1=1 COUNT2=0 ./scripts/e2e-local-sequencer.sh   # the CI shape, one proof
+#
+# THIS HEADER DESCRIBED A DIFFERENT SCRIPT, and the wrong half is recorded rather
+# than quietly deleted, because every line of it read as a checkable claim:
+#   - "deploy both programs, commit a distribution" — one program is deployed.
+#     `authenticated_transfer.bin` is checked for existence and passed as
+#     `--bin-auth-transfer`; it is never deployed, and there is no distribution
+#     anywhere in this file. That vocabulary is LP-0003's, not this prize's.
+#   - "PRIVACY_PRESERVING_CIRCUIT_ID … the resulting marker PDA" — neither name
+#     occurs in the body. What steps 4 and 5 read back is the policy account.
+#   - "COUNT1 / COUNT2" — neither variable is parsed. The claim count is fixed at
+#     one spend inside the envelope and one outside it.
 #
 # Env:
 #   LEZ_SRC     checkout of logos-execution-zone (default: ./_external/lez)
-#   COUNT1      claims in distribution 1     (default 1)
-#   COUNT2      claims in distribution 2     (default 0 = single distribution)
 #   PORT        sequencer RPC port           (default: first free from 3141)
 #   KEEP        set to 1 to leave the sequencer running for inspection
 #
-# Budget: one claim is a real proof, measured at ~150 s. COUNT1=1 COUNT2=0 is a
-# single proof and is what CI uses; it still exercises every integration point.
+# RISC0_DEV_MODE is NOT set here. It is inherited from the caller, and the
+# workflow that runs this sets it to 0; `demo.sh` exports it itself and this
+# script deliberately does not, so a local run cannot be silently downgraded by
+# this file. Check the environment, not this comment.
+#
+# Budget: each spend is a real proof, measured at ~150 s.
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

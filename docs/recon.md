@@ -1,8 +1,8 @@
 # The stack this has to sit in
 
 Written before any code, from the upstream repositories rather than from the
-prize text, because the five closed LP-0008 submissions failed on evidence and
-integration, not on agent logic.
+prize text. What is hard here is not agent logic; it is integration, and proving
+the integration to somebody who was not watching.
 
 ## What the four moving parts actually are
 
@@ -39,21 +39,23 @@ src/api_call_handler.h
   channels, the default).
 - Content topics follow <https://lip.logos.co/messaging/informational/23/topics.html>.
 
-## Why the previous five were closed
+## What has to be true at the end, and therefore first
 
-Not for the agent being weak. Quoted from the threads:
+A working agent that nobody can check is indistinguishable from one that does
+not work. Four things decide whether this is checkable at all, and none of them
+is agent logic:
 
-- **#99 duongja** — "there is no visible proof of agents activity on the
-  testnet"; "the video in application showcases **localnet only**"; "e2e
-  integration tests doesn't seem to run at all"; "`demo.sh` doesn't run".
-- **#88 retraca** — "Please include a video walkthrough in line with the
-  requirements."
-- **#81, #85 retraca** — closed the same day on failing submission validation.
-- **#34 Beach-Bum** — closed without comment.
+- **visible activity on the public testnet** — transactions a reader can look up
+  themselves, not a local chain that disappears with the process;
+- **CI that genuinely runs** — a job that skips, or that compiles without
+  asserting anything, is a green tick over an untested claim;
+- **a demo that runs from a clean clone** — with no funded account, no keys and
+  no local sequencer, because that is what a reader has;
+- **a video against the public testnet** — the terminal on screen, not a
+  reconstruction.
 
-Every one of those is an evidence failure. The reviewers check the public
-testnet, they check that CI genuinely runs, and they watch the video for the
-terminal. That is the part to build first, not last.
+Every one of those is expensive and none of them can be added at the end. So
+they are built first, and the agent is built into them.
 
 ## The two hardest criteria
 
@@ -109,29 +111,43 @@ mounts.
 
 ## CI status
 
-Green on the default branch, which the prize requires explicitly. Three jobs, all
-carrying evidence rather than just compiling:
+**This section is the oldest thing in this repository and it has been rewritten
+rather than left, because what it said about CI stopped being true.** It was
+written before any code; the paragraphs below are what CI is now, and the
+retraction under them is what it used to say.
 
-- the policy primitive and its adversarial tests;
-- the committed program hashing to the deployed transaction **and** that
-  transaction being live on the public testnet, with a cannot-exist hash as the
-  control.
+`.github/workflows/ci.yml` runs **seven** jobs, all carrying evidence rather
+than just compiling: the policy primitive and its adversarial tests (`rust`);
+the committed program hashing to the deployed transaction **and** that
+transaction being live on the public testnet, with a cannot-exist hash as the
+control (`binaries`); the C++ suites against fake ports (`skills`); the shipped
+`.lgx` against the source committed beside it (`package`); a real Logos Storage
+node (`storage-node`); Logos Core loading, configuring and starting the
+committed module headless on Linux (`linux-headless`); and the illustrative use
+cases against the public testnet (`use-cases`).
+`.github/workflows/e2e-local-sequencer.yml` is the second workflow.
 
-The Linux plugin build is **not** in CI yet, and that is a deliberate choice
-between two bad options. It fails on `logos-cpp-sdk`'s own `ScopedQArg`, an
-overload GCC 13 rejects and Clang accepts — upstream code, not ours, which is
-why the module builds fine on the dev machine under Apple Clang. Switching CI to
-Clang did not clear it either.
+**Retracted: "the Linux plugin build is not in CI, and the job is removed until
+it passes."** That was written about a *compile* that failed on
+`logos-cpp-sdk`'s own `ScopedQArg`, an overload GCC 13 rejects and Clang
+accepts — upstream code, not ours, which is why the module built fine on the dev
+machine under Apple Clang, and switching CI to Clang did not clear it either.
+That compile is still not in CI and the reason is still in `ci.yml`'s own
+comments. What was wrong is the conclusion drawn from it, which was that CI
+covers nothing on Linux. It covers the thing that matters more: `linux-headless`
+fetches the published Logos Basecamp AppImage on `ubuntu-latest`, unpacks it
+with no installer and no display, and runs
+`./scripts/logos-core-headless.sh storage` against the **committed**
+`module/agent.lgx` — the file a reviewer downloads — with three negative
+controls under it. A Linux binary that loads out of the shipped package is a
+stronger claim than a Linux binary that compiles, and it was reachable without
+the compile ever going green.
 
-Marking it `continue-on-error` was never on the table: a job that completes
+Marking anything `continue-on-error` was never on the table: a job that completes
 through a skip path reports green without having run, which is worse than red
-because nobody looks at it again. Leaving it red on every commit is the other
-bad option, and the prize asks for a green default branch.
-
-So the job is removed until it passes, rather than present and lying. The module
-still builds locally, and the command is in `module/CMakeLists.txt`. It comes
-back the moment it is green, alongside the standalone-sequencer e2e that this
-prize also requires.
+because nobody looks at it again. The standalone-sequencer e2e this prize also
+requires is present too, as the second workflow, and it has no skip path for the
+same reason.
 
 Four runs were spent learning one thing, worth writing down: **pin to what you
 have proven, not to what is newest.** Following default branches pulled

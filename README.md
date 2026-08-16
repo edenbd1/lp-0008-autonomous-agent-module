@@ -586,10 +586,14 @@ Two refusals are worth knowing before you run it:
   *and* the recipient's balance moves by exactly the price. An earlier version
   of this instruction produced confirmed, on-chain proofs that a policy
   permitted a payment and moved nothing at all.
-- `A2A_AGENTS` and `A2A_MANIFEST` override the input and output files.
-  `deploy-agents.sh` truncates `artifacts/agents.tsv` at the start of a run and
-  fills it in over the following minutes, so a settlement started mid-deploy
-  reads a header and no agents.
+- `A2A_AGENTS` and `A2A_MANIFEST` override the input and output files, so a run
+  can be pointed at a manifest of your own without touching the committed one.
+  The reason this used to give — that `deploy-agents.sh` truncates
+  `artifacts/agents.tsv` at the start of a run, so a settlement started
+  mid-deploy reads a header and no agents — **is no longer true**: the script
+  builds into a temporary file beside the manifest and `mv`s it over only once
+  all three agents have anchored, precisely so a failed run cannot delete the
+  record of the one that worked.
 
 Results land in [`artifacts/a2a-task.tsv`](artifacts/a2a-task.tsv), with the
 before/after balances the script read off the chain. Only the credit side is
@@ -641,10 +645,17 @@ resolves back to the right filename and byte count.
 
 Both libraries are ordinary Nim projects, built from source with no privileged
 step and no Nix — two commands each, and one snag (`make` installs `nimble`
-outside `PATH`). They are in [`docs/skills.md`](docs/skills.md), along with why
-these runs are a local command rather than a CI job: the build takes tens of
-minutes and the run depends on live peers, and a job that goes amber on a bad
-afternoon teaches everyone to ignore it.
+outside `PATH`). They are in [`docs/skills.md`](docs/skills.md).
+
+**The two halves differ on CI, and the difference is upstream's, not a
+preference.** The Storage half *is* a CI job — `storage-node` downloads
+`logos-storage-nim`'s own checksum-pinned `libstorage` release asset, builds
+`storage_node_drive.c` against it and runs a node on the runner, with two
+negative controls. The Delivery half is not, because there is no prebuilt
+`liblogosdelivery` for Linux anywhere public to download, so the only route is a
+26-minute Nim compile on the runner, and the run itself would then depend on
+live public peers. `.github/workflows/ci.yml` carries that audit release by
+release.
 
 Point `DELIVERY_SRC` and `STORAGE_SRC` at your checkouts if they are not under
 `_external/`.
@@ -765,8 +776,17 @@ mkdir -p "$DEST" && cd "$DEST"
 tar xzf /path/to/lp-0008/module/agent.lgx
 mv variants/darwin-arm64/* . && rm -rf variants
 printf 'darwin-arm64' > variant
-ls   # agent_plugin.dylib  manifest.json  metadata.json  variant
+ls   # agent_plugin.dylib  liblogosdelivery.dylib  manifest.json  metadata.json
+     # third-party/  variant
 ```
+
+`liblogosdelivery.dylib` is in that listing and belongs there: the plugin opens
+it by name and looks beside itself first, so the module directory is where it is
+found. It rides only in the `darwin-arm64` variant — upstream publishes no
+`liblogosdelivery.so`, so the two Linux variants carry the delivery code path and
+no library beside it, and `meta.configure("delivery","on")` there reports the
+file it could not open. `third-party/liblogosdelivery/` is upstream's licence,
+which travels with the binary because this is redistribution.
 
 On Linux the directory is `~/.local/share/Logos/LogosBasecamp/modules` and the
 variant is `linux-amd64` or `linux-arm64` — `agent_plugin.so`, not the dylib,
@@ -832,8 +852,8 @@ is believed. `scripts/agent-spend.py` is the last two, and what it performs is
 the anchored policy program's own `spend` instruction, so the chain applies the
 same limits to a module's payment as to `scripts/a2a-task.sh`'s.
 
-Stated plainly, because a reviewer will check: the packages are **macOS arm64
-only**, and the **storage, sequencer and toolchain skills have no ports wired** —
+Stated plainly, because a reviewer will check: the **storage, sequencer and
+toolchain skills have no ports wired** —
 those need a storage node and a local `spel` inside the module's process, which
 is a different problem from the transport one and is not solved. `wallet.send`
 still cannot move money from a loaded module either: its envelope is fixed at
@@ -1042,9 +1062,13 @@ It runs twice on purpose. A channel that returned "approved" whatever came back
 would pass the first run and only the first, so the deny run is what makes the
 approve run mean anything.
 
-What is still open is the **host**, not the transport: the owner in that exercise
-is `module/tests/owner_responder.cpp`, a program written for the purpose, not a
-second Logos app with a person in front of it. §11 keeps that distinction.
+The owner in *that* exercise is `module/tests/owner_responder.cpp`, a program
+written for the purpose rather than a second Logos app with a person in front of
+it — which is why it is not the evidence for the app-instance clause. That
+clause is closed separately, and by two Basecamps rather than by an argument:
+§8a above, and [`docs/basecamp.md`](docs/basecamp.md) §"Two Basecamps, and the
+owner in the second one". Keep the two apart when reading — this one is the
+transport from a loaded module, that one is the host.
 
 ### What a loaded module does about that
 
@@ -1078,9 +1102,11 @@ Basecamp uses. The Delivery-backed `OwnerChannel` is a different object, and the
 module builds a port for it itself — §7b runs it between two processes on two real
 Delivery nodes, and `./scripts/delivery-in-plugin.sh approval` runs it from a
 module a host has **loaded**. So the transport clause of "using Logos Messaging,
-with no intermediary server" is answered, and the *app instance* clause is not:
-the owner in both is a program written for the purpose rather than a second Logos
-app. Keep those apart; [`docs/basecamp.md`](docs/basecamp.md) does. And an *approved*
+with no intermediary server" is answered here, and the *app instance* clause is
+answered somewhere else — in §8a, by two Basecamps. The owner in **both** of the
+exercises named in this paragraph is a program written for the purpose rather
+than a second Logos app, which is why neither of them is the evidence for that
+clause. Keep those apart; [`docs/basecamp.md`](docs/basecamp.md) does. And an *approved*
 above-threshold spend is still not submitted: submitting one goes through the
 policy program's `spend_approved`, which needs an approval account only the
 owner's own signature can create, and
@@ -1118,7 +1144,7 @@ and asserts the suite goes red.
 ## 10. Tests and CI
 
 ```sh
-cargo test --workspace --release --locked      # the policy crate, 18 tests
+cargo test --workspace --release --locked      # the policy crate, 24 tests
 ```
 
 The module's C++ suites need no node, no network, no key and no model — which
@@ -1135,12 +1161,16 @@ clang++ -std=c++17 -I_external/logos-cpp-sdk/cpp -I/opt/homebrew/include \
   module/tests/skills_test.cpp module/src/*.cpp -o skills_test && ./skills_test
 ```
 
-The other seven suites (`inference`, `wallet_skills`, `program_skills`,
-`agent_skills`, `owner_channel`, `owner_skills`, `task_persistence`) each compile against their
+The other nine suites (`inference`, `wallet_skills`, `program_skills`,
+`agent_skills`, `owner_channel`, `owner_skills`, `task_persistence`,
+`module_recovery`, `spend_marker`) each compile against their
 own translation unit; [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 carries every line, one step per suite so a red X names the suite that broke,
 and accounts for every file under `module/tests/` so that a suite absent from
-CI cannot be mistaken for one that passed. That workflow also runs `demo.sh`
+CI cannot be mistaken for one that passed. Three of those files are the
+transport harnesses — `plugin_delivery_test.cpp`, `logos_core_delivery_test.cpp`
+and the `owner_responder.cpp` they drive — which start a Delivery node and so
+are local for the reason §7 gives. That workflow also runs `demo.sh`
 from a clean clone and asserts the committed binary still hashes to the live
 deploy transaction.
 
@@ -1189,7 +1219,8 @@ see a private balance, so a payment into a shielded account is checkable by its
 payee and by nobody else; that no model has
 ever been run against the inference port — the local backend is a stub with an
 honest name and the HTTP backend has never made a real request; and that the
-node runs in §7 are a local command rather than CI.
+Delivery node run in §7 is a local command rather than CI, for the reason §7
+gives (the Storage one is a CI job).
 
 Retractions live there too, with what replaced them. If you find a gap that is
 not in that file, it is an omission rather than a decision.
@@ -1226,7 +1257,7 @@ app/src                           the Basecamp `ui` plugin: the owner console,
 app/tests                         the load harness that reproduces Basecamp's
                                   PluginLoader
 app/agent-ui.lgx                  the loadable `ui` package (darwin-arm64,
-                                  linux-amd64)
+                                  linux-amd64, linux-arm64)
 examples/agent-console            §5 — the module's dispatcher, from a shell
 examples/skills/notary-digest     §5 — a third-party skill, outside module/src
 scripts/demo.sh                   §1 — the whole thing from a clean clone

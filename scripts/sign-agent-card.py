@@ -2,6 +2,14 @@
 """Sign an A2A Agent Card with the agent's own LEZ account key.
 
     scripts/sign-agent-card.py --wallet-home DIR --account BASE58 < card.json > signed.json
+    scripts/sign-agent-card.py --wallet-home DIR --account BASE58 --sign-input < input > sig
+
+The second form is the `card_signer` contract the module's `meta.configure`
+names: it reads a JWS signing input (`<protected>.<payload>`) on stdin and
+writes one line, the base64url signature, and no card. A plugin Basecamp loads
+has no crypto library, so that one line is the whole of what crosses. It is what
+`scripts/delivery-in-plugin.sh` configures, and it was missing from this usage
+block while being the mode most callers use.
 
 A2A carries a card signature as an RFC 7515 JWS with a *detached* payload: the
 payload is the card without its `signatures`, so a verifier strips them,
@@ -17,8 +25,25 @@ in it, and the whole point of the card is to tell another agent where to send
 money. The key that signs it is therefore the same key that owns the account
 being advertised: LEZ account keys are BIP-340 Schnorr over secp256k1
 (`k256::schnorr`, `lee/state_machine/src/signature/mod.rs`), the public half is
-the x-only 32 bytes the wallet stores as `pk`, and `kid` is the account id, so a
-reader who has the card has everything needed to check it.
+the x-only 32 bytes the wallet stores as `pk`, and `kid` is the account id.
+
+WHAT A READER STILL NEEDS, WHICH IS NOT THE CARD
+
+This paragraph used to end "so a reader who has the card has everything needed
+to check it." **That was false**, and `docs/a2a-binding.md` §3.6 had it written
+down as this binding's most serious defect while this file went on asserting the
+opposite. `kid` is the base58 *account id*, not the public key and not derived
+from it: for the published card `kid` decodes to `41fb94fa…` while the key that
+signed is `87447003…`, and no hash of the key produces the account id. The card
+carries no `jwk` and no `x5c`, and `getAccount` returns no public key, so the
+chain does not close the gap either.
+
+What closes it out of band is publishing the x-only key beside the card, which
+this repository does: `artifacts/agent-cards/<category>.pub`, and
+`scripts/use-cases/verify-agent-card.py --public-key` is the verifier that needs
+no wallet — which is exactly what CI runs, on a runner that has no agent wallet
+and must never be given one. That is a weaker property than "the card is
+self-contained" and it is the true one.
 
 `alg` says `secp256k1-bip340` because that is what it is. JOSE registers
 `ES256K` for *ECDSA* over the same curve and nothing for Schnorr, so a

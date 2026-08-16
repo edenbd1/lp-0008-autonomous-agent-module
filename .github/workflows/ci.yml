@@ -781,14 +781,18 @@ jobs:
           rm -f task_persistence_test.out
 
       # ---------------------------------------------------------------------
-      # Everything under module/tests/ is accounted for. Eight suites run above,
-      # counting the A2A lifecycle driver, which is not a unit test but is run
-      # here anyway: the demo scripts degrade gracefully when it cannot be built,
-      # so nothing else would notice it breaking.
-      # The four that do not run here are named, with what they need, because a
-      # suite silently absent from CI is indistinguishable from one that was
-      # never written — and this repository's own standard is that a step CI
-      # skips counts as not run. None of these is skipped: they are not claimed.
+      # Everything under module/tests/ is accounted for. Ten suites run in this
+      # job, counting the A2A lifecycle driver, which is not a unit test but is
+      # run here anyway: the demo scripts degrade gracefully when it cannot be
+      # built, so nothing else would notice it breaking. Three more run in other
+      # jobs — spend_marker_test.cpp in `rust`, storage_node_drive.c in
+      # `storage-node`, logos_core_load_test.cpp in `linux-headless`.
+      # The six that do not run anywhere are named below, with what they need,
+      # because a suite silently absent from CI is indistinguishable from one
+      # that was never written — and this repository's own standard is that a
+      # step CI skips counts as not run. None of these is skipped: they are not
+      # claimed. scripts/check-docs.py fails if a file under module/tests/ is
+      # neither run nor named here, so this list cannot fall behind the tree.
       #
       #   module/tests/plugin_load_test.cpp
       #     Needs Qt 6 (QtCore, QtRemoteObjects, QtNetwork) AND the built
@@ -802,20 +806,20 @@ jobs:
       #     exact compile line and the recorded output.
       #
       #   module/tests/logos_core_load_test.cpp
-      #     Needs Logos Basecamp *installed*: it dlopen's the shipped
-      #     liblogos_core, links the app's own bundled QtCore, and needs
-      #     LOGOS_HOST_PATH to point at the app's logos_host binary. There is
-      #     no Basecamp on a GitHub runner and no headless install of one, so
-      #     this is the packaged-artifact check and it stays manual.
-      #     docs/basecamp.md carries the invocation and the recorded output.
-      #     `./scripts/logos-core-headless.sh <category>` is the one-command
-      #     form — it installs the .lgx, builds this harness and runs it,
-      #     configured with the owner and policy account from
-      #     artifacts/agents.tsv. What CI *can* assert about it without a
-      #     Basecamp is that its prerequisite gate refuses an unprepared
-      #     machine and names each missing piece; that is the "headless deploy
-      #     names its prerequisites" step in the `binaries` job above, and it
-      #     passes by running the refusal rather than by skipping.
+      #     RUNS HERE NOW — see the `linux-headless` job below. This entry used
+      #     to read "there is no Basecamp on a GitHub runner and no headless
+      #     install of one, so this stays manual", and the second half was
+      #     false: the Linux build of the app is an AppImage, published on the
+      #     same release page, and scripts/fetch-logos-core.sh unpacks it
+      #     checksum-pinned with no installer, no root, no FUSE and no display.
+      #     So the runner gets liblogos_core.so and logos_host without
+      #     installing anything, and `./scripts/logos-core-headless.sh storage`
+      #     drives this harness against the committed module/agent.lgx.
+      #     macOS is still manual — there is no headless build published there
+      #     — and docs/basecamp.md carries that invocation and its output.
+      #     The `binaries` job additionally asserts the other half: that the
+      #     prerequisite gate REFUSES an unprepared machine and names each
+      #     missing piece, by running the refusal rather than by skipping.
       #
       #   module/tests/owner_channel_live.cpp
       #     Two processes, two Delivery nodes, the public network. Blocked by
@@ -861,6 +865,24 @@ jobs:
       #     with caching and it is a real option, not an impossibility — it is
       #     simply not claimed here until it has been run and seen green.
       #     Driven meanwhile by scripts/exercise-nodes.sh, which owns the paths.
+      #
+      #   module/tests/plugin_delivery_test.cpp
+      #   module/tests/logos_core_delivery_test.cpp
+      #   module/tests/owner_responder.cpp
+      #     The transport harnesses, and they were absent from this block
+      #     entirely while README §10 claimed every file here was accounted
+      #     for. All three start a real Logos Delivery node, so all three
+      #     inherit delivery_node_drive.c's blocker above — there is no
+      #     prebuilt liblogosdelivery for Linux to download — and
+      #     plugin_delivery_test.cpp additionally needs a SECOND process to
+      #     find the first through public relays, which is somebody else's
+      #     uptime. owner_responder.cpp is not a suite at all: it is the owner
+      #     process the other two drive.
+      #     Run by scripts/delivery-in-plugin.sh, whose `settle` mode also
+      #     spends real testnet LEZ on a chain with no faucet — a job that paid
+      #     for a task on every push would empty the agents inside a day.
+      #     docs/basecamp.md carries the recorded output of each, and its
+      #     negative controls.
       # ---------------------------------------------------------------------
 
   # The job above compiles module/src. It says nothing about module/agent.lgx,
@@ -919,7 +941,7 @@ jobs:
   # So what runs here is what CAN run here, and it needs nothing but python3:
   # a provenance record written at packaging time and recomputed on every push,
   # plus a reading of the shipped binary's own bytes that is the same evidence
-  # the human investigation used. The three controls below are the point of the
+  # the human investigation used. The four controls below are the point of the
   # job — each one puts the repository back into a state it has actually shipped
   # and requires a red.
   package:

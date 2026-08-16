@@ -41,10 +41,14 @@
 #     "the peer said the task is done" — with every other agent on earth
 #     switched off.
 #
-# THE NEGATIVE CONTROL is not optional and is one line: build without
-# `-DLOGOS_DELIVERY_ROOT` and run harness 1. It reports
-# `{"linked":false,"state":"absent"}` and fails at step 1, which is the check
-# discriminating between two builds rather than describing one.
+# THE NEGATIVE CONTROL is one line and THIS SCRIPT DOES NOT RUN IT: build the
+# module without `-DLOGOS_DELIVERY_ROOT` and run harness 1 against that build. It
+# reports `{"linked":false,"state":"absent"}` and fails at step 1, which is the
+# check discriminating between two builds rather than describing one. Every mode
+# below runs against the one plugin unpacked from the committed `module/agent.lgx`
+# at step 1, so nothing here can produce that build; it is a command a reader
+# runs, and `docs/basecamp.md` carries its recorded output. This header used to
+# say "is not optional", which read as though the script performed it.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 

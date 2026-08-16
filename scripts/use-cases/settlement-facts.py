@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """What the chain itself says a settlement did, decoded from the transaction.
 
-    settlement-facts.py --tx <hash> --recipient <b58> [--policy <b58>]
+    settlement-facts.py --tx <hash> [--recipient <b58>] [--policy <b58>] [--rpc URL]
+
+Only `--tx` is required. `--recipient` and `--policy` narrow what is reported and
+are both optional — `lib.sh` and `05-event-alerter.sh` call this with `--tx`
+alone, so a usage line that showed `--recipient` as required described callers
+this repository does not have.
 
 This exists because the interesting claim about a settlement — that money moved
 — was being read out of a local TSV. `getAccount` answers with CURRENT state and

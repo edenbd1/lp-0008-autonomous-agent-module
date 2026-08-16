@@ -21,8 +21,12 @@
 #
 # What is recorded here is neither. The content address is turned into a KEY:
 #
-#     secret = sha256("lp0008-notary/v1" || content_address)
-#     pubkey = the x-only secp256k1 public key of that secret
+#     secret = sha256("lp0008-notary/v1" || "|" || content_address)
+#     pubkey = the x-only secp256k1 public key of (secret mod n)
+#
+# The "|" is a literal separator byte. It is in the code and was missing from
+# this formula and from notary-key.py's, which is the one thing a third-party
+# verifier reimplements.
 #
 # and the notarisation is a transaction on the public testnet SIGNED BY THAT KEY.
 # The chain stores the public key, in the witness, in a block. Thirty-two bytes
@@ -128,6 +132,17 @@ rule "0. what this needs"
 if [ "$VERIFY_ONLY" != "1" ]; then
   command -v "$WALLET" >/dev/null 2>&1 || [ -x "$WALLET" ] \
     || die "no wallet on PATH. Set WALLET_BIN to the LEZ wallet binary."
+  # A binary NAMED wallet is not the wallet this needs. `cargo install` leaves a
+  # stock build on PATH that has no `account import`, so the presence check above
+  # passed and the run died 100 lines later on "the wallet would not import the
+  # derived key" -- a message about a key, for a missing subcommand. This whole
+  # use case turns a document into a signing key, so `import` is the capability,
+  # not an implementation detail: probe for it by name.
+  "$WALLET" account import --help >/dev/null 2>&1 \
+    || die "$WALLET has no 'account import': this is not the LEZ wallet.
+  Build it from a logos-execution-zone checkout and set WALLET_BIN:
+      cargo build --release -p wallet
+      WALLET_BIN=<checkout>/target/release/wallet $0"
   if [ ! -f "$SLIB" ]; then
     cat >&2 <<TXT
   no Logos Storage library at $SLIB
@@ -211,7 +226,7 @@ TXT
   [ -n "$CID" ] || die "no content address to notarise"
   KEYS=$(python3 scripts/use-cases/notary-key.py "$CID") || die "key derivation failed"
   SECRET=$(kv "$KEYS" secret); PUBKEY=$(kv "$KEYS" pubkey)
-  echo "  secret = sha256(\"lp0008-notary/v1\" || content address)"
+  echo "  secret = sha256(\"lp0008-notary/v1\" || \"|\" || content address)"
   echo "  pubkey = $PUBKEY"
   note "the chain will see the public key and never the address it came from"
   # Deriving twice and getting the same answer is the whole verification story,
