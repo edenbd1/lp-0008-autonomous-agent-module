@@ -76,10 +76,14 @@ say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 # instead of leaving it to be discovered at hour five.
 T_START=$(date +%s)
 PROOFS_DONE=0; PROOFS_SECS=0
-# How many `beat` calls a full run makes. Derived at the end of this file by the
-# check that every stage name appears, not guessed: fund, claim, anchor, the
-# refused second anchor, the spend inside the envelope, the spend outside it.
-PROOFS_EXPECTED=6
+# How many proofs a full run makes: COUNTED from this file's own `beat` call
+# sites, not written down. It was written down, as 6, while only three calls
+# were wrapped -- so the projection would have multiplied the remaining work by
+# twice its real size and cried "this run cannot finish" at a run that could.
+# A constant describing the file it lives in is a constant that drifts from it.
+PROOFS_EXPECTED=$(grep -cE '^[[:space:]]*beat(_cap)? "' "$0")
+[ "${PROOFS_EXPECTED:-0}" -gt 0 ] 2>/dev/null || die \
+  "no beat call sites found in $0, so the pace projection has nothing to count"
 CAP_SECS=$(( ${E2E_CAP_MINUTES:-340} * 60 ))
 # A minute between heartbeats in a run that lasts hours. Overridable so the
 # machinery can be exercised in seconds rather than trusted -- a heartbeat that
@@ -432,11 +436,13 @@ echo "  policy anchored"
 # the guard announced the refusal on a call that never reached the chain. A
 # renamed flag, a moved binary, an unreachable sequencer, a typo in the amount:
 # every one of them passed. Two positives are required instead.
-SECOND=$(spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
+beat_cap "the refused second anchor" "$WORK/second.out" \
+  spel --idl "$IDL" --program "$PROGRAM" -- create_policy --owner "Public/$TEST_SIGNER" \
      --agent-id "$AGENT_HEX" \
      --per-tx 340282366920938463463374607431768211455 \
      --per-period 340282366920938463463374607431768211455 \
-     --period-blocks "$PERIOD" 2>&1)
+     --period-blocks "$PERIOD"
+SECOND=$(cat "$WORK/second.out")
 if echo "$SECOND" | grep -q 'Transaction confirmed'; then
   echo "$SECOND" | tail -8
   die "a SECOND, unlimited policy was anchored for the same agent"
@@ -566,7 +572,8 @@ spend_at() { # amount
     --amount "$1" --window-start "$(window_start)" 2>&1
 }
 
-OUT=$(spend_at 50)
+beat_cap "spend 50, inside the envelope" "$WORK/spend-in.out" spend_at 50
+OUT=$(cat "$WORK/spend-in.out")
 TX=$(echo "$OUT" | grep -o 'tx_hash: [0-9a-f]\{64\}' | head -1 | cut -d' ' -f2)
 [ -n "$TX" ] || { echo "$OUT" | tail -8; die "the autonomous spend produced no transaction"; }
 echo "  50 (inside the envelope) -> $TX"
@@ -606,7 +613,8 @@ echo "  recipient balance $BEFORE -> $AFTER  (+50, read back from the chain)"
 # over for its own reasons produces, so the absence of a hash is necessary and
 # nowhere near sufficient. Same discipline as use case 3's `attempt`.
 OVER=300
-OUT=$(spend_at "$OVER")
+beat_cap "spend $OVER, outside the envelope" "$WORK/spend-out.out" spend_at "$OVER"
+OUT=$(cat "$WORK/spend-out.out")
 if echo "$OUT" | grep -q 'tx_hash: [0-9a-f]\{64\}'; then
   echo "$OUT" | tail -6
   die "$OVER was ACCEPTED without an owner approval — the threshold is not enforced"
