@@ -606,6 +606,7 @@ their own initialisations, so nothing precedes the table.
 | 9938 | `52ef56ad…4ed873e6` | settlement, **live** program, 1 LEZ | 106 |
 | 10081 | `071d25d7…1412057a` | settlement, **live** program, 1 LEZ | 107 |
 | 10102 | `54f85182…e2f47115` | settlement, **live** program, 1 LEZ — the one filmed for the video | 108 |
+| 10639 | `c8ff670b…80dc3028` | settlement, **live** program, 1 LEZ — paid by the **blockchain** agent, the first settlement under a payer other than `messaging`. Off-camera rehearsal of the film-2 scene command after the payer became selectable | 109 |
 
 Six of these were signed by the account itself — the initialisation, the 55
 spend, the `create_policy`, the two transfers and the 10 that re-funded the
