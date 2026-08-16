@@ -42,11 +42,11 @@
     "module/src/storage_skills.h": "40356f6b968451036a8c7761235a071304faea2b99cfaf75efb7f4932fbdd324",
     "module/src/task_persistence.cpp": "666fac67ff5b49f5ada0123e4e2fde991c59bbcf345365479d4e40793086b7bb",
     "module/src/task_persistence.h": "9b8d2bf2a7af021274a929e4ccedefaf61cadaca8b30dda757abd12690c5d81d",
-    "module/src/wallet_skills.cpp": "aeae0e8063b976217281dac76d04cd946ccca98200d0c5292bf7caa5cfee21d4",
+    "module/src/wallet_skills.cpp": "882ad5e54ef681c377f49e0b378c9f205e81ba90422e67a3ac406e6333f5568e",
     "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
   },
   "package": "module/agent.lgx",
-  "package_root_hash": "d7fb4646e7de719cc27b2b4afce66e6a45fd35a00e2ebbbd4e3c23f6b99cbfd8",
+  "package_root_hash": "7240ef68f13b5541f98f8294cc5b6898a9f31cdd7ad8358fa63105dae9f0c123",
   "toolchain": {
     "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
     "host": "darwin-arm64",
@@ -55,9 +55,9 @@
   },
   "variants": {
     "darwin-arm64": {
-      "bytes": 4177136,
+      "bytes": 4177520,
       "main": "agent_plugin.dylib",
-      "sha256": "649d4b78832eeb6810123c701cab45274dfa89b70f40b19e37b610590628a754"
+      "sha256": "e4909b71ed4442af837ae78928fc102e142591c7c6171fe59ddd7fe11fa77340"
     }
   }
 }
