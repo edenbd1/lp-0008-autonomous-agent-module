@@ -1275,26 +1275,34 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md` (exit 0), and
   `./scripts/demo.sh` (exit 0) from a clean clone with only a Rust toolchain.
 
-- [ ] **UNMET — End-to-end integration tests run against a LEZ sequencer (standalone
+- [x] **MET — End-to-end integration tests run against a LEZ sequencer (standalone
   mode) and are included in CI.**
-  The workflow exists and is wired in. `.github/workflows/e2e-local-sequencer.yml`
-  builds the LEZ workspace at pinned revision `47eba25`, installs `r0vm` 3.0.5, and
-  runs the full lifecycle with `RISC0_DEV_MODE: 0`. It has **no skip path**,
-  deliberately: a competing submission was closed with "the standalone-sequencer
-  E2E did not run in CI; the job completed through its explicit skip path".
+  `.github/workflows/e2e-local-sequencer.yml` builds the LEZ workspace at pinned
+  revision `47eba25`, installs `r0vm` 3.0.5, and runs the full lifecycle against a
+  real standalone sequencer with `RISC0_DEV_MODE: 0`. It has **no skip path**,
+  deliberately: a submission in this programme was closed with "the
+  standalone-sequencer E2E did not run in CI; the job completed through its
+  explicit skip path".
 
-  **It is red on `main`, and that is the verdict.** The most recent run against
-  this branch is
-  [31903623142](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31903623142),
-  `failure`, ending in `error: create_policy failed` after `RISC0_DEV_MODE: 0` and
-  a successful deploy — the script calls `create_policy` without the `claim_agent`
-  the current program requires. The last green run on this branch,
-  [31867735056](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31867735056),
-  is a long way back; `git rev-list --count 5a52efe..HEAD` says how far, and an
-  earlier version of this line guessed "four", which was wrong by an order of
-  magnitude. Green runs of the same workflow exist on other branches, and their
-  commits are **not** ancestors of this one, so they are not evidence about this
-  tree either. Do not check the badge; run
+  **Green on `main`:**
+  [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823),
+  `success`, 3 h 05 m, at the commit this document describes. Fourteen steps ran
+  and one skipped — `Sequencer log on failure`, which is `if: failure()`, so it
+  skips exactly when the job succeeds and asserts nothing.
+
+  Three real proofs, not dev-mode receipts: the same script under
+  `RISC0_DEV_MODE=1` does the same three operations in 16, 30 and 32 seconds, so a
+  fast green run would be the alarm rather than the result.
+
+  The refusal it demonstrates is checked by three positives rather than by an
+  absence. A second, unlimited anchor for the same agent submitted
+  `6eaaf148…`; the chain does not hold that hash; and the policy account still
+  reads the owner's `per_tx=100`. The earlier version demanded a program error
+  string, which this chain never emits — the sequencer discards a failing
+  transaction at block-build time rather than returning a reason — so it called a
+  correct refusal a broken test.
+
+  Do not check the badge; run
   `gh run list --workflow e2e-local-sequencer.yml --branch main --limit 1`.
 
 - [x] **MET — CI must be green on the default branch.**
@@ -1342,25 +1350,26 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   described a path the software said could not exist. It exists now, §8a documents
   it, and the round trip in the Usability entry above was driven by following it.
 
-- [ ] **UNMET — A reproducible end-to-end demo script that works against a real
+- [x] **MET — A reproducible end-to-end demo script that works against a real
   local sequencer with `RISC0_DEV_MODE=0`.**
-  `scripts/e2e-local-sequencer.sh` is that script, and it is the one that failed in
-  run 31903623142 above — `error: create_policy failed`, at a commit that is an
-  ancestor of this one, with no successful run on `main` since. So it is not
-  currently a script that works, and saying otherwise on the strength of a run 148
-  commits back is exactly the kind of staleness this document has been wrong about
-  before.
+  `scripts/e2e-local-sequencer.sh` is that script. It starts a real standalone
+  sequencer, funds a throwaway wallet from the genesis vault, deploys the policy
+  program, claims and anchors an agent's envelope in the two signatures the
+  shipped program requires, spends inside the envelope unattended, and is refused
+  outside it — each refusal identified by its documented error code rather than by
+  "some error happened". Run
+  [31916748823](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31916748823)
+  is that script executing on `main`, green.
 
-  `./scripts/demo.sh` does run from a clean clone with only a Rust toolchain — no
-  funded account, no keys, no local sequencer — and is green at this commit. It
-  runs against the public testnet, so it answers a different question and is not
-  offered as this one.
+  `./scripts/demo.sh` is the other one, and answers a different question: it runs
+  from a clean clone with only a Rust toolchain — no funded account, no keys, no
+  local sequencer — against the public testnet.
 
 - [ ] **UNMET — A recorded video demo showing terminal output confirming
   `RISC0_DEV_MODE=0` was active.**
   Not recorded. Blocker 1, and the only blocker with irreducible work in it.
 
-**Tally: 16 MET, 7 UNMET, of the 23 criteria the prize lists** — Functionality
+**Tally: 18 MET, 5 UNMET, of the 23 criteria the prize lists** — Functionality
 7 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
 3 of 6. Unchanged by the last run, and that is worth saying rather than leaving
 to inference: the A2A conjunction was already marked MET on two runs of one
