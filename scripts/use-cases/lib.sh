@@ -93,9 +93,35 @@ settlement_facts() {
 }
 
 rpc() {
-  local method="$1" params="$2"
-  curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$method\",\"params\":$params}"
+  local method="$1" params="$2" out rc
+  # RETRY, AND DO NOT RETURN EMPTY ON A NETWORK FAILURE. Without this, curl
+  # answering nothing because the host was briefly unreachable is handed to
+  # callers as an empty string -- and `tx_live()` reads an empty string as "the
+  # chain does not hold this transaction". A blip would report a settlement that
+  # is on chain as missing, which is the absence-read-as-a-value defect one
+  # layer down from where this repository usually hunts it. Measured on
+  # 2026-08-17: a GitHub runner got `Connection refused` from this host while
+  # the same host answered from a laptop three seconds later.
+  #
+  # `--retry-all-errors` because a refused connection is not an HTTP status, so
+  # plain `--retry` would not cover the case that actually happened.
+  out=$(curl -s -m 30 --retry 4 --retry-delay 2 --retry-all-errors \
+        -X POST "$RPC" -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$method\",\"params\":$params}")
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "could not reach $RPC after 5 attempts (curl exit $rc) asking $method." >&2
+    echo "That is a broken network, not an answer about the chain; refusing to" >&2
+    echo "let an unreachable host read as an empty result." >&2
+    # `exit` is not enough: every caller uses this in a pipeline or a command
+    # substitution, and both are subshells -- `exit 1` there kills the subshell
+    # and the script sails on. Measured: with a plain `exit`, `tx_live` against
+    # an unreachable host still printed "reported NOT LIVE" and the next line
+    # ran. Signal the script itself.
+    kill -TERM $$ 2>/dev/null
+    exit 1
+  fi
+  printf '%s' "$out"
 }
 
 # True when the chain holds this transaction. `"result":[` and nothing else:

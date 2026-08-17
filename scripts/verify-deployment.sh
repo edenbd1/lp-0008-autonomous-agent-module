@@ -39,8 +39,20 @@ bad()  { printf '  FAIL  %s\n' "$*" >&2; fail=$((fail + 1)); }
 note() { printf '        %s\n' "$*"; }
 
 rpc() { # method params-json
-  curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}"
+  # See the note on the same helper in scripts/use-cases/lib.sh: an unreachable
+  # host must not read as an empty result, because every caller here treats an
+  # empty result as a statement about the chain.
+  local out rc
+  out=$(curl -s -m 30 --retry 4 --retry-delay 2 --retry-all-errors \
+        -X POST "$RPC" -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}")
+  rc=$?
+  # kill -TERM $$ as well as exit: this is called inside pipelines and command
+  # substitutions, which are subshells, so a bare `exit` would end the subshell
+  # and let the caller read the failure as an empty result.
+  [ "$rc" -eq 0 ] || { echo "could not reach $RPC after 5 attempts (curl exit $rc) asking $1" >&2
+                       kill -TERM $$ 2>/dev/null; exit 1; }
+  printf '%s' "$out"
 }
 
 # Read a TSV column BY HEADER NAME. Never by position: the manifest's columns

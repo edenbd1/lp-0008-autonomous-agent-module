@@ -128,6 +128,7 @@ import struct
 import subprocess
 import sys
 import urllib.error
+import time
 import urllib.request
 
 RPC_DEFAULT = "https://testnet.lez.logos.co"
@@ -170,8 +171,20 @@ class Chain:
                            "method": method, "params": params}).encode()
         req = urllib.request.Request(
             self.url, data=body, headers={"Content-Type": "application/json"})
+        # THREE ATTEMPTS WITH NOTHING BETWEEN THEM IS ONE ATTEMPT. This loop
+        # had no backoff, so all three fired inside a few milliseconds -- which
+        # is no help at all against the failure it exists for. On 2026-08-17 a
+        # GitHub runner got `Connection refused` reaching this host while the
+        # same host answered `getLastBlockId` from a laptop three seconds later,
+        # and CI went red on a document that was correct.
+        #
+        # The distinction being preserved: a chain that ANSWERS and disagrees is
+        # Fatal immediately and must stay that way -- that is the whole point of
+        # this script. Only "could not reach" is retried, and the message says
+        # how long it tried, so a real outage is not mistaken for a blip.
         last = None
-        for _ in range(3):
+        waited = 0.0
+        for attempt in range(5):
             try:
                 with urllib.request.urlopen(req, timeout=45) as r:
                     payload = json.load(r)
@@ -180,8 +193,12 @@ class Chain:
                 return payload.get("result")
             except urllib.error.URLError as e:      # transient; the tip moves
                 last = e
-        raise Fatal("%s(%s) could not reach %s: %s"
-                    % (method, params, self.url, last))
+                if attempt < 4:
+                    delay = 2 ** attempt          # 1, 2, 4, 8 -> 15s in total
+                    waited += delay
+                    time.sleep(delay)
+        raise Fatal("%s(%s) could not reach %s after 5 attempts over %gs: %s"
+                    % (method, params, self.url, waited, last))
 
     def transaction(self, tx):
         """(raw_bytes, block) or None. None means: dropped, pending, rejected or

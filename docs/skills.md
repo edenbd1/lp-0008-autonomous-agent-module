@@ -483,8 +483,8 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet, and between two loaded modules by `./scripts/delivery-in-plugin.sh` |
 | Agent | `agent.update`, `agent.poll` | **demonstrated between two loaded modules** — `./scripts/delivery-in-plugin.sh peers`, where each agent's own `TaskStore` reaches `completed` on updates the other account published, and a self-authored one on the same topic is counted and refused |
 | Messaging | `messaging.send`, `messaging.receive`, `messaging.join` | **run against live Delivery nodes** from a loaded plugin — `send` and `receive` between two of them on the public network (`delivery-in-plugin.sh peers`), `join` against a started node (`delivery-in-plugin.sh`, no argument) |
-| Messaging | `messaging.create_group` | **written against the Delivery API**, compiled; the one messaging skill not yet exercised against a running node |
-| Storage | `storage.upload`, `download`, `list`, `share` | **written against the Storage API**, compiled; not yet exercised against a running node — the node itself is driven in CI by `storage_node_drive.c`, which is the library proven and not the skills |
+| Messaging | `messaging.create_group` | **run as a skill against a live Delivery node** by `./scripts/skills-live.sh`, and it opens a channel only through a `DeliveryPort` a *host* supplies: through the port the module builds for itself the node refuses it. That is a one-line defect in `module/src`, it is measured rather than inferred, and the paragraphs below carry the measurement |
+| Storage | `storage.upload`, `download`, `list`, `share` | **run as skills against a live Storage node** by `./scripts/skills-live.sh`, through `AgentModuleImpl::invoke()` — not through the C driver, which is the library proven and not the skills. The ports are the host's: nothing in `module/src` opens a Storage node, so a module *loaded* by Basecamp still refuses every `storage.*` call |
 | Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
 | Meta | `meta.status` | answers in the loaded module, including its `durability` block — the task snapshot's path and what the last recovery found |
@@ -505,14 +505,65 @@ two answers to one question. `module/tests/plugin_load_test.cpp` asserts its
 contents against the loaded binary — the only check that can tell a documented
 skill from a registered one.
 
-The messaging and storage rows are the honest part. Those skills are written
-against the real signatures — `send(contentTopic, payload)`, `subscribe`,
-`channelCreate` for Delivery — and they compile, but "compiles" is not "works":
-nothing here claims they deliver a message or store a file until one has been
-sent and seen. Both ABIs have been read off their module headers rather than
-guessed. Separately, `scripts/exercise-nodes.sh` drives real Delivery and
-Storage nodes through the C drivers in `module/tests/` — that is the node half
-proven, and it is not the same as the *skills* having been run against a node.
+The messaging and storage rows used to read "written against the API, compiled,
+not yet exercised against a running node", and that disclosure was narrower than
+its consequence: for those five skills, "all default skills are implemented"
+rested on unit tests against fake ports. `./scripts/skills-live.sh` closes it.
+Every call it makes is `AgentModuleImpl::invoke("<skill>", …)` on the module's
+own dispatcher, against a real Logos Storage node and a real Logos Delivery
+node; `scripts/skills-live-drive.cpp` is the host that links the module and hands
+it the ports.
+
+Four of the five work. `storage.upload` returns a content address — base58 and
+starting `z`, which is asserted, because "non-empty" would have accepted the
+upload session id one call earlier. `storage.download` writes the content to a
+path, and the *shell* recomputes `shasum -a 256` over what went in and what came
+back: a driver comparing its own bytes to its own bytes would pass with no node
+involved. `storage.list` names that address and not the control one.
+`storage.share` verifies the address against the node, publishes it on the
+recipient's owner topic, and `messaging.receive` reads the frame back. Each
+claim has a control that could fail: both skills refuse, naming the node that is
+not started, before either node exists; the control address is not a mutant but
+one the node itself answers that it does not hold — `vault_drive.c` measured
+`storage_exists` saying *true* for a one-character mutant, so a control that was
+merely well-formed-and-different would sometimes be an address the node has;
+that control address is refused by `download` and by `share`; the refused
+download leaves no file behind, checked by the shell rather than by the driver;
+and the refused share leaves the topic's frame count unchanged, which a share
+that refused an address and published anyway would not.
+
+The fifth found something no fake could have. `messaging.create_group` asks its
+port for a channel, and `deliveryPort` in `module/src/delivery_runtime.cpp`
+builds that port with `channelCreate(channelId, channelId, channelId)` — the
+group id in the **content topic** argument. A real node subscribes to that
+content topic before it opens the channel, and a bare identifier is not a
+content topic, so the node refuses and the skill answers `delivery refused to
+create the channel`. Measured on one node, in one process, two calls apart: the
+bare id is refused and the same channel with `/lp-0008/1/discovery-<id>/json` is
+accepted. `OwnerChannel` in `module/src/owner_channel.cpp` passes
+`ownerTopic(account)` and has always worked live, which is why nothing else
+caught it. Handed a port that passes a content topic, the skill opens a real
+reliable channel, invites two members, and both invitations arrive on the
+members' own owner topics.
+
+So the honest state of `messaging.create_group` is two statements, not one: the
+**skill** works against a real node, and the **port the module builds for
+itself** does not. The fix is one line in `module/src`, and it is deliberately
+not made here — that source is what the shipped `agent.lgx` is built from, and
+changing it without repackaging all three variants trades a known defect for a
+package that no longer matches its source. `./scripts/skills-live.sh` asserts
+both halves, so neither can change quietly in either direction.
+
+Two things this does not improve. The storage ports are the **host's**: there is
+no `StorageRuntime` to match `DeliveryRuntime`, so `installBuiltinSkills` has
+nothing to fill `ports.storage` from and a module loaded by Basecamp still
+refuses every `storage.*` call with "storage node is not started". And every
+read-back above is a node receiving its own publication, which shows the frame
+went through the relay path and came back — not that a second peer got it; two
+processes and two nodes is `./scripts/delivery-in-plugin.sh peers`. Separately,
+`scripts/exercise-nodes.sh` still drives the two libraries through the C drivers
+in `module/tests/` — the node half proven, which remains a different claim from
+the skills.
 
 Two things the messaging code does that a stub would not. It **refuses** when the
 node is not started rather than returning success, because `start` returns as
