@@ -1,0 +1,69 @@
+# scripts/exercise-nodes.sh — Delivery and Storage against real nodes
+# host:   Darwin 25.5.0 arm64
+# date:   2026-08-17T09:29:29Z
+# commit: 0c16b4956ea480370d34cfee74828b3d2a50c0dd
+# library: _external/logos-delivery/build/liblogosdelivery.dylib, built from 0d433ea
+#          see docs/limitations.md on the dependency set that produced it
+# exit:   0   <- captured from the script itself, not from a later command
+
+
+[1m[1/4] the Delivery library[0m
+  /Users/eden/data/ns.com/lp-0008/_external/logos-delivery/build/liblogosdelivery.dylib
+  0d433ea8   40M
+
+[1m[2/4] build the driver against it[0m
+  /var/folders/13/gjvsmjjx0slggwgptr2d6fhh0000gn/T//lp0008_delivery_drive
+
+[1m[3/4] run it against the live network[0m
+1. create a node
+  ok    create_node returned a context
+  ok    the node was constructed
+2. listen for message events before anything is sent
+  ok    three listeners registered
+3. start it, and wait for the node to say so
+  <-    start_node: 
+  ok    the node started
+4. ask the running node who it is
+  <-    MyPeerId: 16Uiu2HAm3gGGDtF746geusBpVfFxKJZjeqJB3jv62Zf97SC7XwPi
+  ok    it reported a peer id
+5. subscribe, then publish to the same topic
+  <-    subscribe: 
+  <-    send: eb0a9bdd319338efa479
+  event {"eventType":"message_propagated","requestId":"eb0a9bdd319338efa479","messageHash":"0xd8f22584b349a4bc3237d23996b8d243344e4435fdbeb92c1d759c06f01a14b7"}
+  event {"eventType":"message_sent","requestId":"eb0a9bdd319338efa479","messageHash":"0xd8f22584b349a4bc3237d23996b8d243344e4435fdbeb92c1d759c06f01a14b7"}
+  ok    the message reached the network, and stayed sent
+6. shut down
+  <-    stop_node: 
+  ok    the node stopped
+  ok    the context was destroyed
+all steps confirmed (0 failure(s))
+
+[1m[4/4] the same, for Storage[0m
+1. create a node
+  ok    storage_new returned a context
+  ok    the node was constructed
+2. start it
+  ok    the node started
+3. ask the running node who it is
+  <-    peer id: 16Uiu2HAmKYYcBb6gjbSraSJc1GEvD4tcGnfdt4eubmj6DVuaQKXT
+  ok    it reported a peer id
+4. upload a file, as a session
+  ok    upload_init opened a session
+  <-    session: 0
+  <-    cid: zDvZRwzm6L91tfhtuGMSSt8ESiFX9eoHvWKfk2WczzaJCRUcUX4V
+  ok    the node returned a content address
+5. ask the node for it back
+  <-    exists: true
+  ok    the content address is in the store
+  <-    manifest: {"manifestVersion":0,"treeCid":"zDzSvJTfCNaKhXraK4esp6DjXaHvn2RT6MJuysk5T5jephGXYccw","blockSize":65536,"datasetSize":28,"filename":"lp0008-upload.txt","mimetype":"text/plain"}
+  ok    its manifest names the file we uploaded
+6. shut down
+  ok    the node stopped
+  ok    the context was destroyed
+all steps confirmed (0 failure(s))
+
+Both nodes are real. Delivery started, joined the network, published a
+message the network propagated back. Storage started, took a file, and
+returned a content address whose manifest names that file.
+Logs: /var/folders/13/gjvsmjjx0slggwgptr2d6fhh0000gn/T//lp0008_delivery_drive.log
+      /var/folders/13/gjvsmjjx0slggwgptr2d6fhh0000gn/T//lp0008_storage_drive.log
