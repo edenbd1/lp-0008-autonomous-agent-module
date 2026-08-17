@@ -57,6 +57,25 @@ def main():
               + (probe.stderr or probe.stdout).strip())
         return 1
 
+    # A SHALLOW CLONE CANNOT ANSWER THIS QUESTION, and must not pretend to.
+    # `actions/checkout@v4` fetches depth 1 by default, so on a runner HEAD has
+    # no ancestors and `merge-base --is-ancestor` is false for every commit
+    # ever made -- which this gate reported as "the reader is sent to a commit
+    # this branch does not contain", about citations that are perfectly good.
+    # Three of them, on the first run where it had permission to look.
+    #
+    # This is the conflation the previous commit message flagged and left
+    # standing: "I could not resolve it" and "it is orphaned" are a credentials
+    # or checkout problem and a repository problem, and they had the same
+    # message. They do not now.
+    shallow = sh("git", "rev-parse", "--is-shallow-repository")
+    if shallow.stdout.strip() == "true":
+        print("this is a SHALLOW clone: HEAD has no ancestors here, so every\n"
+              "citation would read as orphaned and none of that would be true.\n"
+              "Fetch the full history before running this — in a workflow that\n"
+              "is `fetch-depth: 0` on the checkout step.")
+        return 1
+
     cited = {}
     for doc in DOCS:
         path = os.path.join(ROOT, doc)
@@ -82,6 +101,16 @@ def main():
             continue
         info = json.loads(out.stdout)
         sha = info.get("headSha", "")
+        # Distinguish "the commit is not an ancestor" from "this repository has
+        # never heard of it" -- the second is a fetch problem wearing the
+        # first's face.
+        known = sh("git", "cat-file", "-e", sha + "^{commit}")
+        if known.returncode != 0:
+            failures.append(
+                "run %s ran on %s, which this checkout does not have AT ALL — that is a "
+                "fetch problem, not necessarily an orphaned commit; cited at %s"
+                % (run_id, sha[:7], ", ".join(sites)))
+            continue
         anc = sh("git", "merge-base", "--is-ancestor", sha, "HEAD")
         if anc.returncode != 0:
             failures.append(

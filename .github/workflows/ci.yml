@@ -25,7 +25,14 @@ jobs:
       contents: read
       actions: read
     steps:
+      # `fetch-depth: 0` for the citation gate: it asks whether each cited run's
+      # commit is an ancestor of HEAD, and the default depth-1 checkout has no
+      # ancestors at all -- so every citation read as orphaned, about three that
+      # were fine. The gate refuses a shallow clone outright now rather than
+      # answering from one, and this is the other half of that fix.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
 
       # First, and before anything is built, because a dangling citation costs
