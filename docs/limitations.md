@@ -1551,11 +1551,56 @@ revision over it. That is the class, and chronos is its second member.
   which is not a property anybody should have to rely on.
 
 The build script now installs the lock's revision over whatever was resolved, for
-chronos and taskpools both, **reading each revision out of `nimble.lock` rather
+every package `nimble.lock` names, **reading each revision out of the lock rather
 than restating it** — a restated constant is one more thing that can drift from
-the thing it claims to mirror. Whether that is sufficient is a question for the
-`alongside` run, not for this paragraph: until that run is green, this is a
-diagnosis with a fix attached, not a fixed problem.
+the thing it claims to mirror.
+
+**It works.** On the runner: `423020 lines; 858.441s; 2.977GiB peakmem; out:
+build/liblogosdelivery.so [SuccessX]`, 217 MB. The locked dependency set does
+build; upstream's own resolution simply never installs it. Pinning two of the
+forty-six was not enough and moved the failure rather than removing it — with
+chronos held at 4.2.2 while `httputils` floated to 0.5.x, chronos stopped
+compiling itself — because a locked set is coherent as a set.
+
+## The companion module and our own driver want incompatible ABIs
+
+With the library building, the `alongside` workflow reached step 19 and stopped
+there:
+
+```
+scripts/use-cases/share_drive.c:190:3:
+  error: unknown type name 'LogosdeliverySendReq'
+scripts/use-cases/share_drive.c:202:9:
+  error: too few arguments to function 'logosdelivery_destroy'
+```
+
+`share_drive.c` is written against `LogosdeliverySendReq` and a one-argument
+`logosdelivery_destroy` — the **nim-ffi 0.3.0 typed C ABI**, which upstream
+introduced in `4a85db1b`, one of the fourteen commits between `f8b0365` and
+`0d433ea`. That header is right here, generated, at
+`_external/logos-delivery/library/generated/logosdelivery.h:30` and `:215`.
+
+And `logos-delivery-module` at `3f0f2d8` requires the ABI from **before** that
+commit: building it against the tip is what produces the seventeen compile
+errors in `api_call_handler.h` that made this recipe pin `f8b0365` in the first
+place.
+
+So the companion module and this repository's own messaging driver need
+mutually incompatible revisions of the same library. Neither is wrong; upstream
+made a breaking change between the revision the module's `flake.lock` names and
+the revision the driver was written against, and this machine happens to carry
+both checkouts — `build-companions/src/logos-delivery` at `f8b0365` for the
+module, `_external/logos-delivery` at `0d433ea` for the driver — which is why
+nothing here ever collided. A runner gets one checkout, and the collision is
+immediate.
+
+Closing it means one of: building the library twice at two revisions, which is
+another fourteen minutes of Nim per run; porting `share_drive.c` back to the
+older ABI, which makes it disagree with the library `exercise-nodes.sh` actually
+drives; or waiting for `logos-delivery-module` to follow upstream's ABI. None of
+those is a small decision and none is taken here. **Steps 16, 17 and 18 pass on
+Linux in that same run**, which is the part this workflow existed to show; step
+19 is red for the reason above rather than papered over.
 
 ## One command, and what it needs before it will run
 
