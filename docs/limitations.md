@@ -1594,13 +1594,31 @@ module, `_external/logos-delivery` at `0d433ea` for the driver — which is why
 nothing here ever collided. A runner gets one checkout, and the collision is
 immediate.
 
-Closing it means one of: building the library twice at two revisions, which is
-another fourteen minutes of Nim per run; porting `share_drive.c` back to the
-older ABI, which makes it disagree with the library `exercise-nodes.sh` actually
-drives; or waiting for `logos-delivery-module` to follow upstream's ABI. None of
-those is a small decision and none is taken here. **Steps 16, 17 and 18 pass on
-Linux in that same run**, which is the part this workflow existed to show; step
-19 is red for the reason above rather than papered over.
+**Closed on `d2ac806`, by building the library twice.** The alternatives were
+porting `share_drive.c` back to the older ABI — which would make it disagree
+with the library `exercise-nodes.sh` actually drives — or waiting for
+`logos-delivery-module` to follow upstream. Both are worse than paying fourteen
+minutes of Nim, and neither would have been honest about what the tree is:
+`build_delivery()` now takes a checkout and a revision, and runs the whole
+recipe (the `nimble.lock` pinning pass, `librln`, the lot) for each. The
+driver's revision is read out of
+`module/third-party/liblogosdelivery/README.md`, so it cannot drift from the
+library that is actually redistributed.
+
+The step also checks it has the *right* library rather than merely a library:
+it greps the generated header for `LogosdeliverySendReq` and refuses if that is
+the module's pin. Pointing at a library and pointing at the correct one are
+different questions, and only the first was being asked.
+
+The whole workflow is green as of run `32040423074`: all six builds, the
+four-module load, both negative controls, and the file-vault use case — a real
+Storage node returning a CID, a real Delivery node carrying it, and the bytes
+coming back and decrypting.
+
+One caveat that costs time rather than correctness: `actions/cache` covers
+`build-companions/logos-delivery` and not `_external/logos-delivery`, so the
+second build is from scratch on every run. That is thirty-odd minutes a run,
+and it is a cache path away from not being.
 
 ## One command, and what it needs before it will run
 
