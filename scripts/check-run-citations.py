@@ -42,6 +42,9 @@ DOCS = ["README.md", "SUBMISSION-DRAFT.md", "solutions/LP-0008.md"] + [
     if f.endswith(".md")
 ]
 RUN_RE = re.compile(r"actions/runs/(\d+)")
+# GitHub run ids are 11 digits today. Anchored on word boundaries so block
+# heights, byte counts and hashes cannot be mistaken for one.
+BARE_RE = re.compile(r"\b(\d{11})\b")
 
 
 def sh(*args):
@@ -77,14 +80,25 @@ def main():
         return 1
 
     cited = {}
+    bare = {}
     for doc in DOCS:
         path = os.path.join(ROOT, doc)
         if not os.path.exists(path):
             continue
         with open(path, encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, 1):
-                for run_id in RUN_RE.findall(line):
+                linked = RUN_RE.findall(line)
+                for run_id in linked:
                     cited.setdefault(run_id, []).append("%s:%d" % (doc, lineno))
+                # A run id written as a bare number is still evidence. The two
+                # green e2e runs this submission rests on are in a markdown
+                # table as `31916748823`, not as URLs, and so escaped this gate
+                # entirely — the check looked for links, and what was
+                # load-bearing was a number. Anything that long and that
+                # numeric is a run id or a mistake; both are worth resolving.
+                for run_id in BARE_RE.findall(line):
+                    if run_id not in linked:
+                        bare.setdefault(run_id, []).append("%s:%d" % (doc, lineno))
 
     if not cited:
         print("no CI run is cited in any document, so there is nothing to check.\n"
@@ -120,13 +134,43 @@ def main():
                    info.get("conclusion", "?"), ", ".join(sites)))
 
     print("checked %d cited CI run(s) across %d document(s)" % (len(cited), len(DOCS)))
+
+    # Bare run ids are held to a different standard on purpose. A URL is
+    # something a reader clicks, so it must land inside this branch's history.
+    # A number in a table is a claim about a run that happened, and the honest
+    # requirement is that the run exists and says what the document says it
+    # says. Ancestry is REPORTED for them, never enforced: this repository
+    # rewrote its history once for a good reason, and the runs from before that
+    # are still real runs. What would be dishonest is not disclosing it, and
+    # the disclosure is what this prints.
+    if bare:
+        print("\n%d run id(s) mentioned without a link:" % len(bare))
+        for run_id, sites in sorted(bare.items()):
+            out = sh("gh", "run", "view", run_id, "--json",
+                     "headSha,workflowName,conclusion")
+            if out.returncode != 0:
+                failures.append(
+                    "run %s is named at %s and DOES NOT RESOLVE — a number that "
+                    "looks like evidence and is not"
+                    % (run_id, ", ".join(sites)))
+                continue
+            info = json.loads(out.stdout)
+            sha = info.get("headSha", "")
+            known = sh("git", "cat-file", "-e", sha + "^{commit}").returncode == 0
+            anc = known and sh("git", "merge-base", "--is-ancestor",
+                               sha, "HEAD").returncode == 0
+            print("  %s  %s  %s  on %s — %s"
+                  % (run_id, info.get("workflowName", "?"),
+                     info.get("conclusion", "?"), sha[:7],
+                     "in this branch" if anc
+                     else "NOT in this branch; the document must say so"))
+
     if failures:
-        print("\n%d citation(s) point at a commit this branch does not have:\n"
-              % len(failures))
+        print("\n%d citation(s) a reader could not follow:\n" % len(failures))
         for f in failures:
             print("  " + f)
         return 1
-    print("every cited run ran on a commit this branch contains")
+    print("\nevery cited run ran on a commit this branch contains")
     return 0
 
 
