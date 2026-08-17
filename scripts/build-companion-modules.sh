@@ -378,7 +378,24 @@ echo "  $DELIVERY_DYLIB  ($(du -h "$DELIVERY_DYLIB" | cut -f1))"
 say "[2/6] libgowalletsdk @ ${GO_WALLET_SDK_REV:0:7} (logos-wallet-module's flake.nix pin)"
 fetch https://github.com/status-im/go-wallet-sdk "$GO_WALLET_SDK_REV"; GOSDK="$FETCHED"
 if [ ! -f "$GOSDK/build/libgowalletsdk.a" ]; then
-  ( cd "$GOSDK" && make static-library ) || die "go-wallet-sdk's static-library target failed"
+  # SHELL=/bin/bash, and the reason is upstream's own check-go target:
+  #
+  #     @if ! command -v go &> /dev/null; then \
+  #        echo "Go is not installed or not in PATH."; exit 1; fi
+  #
+  # `&>` is a bashism. Make runs recipes with /bin/sh, which on Ubuntu is dash,
+  # and dash has no `&>` — it reads `command -v go &` (background) followed by a
+  # bare `> /dev/null`. The status is that of launching a background job, which
+  # is 0, so `!` inverts it and the target reports Go missing EVERY TIME. It
+  # cannot pass under dash and it cannot fail under bash, whatever go is
+  # installed.
+  #
+  # That is why this survived a version bump: it failed identically on 1.23 and
+  # on 1.24.13, and the log prints `go version go1.24.13 linux/amd64` two lines
+  # before the target says go is not on PATH. macOS /bin/sh is bash, so it has
+  # always worked here and never there.
+  ( cd "$GOSDK" && make SHELL=/bin/bash static-library ) \
+    || die "go-wallet-sdk's static-library target failed"
 fi
 echo "  $GOSDK/build/libgowalletsdk.a  ($(du -h "$GOSDK/build/libgowalletsdk.a" | cut -f1))"
 
