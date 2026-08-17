@@ -19,7 +19,13 @@
 # be executed: `crates/agent-verifier-adversarial` against the deployed binary,
 # and `scripts/use-cases/03-spending-threshold.sh` against the live program.
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# `cd ""` SUCCEEDS in bash, so `cd "$ROOT" || exit` cannot fire on the failure
+# that can actually happen: the subshell failing leaves ROOT empty and every
+# relative path below resolves against wherever the caller stood. Guard the
+# variable, not the cd.
+[ -n "$ROOT" ] || { echo "cannot resolve the repository root from $0" >&2; exit 1; }
+cd "$ROOT" || { echo "cannot enter $ROOT" >&2; exit 1; }
 
 RPC="${SEQUENCER_URL:-https://testnet.lez.logos.co}"
 SPEL="${SPEL_BIN:-spel}"

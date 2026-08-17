@@ -53,7 +53,13 @@
 # value and LEZ v0.2.4 charges no execution fee, so a full run is 0 LEZ. The
 # agent it creates is funded with nothing and never needs to be.
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# `cd ""` SUCCEEDS in bash, so `cd "$ROOT" || exit` cannot fire on the failure
+# that can actually happen: the subshell failing leaves ROOT empty and every
+# relative path below resolves against wherever the caller stood. Guard the
+# variable, not the cd.
+[ -n "$ROOT" ] || { echo "cannot resolve the repository root from $0" >&2; exit 1; }
+cd "$ROOT" || { echo "cannot enter $ROOT" >&2; exit 1; }
 . scripts/use-cases/lib.sh
 
 SPEL="${SPEL_BIN:-spel}"

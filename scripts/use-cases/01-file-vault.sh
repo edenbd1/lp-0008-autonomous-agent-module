@@ -27,7 +27,13 @@
 # really does cross the network. A second Logos Storage node fetching the same
 # address from the network is not demonstrated here.
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# `cd ""` SUCCEEDS in bash, so `cd "$ROOT" || exit` cannot fire on the failure
+# that can actually happen: the subshell failing leaves ROOT empty and every
+# relative path below resolves against wherever the caller stood. Guard the
+# variable, not the cd.
+[ -n "$ROOT" ] || { echo "cannot resolve the repository root from $0" >&2; exit 1; }
+cd "$ROOT" || { echo "cannot enter $ROOT" >&2; exit 1; }
 . scripts/use-cases/lib.sh
 
 STORAGE_SRC="${STORAGE_SRC:-$ROOT/_external/logos-storage-nim}"

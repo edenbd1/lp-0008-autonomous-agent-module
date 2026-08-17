@@ -34,7 +34,13 @@
 # one instruction demanding both signatures would demand both keys in one
 # wallet. Two instructions is what keeps the agent's key on the agent's node.
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# `cd ""` SUCCEEDS in bash, so `cd "$ROOT" || exit` cannot fire on the failure
+# that can actually happen: the subshell failing leaves ROOT empty and every
+# relative path below resolves against wherever the caller stood. Guard the
+# variable, not the cd.
+[ -n "$ROOT" ] || { echo "cannot resolve the repository root from $0" >&2; exit 1; }
+cd "$ROOT" || { echo "cannot enter $ROOT" >&2; exit 1; }
 
 : "${SIGNER:?set SIGNER to a funded public account id}"
 # The account that pays the agents must not be the account that signs their
