@@ -129,6 +129,28 @@ tip_block() {
   | grep -oE '"result":[0-9]+' | grep -oE '[0-9]+' | head -1
 }
 
+# THE SEQUENCER DIED AND NOTHING NOTICED. On 2026-08-17 the standalone
+# sequencer panicked at 00:22Z --
+#
+#   [ERROR sequencer_service] Sequencer failed unexpectedly: Main loop exited
+#   thread 'main' panicked at tokio/src/runtime/task/core.rs:422:22:
+#   JoinHandle polled after completion
+#
+# -- and this script went on waiting on a proof for FOUR MORE HOURS, until
+# GitHub killed the job at its cap. The heartbeat was already printing the
+# evidence the whole time: `| block  |` with nothing in it, because `tip_block`
+# could not reach a chain that no longer existed. The information was on screen
+# and nothing drew the conclusion from it.
+#
+# `kill -0` on the sequencer's own pid is the direct question, and the tip is
+# the corroborating one. Two consecutive unreadable tips alone are not enough --
+# a curl can time out on a loaded runner -- so an unreadable tip only escalates
+# when the process is gone too.
+sequencer_alive() {
+  [ -n "${SEQ_PID:-}" ] || return 0        # not started yet; nothing to judge
+  kill -0 "$SEQ_PID" 2>/dev/null
+}
+
 # CPU and resident size of a process AND its descendants. During a proof the
 # work is in r0vm, which is a child of the wallet or of spel, so reporting only
 # the process we launched would report a parent asleep on a wait().
@@ -161,6 +183,13 @@ beat() {   # beat <label> <command...>  -- run it quietly, narrate the wait
       "$(tip_block)" "$(procstat "$pid")"
     [ -f "${WORK:-}/sequencer.log" ] && \
       printf '      seq| %s\n' "$(tail -1 "$WORK/sequencer.log" 2>/dev/null | cut -c1-150)"
+    if ! sequencer_alive; then
+      printf '\n    THE SEQUENCER IS GONE. %s has been waiting on a chain that no\n' "$label"
+      printf '    longer exists. Its last words:\n'
+      tail -12 "${WORK:-}/sequencer.log" 2>/dev/null | sed 's/^/      seq| /'
+      kill "$pid" 2>/dev/null
+      die "the standalone sequencer died mid-run; nothing below it could have succeeded"
+    fi
   done
   wait "$pid"; rc=$?
   now=$(date +%s)
@@ -202,6 +231,13 @@ beat_cap() {   # beat_cap <label> <outfile> <command...>
       "$(tip_block)" "$(procstat "$pid")"
     [ -f "${WORK:-}/sequencer.log" ] && \
       printf '      seq| %s\n' "$(tail -1 "$WORK/sequencer.log" 2>/dev/null | cut -c1-150)"
+    if ! sequencer_alive; then
+      printf '\n    THE SEQUENCER IS GONE. %s has been waiting on a chain that no\n' "$label"
+      printf '    longer exists. Its last words:\n'
+      tail -12 "${WORK:-}/sequencer.log" 2>/dev/null | sed 's/^/      seq| /'
+      kill "$pid" 2>/dev/null
+      die "the standalone sequencer died mid-run; nothing below it could have succeeded"
+    fi
   done
   wait "$pid"; rc=$?
   now=$(date +%s)

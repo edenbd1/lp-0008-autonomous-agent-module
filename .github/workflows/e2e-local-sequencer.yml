@@ -40,12 +40,23 @@ jobs:
     # with the lifecycle unfinished, which is the same as not running it.
     #
     # 340 is not a safe number, it is the largest one available: a GitHub-hosted
-    # job cannot exceed 360. On 2026-08-16 a runner took 1h42, 1h50 and 1h42 for
-    # three consecutive proofs -- three to four times the usual -- and this job
-    # was killed at the cap with the lifecycle unfinished. No timeout can cover
-    # that, which is why the script now projects its own finishing time from the
-    # rate it measures and says so in the log rather than leaving it to be
-    # discovered here.
+    # job cannot exceed 360. No timeout covers what actually happens here, and
+    # the instrumented run of 2026-08-17 finally showed what that is.
+    #
+    #   host      Linux x86_64, 2 cpu(s)
+    #   cpu       AMD EPYC 7763 64-Core Processor
+    #
+    # TWO vCPUs, not the four the measurements above were taken on, with r0vm
+    # pinned at ~190% of them. Proving is CPU-bound, so that run's proofs took
+    # 1h42 and 1h11 against 25-35 minutes, and the script's own projection said
+    # so at 1h42 into a 5h40 budget: `PACE: 1h42m07s a proof, 5 left -> about
+    # 10h13m44s in total, past the 5h40m00s cap`. Which runner class a job lands
+    # on is not something this file can choose.
+    #
+    # That same run also had its sequencer PANIC at 00:22Z (`JoinHandle polled
+    # after completion`) and kept waiting on a proof for four more hours. The
+    # heartbeat had been printing `| block  |` with nothing in it that whole
+    # time. The script watches the sequencer's pid now and stops when it dies.
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
