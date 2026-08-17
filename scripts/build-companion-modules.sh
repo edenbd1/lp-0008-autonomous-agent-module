@@ -91,7 +91,28 @@ DELIVERY_LIB_REV="${DELIVERY_LIB_REV:-f8b036594ea2a36b529e10b584b7d2851a3ac5c8}"
 # So the revisions are READ OUT OF `nimble.lock`, not written here. A restated
 # constant is one more thing that can quietly stop matching what it mirrors, and
 # the point of this block is to stop trusting a copy over the source.
-DELIVERY_PINNED_PKGS="${DELIVERY_PINNED_PKGS:-taskpools chronos}"
+#
+# AND THE WHOLE LOCK, NOT A SHORTLIST. Pinning taskpools and chronos alone was
+# tried, and it moved the failure rather than removing it: with chronos back at
+# the locked 4.2.2 but `httputils` still resolved to 0.5.x, chronos's own
+# `httpclient.nim:934` stopped compiling — `case resp.version` on an
+# `HttpVersion` that httputils had since changed under it. A locked set is
+# coherent as a set; two of its members held in place while the other forty-three
+# float is a combination nobody has ever built. Empty means "every package the
+# lock names"; a space-separated list narrows it, for bisecting.
+DELIVERY_PINNED_PKGS="${DELIVERY_PINNED_PKGS-}"
+
+# lock_pkgs <checkout>  -> every package name in nimble.lock, one per line
+lock_pkgs() {
+  python3 -c '
+import json,sys
+try:
+    with open(sys.argv[1]+"/nimble.lock") as fh: lock=json.load(fh)
+except Exception: sys.exit(0)
+for name in sorted(lock.get("packages",{})):
+    print(name)
+' "$1" 2>/dev/null
+}
 
 # lock_rev <checkout> <package>  -> the vcsRevision nimble.lock names, or empty
 lock_rev() {
@@ -145,10 +166,29 @@ pin_locked_pkg() {
   echo "  $_pkg: installing nimble.lock's ${_rev:0:7} over what nimble resolved"
   _meta="$(cat "$_dir/nimblemeta.json" 2>/dev/null || echo '{}')"
   rm -rf "$_dir.locked"
-  git clone -q "$_url" "$_dir.locked" || die "could not clone $_url for $_pkg"
-  git -C "$_dir.locked" checkout -q "$_rev" \
-    || die "$_pkg has no revision $_rev, which is what its own nimble.lock names"
-  rm -rf "$_dir.locked/.git" && rm -rf "$_dir" && mv "$_dir.locked" "$_dir"
+  # Fetch the ONE commit rather than clone the history. Forty-five full clones —
+  # libp2p, boringssl, lsquic and the rest — is minutes of runner time for
+  # objects nothing reads. Submodules come along because some of these packages
+  # (boringssl, lsquic, nat_traversal) are a thin Nim wrapper over a vendored C
+  # tree, and a checkout without them compiles to a missing-header error that
+  # says nothing about submodules.
+  mkdir -p "$_dir.locked" && git -C "$_dir.locked" init -q
+  if git -C "$_dir.locked" fetch -q --depth 1 --recurse-submodules \
+        "$_url" "$_rev" 2>/dev/null \
+     && git -C "$_dir.locked" checkout -q FETCH_HEAD 2>/dev/null; then
+    :
+  else
+    # Not every server allows asking for a bare SHA. Fall back to the whole
+    # history rather than fail — slower is not wrong.
+    rm -rf "$_dir.locked"
+    git clone -q --recurse-submodules "$_url" "$_dir.locked" \
+      || die "could not clone $_url for $_pkg"
+    git -C "$_dir.locked" checkout -q "$_rev" \
+      || die "$_pkg has no revision $_rev, which is what its own nimble.lock names"
+    git -C "$_dir.locked" submodule update -q --init --recursive 2>/dev/null || true
+  fi
+  find "$_dir.locked" -name .git -maxdepth 3 -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "$_dir" && mv "$_dir.locked" "$_dir"
   printf '%s' "$_meta" > "$_dir/nimblemeta.json"
   printf '%s' "$_rev" > "$_dir/.locked-rev"
 }
@@ -260,9 +300,17 @@ if [ ! -f "$DELIVERY_DYLIB" ]; then
   # The lock pins, see the header note. Done after `build-deps` because that is
   # what populates nimbledeps/ — and undone by nothing, because a rebuilt
   # nimbledeps re-resolves them wrong every time.
-  for _p in $DELIVERY_PINNED_PKGS; do
-    pin_locked_pkg "$DELIVERY_LIB_SRC" "$_p"
+  _pins="$DELIVERY_PINNED_PKGS"
+  [ -n "$_pins" ] || _pins="$(lock_pkgs "$DELIVERY_LIB_SRC")"
+  [ -n "$_pins" ] || die "logos-delivery has no readable nimble.lock, so there is
+nothing to pin its dependencies to — and an unpinned set is what this step
+exists to prevent. Do not skip past this."
+  echo "  pinning dependencies to nimble.lock ($(printf '%s\n' $_pins | wc -w | tr -d ' ') package(s) named)"
+  _pinned=0
+  for _p in $_pins; do
+    pin_locked_pkg "$DELIVERY_LIB_SRC" "$_p" && _pinned=$((_pinned+1))
   done
+  echo "  $_pinned package(s) considered; the lock is now what is on disk"
   # librln BEFORE liblogosdelivery, and it is not part of `build-deps`.
   # `liblogosdelivery`'s Nim link line ends in `--passL:librln_v2.0.2.a`, and
   # that archive is built by its own Makefile target, which first does
