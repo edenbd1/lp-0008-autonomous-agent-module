@@ -42,14 +42,24 @@ them from the checkout instead of quoting them.
 ## 1. Prove it from a clean clone
 
 ```sh
-git clone https://github.com/edenbd1/lp-0008-autonomous-agent-module
+git clone --depth 1 https://github.com/edenbd1/lp-0008-autonomous-agent-module
 cd lp-0008-autonomous-agent-module
 ./scripts/demo.sh
 ```
 
+**`--depth 1` on purpose, and it is worth the four characters.** Measured just
+now, on this machine, against this repository: `--depth 1` takes **9 seconds and
+52 MB**, a full clone takes **57 seconds and 222 MB**. The difference is
+history, not content — `module/agent.lgx` is an 18 MB packaged plugin and
+thirty-five versions of it have been committed as it was rebuilt. Nothing below
+needs any of them. Drop the flag if you want the history; the working tree is
+identical either way.
+
 A Rust toolchain, `python3` and `curl`. No funded account, no keys, no local
 sequencer, no Logos install, and nothing to configure. The script exports
-`RISC0_DEV_MODE=0` itself.
+`RISC0_DEV_MODE=0` itself, and refuses up front — naming what is missing and
+where to get it — rather than failing partway through on a machine that has no
+compiler.
 
 It runs the policy crate's adversarial tests; recomputes the deployed program's
 transaction hash from the committed binary (a LEZ deploy hash is
