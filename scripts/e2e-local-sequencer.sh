@@ -307,6 +307,38 @@ trap cleanup EXIT INT TERM
 say "[0/5] the machine this is being proved on"
 machine_facts
 
+# REFUSE A RUNNER THAT CANNOT FINISH, in two minutes rather than in five hours
+# and forty. Measured across four runs of this job, and the correlation is not
+# subtle:
+#
+#   run 31916748823  success    Mem: 15 GiB   (4 vCPU)   lifecycle 3h05
+#   run 31929846814  success    Mem: 15 GiB   (4 vCPU)   lifecycle 2h16
+#   run 31968154176  cancelled  Mem:  7 GiB   (2 vCPU)   killed at the cap
+#   run 31950647965  cancelled  Mem:  7 GiB   (2 vCPU)   killed at the cap
+#
+# Proving is CPU-bound and r0vm saturates whatever it is given: on the 2-vCPU
+# runs it sat at ~190% of two cores and each proof took 1h42 instead of 25
+# minutes. Three proofs at that rate is over five hours before the build steps
+# are counted, and 340 minutes is not a budget anyone chose -- it is the ceiling
+# for a GitHub-hosted job. Which class a run lands on is GitHub's decision.
+#
+# So this fails, loudly, rather than spending the budget to arrive at the same
+# answer. It is a RED and not a skip: the lifecycle did not run, and a job that
+# reports otherwise is the thing this workflow refuses to be. Re-dispatching is
+# a fresh draw.
+CORES=$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 0) | head -1 )
+case "$CORES" in ''|*[!0-9]*) CORES=0 ;; esac
+if [ "${E2E_ALLOW_SMALL_RUNNER:-0}" = "1" ]; then
+  [ "$CORES" -lt 4 ] && say "E2E_ALLOW_SMALL_RUNNER=1: running on $CORES core(s) anyway"
+elif [ "$CORES" -gt 0 ] && [ "$CORES" -lt 4 ]; then
+  die "this runner has $CORES core(s), and every run of this job on fewer than
+four has been killed at the 340-minute cap with the lifecycle unfinished, while
+every run on four has finished green. Proving is CPU-bound and 340 minutes is
+the ceiling for a GitHub-hosted job, so there is no budget to raise. Nothing was
+proved here and nothing is claimed. Re-dispatch: the runner class is drawn per
+run. To spend the five hours anyway, set E2E_ALLOW_SMALL_RUNNER=1."
+fi
+
 say "[1/5] starting a real sequencer in standalone mode on $RPC"
 python3 - "$CONFIG_SRC" "$SEQ_HOME" <<'PY'
 import json, sys
