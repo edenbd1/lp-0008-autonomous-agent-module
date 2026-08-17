@@ -241,6 +241,18 @@ account it asks to be paid into, each with its verifying key published beside it
 as `<category>.pub`. The storage agent's is
 [`storage.json`](../artifacts/agent-cards/storage.json).
 
+**The blockchain agent's card advertises `storage.upload`, and that reads like a
+mistake until you check what it has been paid for.** It is deliberate. All three
+agents load the same module and register the same skills, so any of them can
+serve any of them; what differs is what each has actually done. Every row in
+[`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv) where this agent was the
+server names `storage.upload`, because that is the skill
+`scripts/delivery-in-plugin.sh settle` asks it for. Advertising `program.call`
+instead would read better as a label for a "blockchain agent" and would be a
+claim about work it has never been paid to do. The card's own `description`
+carries the same sentence — "Settles and queries on LEZ, and serves storage tasks
+it is paid for" — so the card is not relying on this paragraph to be honest.
+
 Rules a producer MUST follow:
 
 - **`skills` comes from the skill registry, not from a literal.** `agent.card`
