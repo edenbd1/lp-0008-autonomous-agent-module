@@ -63,10 +63,31 @@ jobs:
 
       # Proving time is a function of cores, and the timeout above is justified
       # by a measurement on a specific machine, so record which machine.
-      - name: What this is proving on
+      - name: What this is proving on, and whether it can finish
         run: |
           echo "cores: $(nproc)"
           free -g || true
+          # REFUSE HERE, not sixteen minutes later. The script carries the same
+          # guard, but it runs at the top of the lifecycle step -- after spel,
+          # the sequencer and the wallet have been built. Measured: that
+          # refusal cost 16m50s of wall time. This one costs about forty
+          # seconds, and the two disagree about nothing: same threshold, same
+          # reason, same red.
+          #
+          # Every run of this job on fewer than four cores has been killed at
+          # the 340-minute cap with the lifecycle unfinished; every run on four
+          # has finished green. 340 is the ceiling for a GitHub-hosted job, so
+          # there is no budget to raise, and which class a run draws is not
+          # ours to choose. A refusal is a RED and not a skip: nothing was
+          # proved, and nothing is claimed.
+          cores=$(nproc)
+          if [ "${E2E_ALLOW_SMALL_RUNNER:-0}" != "1" ] && [ "$cores" -lt 4 ]; then
+            echo "this runner has $cores core(s) and cannot finish this job inside"
+            echo "the 340-minute ceiling. Nothing was proved here. Re-dispatch —"
+            echo "the runner class is drawn per run. E2E_ALLOW_SMALL_RUNNER=1"
+            echo "spends the hours anyway."
+            exit 1
+          fi
 
       - name: Check out logos-execution-zone
         run: |
