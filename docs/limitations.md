@@ -1039,20 +1039,36 @@ blocks — a proof, a confirmation, an owner wait — moves every later step pas
 events that used to follow it, and the assertions written against the fast mode
 keep their shape while losing their meaning.
 
-## The Delivery node runs are local, not CI
+## Which node runs happen in CI, and which are still local
 
-Building `liblogosdelivery` takes tens of minutes — there is no prebuilt Linux
-library anywhere public to download — and the run needs live peers, so
-`scripts/exercise-nodes.sh` is a local command. The reasoning is in
-[`docs/skills.md`](skills.md).
+This heading has been wrong twice, in opposite directions, and both corrections
+are kept because the shape of the mistake is the same each time: a sentence
+about one library applied to another, and then a sentence about one script
+applied to a workflow that had changed under it.
 
-**The Storage half of that sentence was wrong and this heading used to carry
-it.** `logos-storage-nim` publishes a full release asset matrix, so the
-`storage-node` job in `.github/workflows/ci.yml` downloads a checksum-pinned
-`libstorage`, builds `module/tests/storage_node_drive.c` against it, and drives a
-real node on the runner with two negative controls under it. The libraries are
-not alike in what upstream ships, and treating them as one is what produced a
-false "not in CI" for both.
+**A real Delivery node now runs in CI.** As of run `32040423074`, step 19 of
+`alongside-companion-modules.yml` builds `liblogosdelivery` from source on a
+bare Linux runner, compiles `scripts/use-cases/share_drive.c` against it, and
+drives the file-vault use case end to end: a file encrypted, stored on a real
+Storage node under CID `zDvZRwzm9Ni32iyvoy868YVrBHFz8vo3oZirrCKhFMMn9aXuinfQ`,
+published on `/lp0008/1/owner-vault/proto`, fetched back by content address
+alone and decrypted. So "the Delivery node runs are local, not CI" — which this
+heading said until today — is no longer true.
+
+**`scripts/exercise-nodes.sh` is still a local command**, and that is a
+different statement. It drives both node libraries directly rather than through
+the module, and it needs live peers on a public relay network; a required job
+that goes amber on a bad afternoon teaches everyone to ignore it. Its transcript
+is committed at [`artifacts/e2e/exercise-nodes.txt`](../artifacts/e2e/exercise-nodes.txt)
+because a local run nobody can read is the same as a run that did not happen.
+
+**The Storage half was wrong earlier, in the other direction.**
+`logos-storage-nim` publishes a full release asset matrix, so the `storage-node`
+job in `.github/workflows/ci.yml` downloads a checksum-pinned `libstorage`,
+builds `module/tests/storage_node_drive.c` against it, and drives a real node on
+the runner with two negative controls under it. The libraries are not alike in
+what upstream ships, and treating them as one is what produced a false "not in
+CI" for both.
 `scripts/owner-channel-live.sh` is local for the same reason and one more: it
 needs *two* nodes to find each other through public relays, so it depends on the
 health of a network this repository does not run. A required job that goes amber
@@ -1063,8 +1079,12 @@ both of those: it moves real LEZ on a testnet whose faucet is gone, and a job
 that spends money on every push would empty the agents inside a day. The half
 of it that can be checked freely is split out — `delivery-in-plugin.sh signers`
 needs no key, no second agent and no chain, and it is the one to run when either
-delegate changes. It is still not in CI, because it starts a Delivery node and
-so inherits the first reason.
+delegate changes. It is still not in CI, and the reason has changed: it used to
+be that a Delivery node could not be started on a runner at all, and step 19 of
+the `alongside` workflow has since disproved that. What remains is cost — every
+Delivery node in CI is a fourteen-minute Nim build ahead of it — which is a
+choice about what to spend, not an impossibility. It is written here as the
+weaker reason it now is.
 
 So neither of them runs on a push, and the honest statement of what that costs
 is this: a change that stopped the module refusing correctly would be caught by

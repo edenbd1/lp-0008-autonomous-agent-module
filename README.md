@@ -1241,11 +1241,14 @@ AppImage must be refused before anything is unpacked, a variant this machine
 cannot use must be refused before anything is installed, and asking the runtime
 for a module that is not there must go red at the load. It has been rehearsed
 end to end in a bare `ubuntu:24.04` amd64 container, step for step, including
-all three controls; it has not yet run on a GitHub runner, because nothing here
-has been pushed. The `linux-arm64` leg is not in CI and was exercised the same
-way, in a native `linux/arm64` container against the `aarch64` AppImage — 40
-assertions, 0 failures — which is stated rather than added as a second job
-nothing has watched run.
+all three controls, and it has since run green on a GitHub runner — the job is
+**"Logos Core loads and configures the shipped module, headless, on Linux"** in
+`ci.yml`, and it passes on every push. This paragraph said "it has not yet run
+on a GitHub runner, because nothing here has been pushed" for as long as that
+was true, which was until the repository was made public. The `linux-arm64` leg
+is still not in CI and was exercised the same way, in a native `linux/arm64`
+container against the `aarch64` AppImage — 40 assertions, 0 failures — which is
+stated rather than added as a second job nothing has watched run.
 
 That job runs on a runner this repository *prepared*, which is the one thing it
 cannot prove about "any machine". `./scripts/harness-no-toolchain.sh` is the
@@ -1275,9 +1278,10 @@ to be read before the rest. It carries, among others: that `getAccount` cannot
 see a private balance, so a payment into a shielded account is checkable by its
 payee and by nobody else; that no model has
 ever been run against the inference port — the local backend is a stub with an
-honest name and the HTTP backend has never made a real request; and that the
-Delivery node run in §7 is a local command rather than CI, for the reason §7
-gives (the Storage one is a CI job).
+honest name and the HTTP backend has never made a real request; and that
+`scripts/exercise-nodes.sh` in §7 remains a local command, though a real
+Delivery node does now run in CI — step 19 of the `alongside` workflow drives
+the file-vault use case against one, and the Storage node has its own job.
 
 Retractions live there too, with what replaced them. If you find a gap that is
 not in that file, it is an omission rather than a decision.
