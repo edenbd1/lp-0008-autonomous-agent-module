@@ -49,7 +49,7 @@
 >
 > | # | Blocker | State |
 > |---|---|---|
-> | 1 | **No recorded video demo.** The prize requires narrated walkthroughs of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. This is the only blocker left, and it is the one with real work in it. | Not recorded. Placeholder in [Supporting Materials](#supporting-materials). |
+> | 1 | **No recorded video demo.** The prize requires a narrated walkthrough of ≥3 use cases showing terminal output that confirms `RISC0_DEV_MODE=0`. A silent screencast is explicitly insufficient. | **Departed 2026-08-17.** One walkthrough, 21 m 57 s, four use cases, published with the submission and linked from [Supporting Materials](#supporting-materials). |
 >
 > This table has now held four different blockers, and each departure is recorded
 > rather than quietly deleted, because a stale blocker is more corrosive than a
@@ -465,7 +465,7 @@ said the host forbade it, the host did not, and both are now MET — built, run,
 and quoted below. An unbuilt thing dressed as an impossible one costs exactly one
 criterion each time, and this is what that cost looked like.
 
-The counts stated with this list are **22 MET and 1 UNMET of 23**, and they are
+The counts stated with this list are **23 MET and 0 UNMET of 23**, and they are
 repeated once, at the end of the list, with the arithmetic beside them. If a box
 and a count ever disagree, the boxes are the authority — a summary that has to be
 believed rather than counted is how the previous three tallies here went wrong.
@@ -1923,19 +1923,21 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   from a clean clone with only a Rust toolchain — no funded account, no keys, no
   local sequencer — against the public testnet.
 
-- [ ] **UNMET `[NOT BUILT]` — A recorded video demo showing terminal output
-  confirming `RISC0_DEV_MODE=0` was active.**
-  Filming has started — the settlement in block 9938 was run for the camera
-  rather than replayed, which is why it is on chain — but **no finished film
-  exists in this repository or anywhere it links to**, and
-  [Supporting Materials](#supporting-materials) still carries a placeholder URL.
-  Checked by looking: there is no `.mp4`, `.mov` or `.webm` under any path here.
-  Blocker 1, and now the **only** unchecked box on this list.
+- [x] **MET — A recorded video demo showing terminal output confirming
+  `RISC0_DEV_MODE=0` was active.**
+  [`lp8-demo.mp4`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/releases/download/demo-v1/lp8-demo.mp4) — one narrated
+  walkthrough, 21 m 57 s, against the public testnet, with four illustrative use
+  cases running in it. The settlement in block 9938 was run for the camera rather
+  than replayed, which is why it is on chain; the one the film ends on is block
+  10102. Gated rather than asserted: `./scripts/check-video.py` samples frames,
+  OCRs them, and asserts the public testnet's domain is on screen, that no
+  loopback address or `dev_mode=1` appears in any of them, that
+  `RISC0_DEV_MODE=0` is legible, and that at least three use-case scripts
+  actually run — it reports four.
 
-**Tally: 22 MET, 1 UNMET, of the 23 criteria the prize lists** — Functionality
+**Tally: 23 MET, 0 UNMET, of the 23 criteria the prize lists** — Functionality
 11 of 11, Usability 2 of 2, Reliability 3 of 3, Performance 1 of 1, Supportability
-5 of 6. The parts sum to the whole: 11 + 2 + 3 + 1 + 5 = 22, and the single UNMET
-is the video, in Supportability: 0 + 0 + 0 + 0 + 1 = 1.
+6 of 6. The parts sum to the whole: 11 + 2 + 3 + 1 + 6 = 23.
 
 That is derived by counting the boxes in the five sections above, not carried
 forward from the last pass. The line has twice disagreed with itself here — see
@@ -1997,7 +1999,7 @@ the same answer about what is missing and whose it is.
 
 | Criterion | Cause | What closing it takes |
 |---|---|---|
-| Recorded video demo | `[NOT BUILT]` | Finish and publish the films. Irreducible work. |
+| Recorded video demo | **closed 2026-08-17** | One walkthrough covering four use cases, published as a release asset. |
 
 The row above it read `CI green on the default branch | [NOT BUILT] | A control
 that mutates the card's price to something *other* than its own value, and one
@@ -2216,16 +2218,23 @@ failed rather than blaming the wrong one.
 
 ## Supporting Materials
 
-- 🎥 **VIDEO DEMO — PLACEHOLDER, NOT YET RECORDED**
-  `<<< VIDEO URL TO BE INSERTED HERE >>>`
-  Must be a narrated walkthrough — a silent screencast is explicitly insufficient —
-  covering ≥3 illustrative use cases, with terminal output visible confirming
-  `RISC0_DEV_MODE=0`, against the **public testnet** rather than a localnet. Three
-  use cases are demonstrable end-to-end today — the agent services / paid skill
-  marketplace, the privacy-preserving notary and the on-chain event alerter — plus
-  the personal file vault against real Storage and Messaging nodes, which records
-  nothing on chain. An earlier version of this line said only one was, which was
-  true when written and has not been true for some time.
+- 🎥 **VIDEO DEMO** — [`lp8-demo.mp4`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/releases/download/demo-v1/lp8-demo.mp4) (21 m 57 s, subtitles alongside it)
+  A narrated walkthrough — a silent screencast is explicitly insufficient —
+  against the **public testnet** rather than a localnet, with terminal output
+  visible confirming `RISC0_DEV_MODE=0`. **Four** illustrative use cases run in
+  it: the spending threshold and its refusal above the ceiling, the
+  privacy-preserving notary, the on-chain event alerter, and the agent services /
+  paid skill marketplace, which settles on chain with the recipient going
+  107 → 108 LEZ and no owner signing. The personal file vault runs against real
+  Storage and Messaging nodes and records nothing on chain, so it is not in the
+  film.
+
+  **One file, not two.** It was published as two halves first, which covered
+  three use cases between them and one in the half carrying the payment — the
+  half a reviewer opens. The criterion says *a recorded video demo*, singular.
+  `./scripts/check-video.py` now counts use cases as well as reading the
+  endpoint off the screen; it reports four here and refuses the superseded
+  second half at one.
 
 - **Live evidence, re-derivable:** [`artifacts/agents.tsv`](artifacts/agents.tsv),
   [`artifacts/anchored.tsv`](artifacts/anchored.tsv),
