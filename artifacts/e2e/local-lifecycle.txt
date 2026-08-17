@@ -1,0 +1,99 @@
+=== machine: 14 cores, 24 GiB
+=== LEZ_SRC=/Users/eden/logos/src/lez-v0.2.2 at d6e4ae69
+=== RISC0_DEV_MODE=0
+
+[0/5] the machine this is being proved on
+  host      Darwin arm64, 14 cpu(s)
+  cpu       Apple M4 Pro
+  load      3.42 3.27 3.18
+  r0vm      risc0-r0vm 3.0.5
+  dev mode  RISC0_DEV_MODE=0   (0 = real proofs)
+
+[1/5] starting a real sequencer in standalone mode on http://localhost:3141
+  up, pid 76774
+
+[2/5] a throwaway wallet pointed at it
+  imported Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+
+[3/5] funding it from the genesis vault
+  balance 5000
+
+[4/5] deploy the policy program and anchor an agent's envelope
+  deployed 697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf
+    funding the agent: still working, 0h01m00s in (run 0h02m02s) | block 9 | 3 proc(s), 1186% cpu, 4.9 GiB rss
+      seq| [2026-08-17T08:40:58Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:64769 conn_id=23
+    funding the agent: still working, 0h02m01s in (run 0h03m03s) | block 13 | 3 proc(s), 1262% cpu, 2.6 GiB rss
+      seq| [2026-08-17T08:41:59Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:64794 conn_id=24
+    funding the agent: still working, 0h03m01s in (run 0h04m03s) | block 16 | 3 proc(s), 1249% cpu, 6.2 GiB rss
+      seq| [2026-08-17T08:42:59Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:64831 conn_id=25
+    funding the agent: still working, 0h04m01s in (run 0h05m03s) | block 20 | 3 proc(s), 1296% cpu, 3.4 GiB rss
+      seq| [2026-08-17T08:43:59Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:64855 conn_id=26
+    funding the agent: still working, 0h05m01s in (run 0h06m03s) | block 24 | 3 proc(s), 1280% cpu, 1.1 GiB rss
+      seq| [2026-08-17T08:44:59Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:64884 conn_id=27
+    funding the agent: 0h06m01s (block 28)
+    pace: 0h06m01s a step, 5 left, about 0h37m08s in total against a 5h40m00s cap
+  agent 4RWsFkU1SPoEVQvhAjoLRRS3sr9gcKRbHzyUu5HFqugs  (holds 1000)
+  policy 4DN3PbQMr9vmcQt5u5tXXuxBZ92ot5JKQM4VAWkjeYkc  (per-tx 100, per-period 500)
+    claim_agent: still working, 0h01m00s in (run 0h08m04s) | block 32 | 2 proc(s), 1283% cpu, 5.2 GiB rss
+      seq| [2026-08-17T08:47:00Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:64986 conn_id=49
+    claim_agent: still working, 0h02m00s in (run 0h09m04s) | block 36 | 2 proc(s), 1220% cpu, 6.7 GiB rss
+      seq| [2026-08-17T08:48:00Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65014 conn_id=50
+    claim_agent: still working, 0h03m00s in (run 0h10m04s) | block 40 | 2 proc(s), 867% cpu, 5.9 GiB rss
+      seq| [2026-08-17T08:49:00Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65042 conn_id=51
+    claim_agent: still working, 0h04m00s in (run 0h11m04s) | block 44 | 2 proc(s), 1260% cpu, 3.3 GiB rss
+      seq| [2026-08-17T08:50:00Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65069 conn_id=52
+    claim_agent: still working, 0h05m00s in (run 0h12m04s) | block 48 | 2 proc(s), 1181% cpu, 0.4 GiB rss
+      seq| [2026-08-17T08:51:00Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65096 conn_id=53
+    claim_agent: 0h06m00s (block 52)
+  agent claimed CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r as the only account that may anchor it -> f95d4850f5b6474af220fc7dd772108e25bab45e7a10e121d01395804a356cf9
+    create_policy: 0h01m00s (block 56)
+    pace: 0h04m20s a step, 3 left, about 0h27m04s in total against a 5h40m00s cap
+  policy anchored
+    the refused second anchor: still working, 0h01m00s in (run 0h15m05s) | block 60 | 1 proc(s), 0% cpu, 0.0 GiB rss
+      seq| [2026-08-17T08:54:01Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65198 conn_id=62
+    the refused second anchor: still working, 0h02m00s in (run 0h16m05s) | block 64 | 1 proc(s), 0% cpu, 0.0 GiB rss
+      seq| [2026-08-17T08:55:01Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65222 conn_id=63
+    the refused second anchor: still working, 0h03m00s in (run 0h17m05s) | block 68 | 1 proc(s), 0% cpu, 0.0 GiB rss
+      seq| [2026-08-17T08:56:01Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65253 conn_id=64
+    the refused second anchor: still working, 0h04m00s in (run 0h18m05s) | block 72 | 1 proc(s), 0% cpu, 0.0 GiB rss
+      seq| [2026-08-17T08:57:01Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65278 conn_id=65
+    the refused second anchor: still working, 0h05m00s in (run 0h19m05s) | block 76 | 1 proc(s), 0% cpu, 0.0 GiB rss
+      seq| [2026-08-17T08:58:01Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65308 conn_id=66
+    the refused second anchor: still working, 0h06m00s in (run 0h20m05s) | block 80 | 1 proc(s), 0% cpu, 0.0 GiB rss
+      seq| [2026-08-17T08:59:01Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65338 conn_id=67
+    the refused second anchor: 0h07m00s (block 84)
+  submitted edc0c7721d60acff07553002aebaf968026d84c31c3aacf5ec85866e41d1ad93, and the chain does not hold it
+  a second, unlimited policy for the same agent was refused, and the account still reads per_tx=100
+
+[5/5] the agent pays inside its envelope, and is refused outside it
+  recipient Public/AVTXe3Rnm6oZQrJksHEyJJqpNRd5cms6U9fiYJGieaNr  (separate wallet home; the payer has no key for it)
+    spend 50, inside the envelope: still working, 0h01m00s in (run 0h22m35s) | block 90 | 3 proc(s), 1303% cpu, 5.7 GiB rss
+      seq| [2026-08-17T09:01:31Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65458 conn_id=87
+    spend 50, inside the envelope: still working, 0h02m00s in (run 0h23m35s) | block 94 | 3 proc(s), 1268% cpu, 5.6 GiB rss
+      seq| [2026-08-17T09:02:31Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65483 conn_id=88
+    spend 50, inside the envelope: still working, 0h03m00s in (run 0h24m35s) | block 98 | 3 proc(s), 1263% cpu, 6.1 GiB rss
+      seq| [2026-08-17T09:03:32Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:65515 conn_id=89
+    spend 50, inside the envelope: still working, 0h04m01s in (run 0h25m36s) | block 102 | 3 proc(s), 1223% cpu, 3.1 GiB rss
+      seq| [2026-08-17T09:04:32Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:49157 conn_id=90
+    spend 50, inside the envelope: still working, 0h05m01s in (run 0h26m36s) | block 106 | 3 proc(s), 1192% cpu, 1.3 GiB rss
+      seq| [2026-08-17T09:05:32Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:49185 conn_id=91
+    spend 50, inside the envelope: still working, 0h06m01s in (run 0h27m36s) | block 110 | 3 proc(s), 1179% cpu, 0.6 GiB rss
+      seq| [2026-08-17T09:06:32Z INFO  jsonrpsee_server::server] connection; remote_addr=127.0.0.1:49213 conn_id=92
+    spend 50, inside the envelope: 0h07m01s (block 114)
+  50 (inside the envelope) -> 49a2abcb43f5621fe82f98b07a0513d8a674d1038f5544737487bc5c352ed278
+  recipient balance 0 -> 50  (+50, read back from the chain)
+    spend 300, outside the envelope: 0h01m00s (block 118)
+  300 (over the per-tx ceiling of 100, and inside the balance) -> refused
+         Program error 6005: the spend needs an owner approval: use spend_approved
+  recipient balance unchanged at 50 after the refusal
+
+VERIFIED
+A real sequencer, RISC0_DEV_MODE=0 throughout. The policy was anchored by
+address, a payment inside the envelope moved balance between two parties
+unattended, and a payment outside it was refused with no owner approval
+present and no balance moved.
+
+real	29m35.849s
+user	200m51.660s
+sys	1m43.872s
+=== exit 0

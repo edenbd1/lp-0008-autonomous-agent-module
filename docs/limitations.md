@@ -1444,6 +1444,40 @@ Until then the job refuses a runner it cannot finish on — a red in forty
 seconds, naming the reason, rather than five hours and forty minutes spent
 arriving at the same place. `E2E_ALLOW_SMALL_RUNNER=1` spends them anyway.
 
+**And the lifecycle itself is not in question, which is worth separating from
+the runner.** The same script, unmodified, on a fourteen-core machine:
+
+```
+$ RISC0_DEV_MODE=0 LEZ_SRC=… ./scripts/e2e-local-sequencer.sh
+[4/5] deploy the policy program and anchor an agent's envelope
+    funding the agent:            0h06m01s (block 28)
+    claim_agent:                  0h06m00s (block 52)
+    create_policy:                0h01m00s (block 56)
+    the refused second anchor:    0h07m00s (block 84)
+  a second, unlimited policy for the same agent was refused, and the account
+  still reads per_tx=100
+[5/5] the agent pays inside its envelope, and is refused outside it
+  50 (inside the envelope) -> 49a2abcb…c352ed278
+  recipient balance 0 -> 50  (+50, read back from the chain)
+  300 (over the per-tx ceiling of 100, and inside the balance) -> refused
+       Program error 6005: the spend needs an owner approval: use spend_approved
+  recipient balance unchanged at 50 after the refusal
+VERIFIED
+real  29m35.849s
+```
+
+Every one of the nine stage assertions `e2e-local-sequencer.yml` makes about its
+own output is present in that transcript, which is
+[`artifacts/e2e/local-lifecycle.txt`](../artifacts/e2e/local-lifecycle.txt).
+r0vm ran at 1303 % there against 190 % on the two-core runner, and each proof
+took six minutes against 1 h 42 — the same ratio, from the other end.
+
+Two things that transcript is NOT. It ran against the LEZ checkout at `v0.2.2`,
+where the workflow pins `47eba25`, so it is not the pinned revision. And a local
+run is not CI: the criterion asks for the job, and the job is what a reader can
+check. What it does establish is that the failing runs failed for want of cores
+and nothing else.
+
 ## The Delivery library pinned for CI does not build, and ours came from elsewhere
 
 `scripts/build-companion-modules.sh` pins `logos-delivery` at `f8b0365`, which
