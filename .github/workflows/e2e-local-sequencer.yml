@@ -77,15 +77,22 @@ jobs:
           # Every run of this job on fewer than four cores has been killed at
           # the 340-minute cap with the lifecycle unfinished; every run on four
           # has finished green. 340 is the ceiling for a GitHub-hosted job, so
-          # there is no budget to raise, and which class a run draws is not
-          # ours to choose. A refusal is a RED and not a skip: nothing was
-          # proved, and nothing is claimed.
+          # there is no budget to raise. A refusal is a RED and not a skip:
+          # nothing was proved, and nothing is claimed.
+          #
+          # WHICH CLASS YOU GET IS NOT A LOTTERY, whatever the message below
+          # used to say. It follows repository visibility: private repos get
+          # 2 cores and 8 GB, public ones get 4 and 16. Re-dispatching a run
+          # that "lost" is therefore futile while the repo is private, and
+          # hours went into learning that the expensive way. If this refuses,
+          # look at the repository's visibility before looking at anything else.
           cores=$(nproc)
           if [ "${E2E_ALLOW_SMALL_RUNNER:-0}" != "1" ] && [ "$cores" -lt 4 ]; then
             echo "this runner has $cores core(s) and cannot finish this job inside"
-            echo "the 340-minute ceiling. Nothing was proved here. Re-dispatch —"
-            echo "the runner class is drawn per run. E2E_ALLOW_SMALL_RUNNER=1"
-            echo "spends the hours anyway."
+            echo "the 340-minute ceiling. Nothing was proved here."
+            echo "Runner size follows repository VISIBILITY, not luck: private"
+            echo "gets 2 cores, public gets 4. Re-dispatching draws the same"
+            echo "machine. E2E_ALLOW_SMALL_RUNNER=1 spends the hours anyway."
             exit 1
           fi
 
