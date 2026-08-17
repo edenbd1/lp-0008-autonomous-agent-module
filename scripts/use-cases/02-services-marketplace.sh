@@ -173,6 +173,46 @@ print(json.dumps(card))" | verify_card --quiet 2>/dev/null; then
   fi
 fi
 
+# EVERY COMMITTED CARD, not only the one this script is about to pay.
+#
+# "Two or more agents discover each other via Agent Cards" is a claim about both
+# ends, and for a long time only the seller's card was committed — so a reader
+# who did not run two live modules could check one side and had nothing to check
+# the other against. There are three now, one per deployed agent. A signed
+# artefact nothing verifies is how this repository shipped a card carrying 128
+# hex characters where RFC 7515 requires base64url, for the life of the file, so
+# each is checked against the key published beside it and each is required to
+# fail when a field is changed underneath the signature.
+for card_file in "$CARDS"/*.json; do
+  cat_name=$(basename "$card_file" .json)
+  [ "$cat_name" = "$SERVER_CAT" ] && continue   # checked above, with its control
+  pub_file="$CARDS/$cat_name.pub"
+  if [ ! -s "$pub_file" ]; then
+    bad "$cat_name.json has no $cat_name.pub, so nothing can verify it"
+    continue
+  fi
+  if python3 scripts/use-cases/verify-agent-card.py \
+       --public-key "$(cat "$pub_file")" --quiet < "$card_file"; then
+    ok "$cat_name.json verifies against the key published beside it"
+  else
+    bad "$cat_name.json does not verify against $cat_name.pub"
+  fi
+  # The same control, on the same field, for the same reason: a verifier that
+  # returned true regardless would have passed the line above just as happily.
+  # `+ 1` off the card's own price rather than a literal, so the mutation cannot
+  # collide with the value it is mutating.
+  if python3 -c "
+import json
+card = json.load(open('$card_file'))
+card['x-logos']['pricePerTask'] = int(card['x-logos']['pricePerTask']) + 1
+print(json.dumps(card))" | python3 scripts/use-cases/verify-agent-card.py \
+       --public-key "$(cat "$pub_file")" --quiet 2>/dev/null; then
+    bad "control: $cat_name.json still verified with its price rewritten"
+  else
+    ok "control: rewriting the price breaks $cat_name.json's signature"
+  fi
+done
+
 rule "3. discovery, and the client's own limit"
 echo "  client  $CLIENT  ($CLIENT_CAT)"
 echo "  server  $SERVER  ($SERVER_CAT)"

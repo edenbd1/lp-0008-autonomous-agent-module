@@ -1,0 +1,69 @@
+{
+  "capabilities": {
+    "pushNotifications": false,
+    "stateTransitionHistory": true,
+    "streaming": true
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "description": "Settles and queries on LEZ, and serves storage tasks it is paid for",
+  "name": "logos-blockchain-agent",
+  "preferredTransport": "logos-messaging",
+  "protocolVersion": "0.3.0",
+  "provider": {
+    "organization": "LP-0008 reference agent",
+    "url": "https://github.com/logos-co/lambda-prize"
+  },
+  "signatures": [
+    {
+      "protected": "eyJhbGciOiJzZWNwMjU2azEtYmlwMzQwIiwia2lkIjoiQnpZa3M5MWFHZW5FbXBEb293ZGkzVVVVamp5d3cxZU1QTXppYmhIMndMbnUifQ",
+      "signature": "KJORB9WhemoSUr25F4S2DfAbyWFELYxq9n79QR0Lms_HN364P8xoZUWj9nBQ5v5m6I83PQdhhk0ev6Op1M2LPQ"
+    }
+  ],
+  "skills": [
+    {
+      "description": "Encrypt and upload a file, returning a content address",
+      "id": "storage.upload",
+      "inputModes": [
+        "application/json"
+      ],
+      "name": "storage.upload",
+      "outputModes": [
+        "application/json"
+      ],
+      "tags": [
+        "storage"
+      ],
+      "x-logos-parameters": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "url": "logos-messaging://A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu",
+  "version": "0.1.0",
+  "x-logos": {
+    "lezAccount": "A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu",
+    "paymentAccount": "Public/BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu",
+    "pricePerTask": 1,
+    "settlement": "lez-chained-authenticated-transfer",
+    "shieldedPaymentKeys": {
+      "npk": "c996cffd0b7ef3c443658c8210ecce14c110c930d7b0d9751ae168e2e1c2f472",
+      "vpk": "a37bb8cd2734870165f4a73eba263ee43a462cd660277362ae883941e06ee4b74c1ba12f738b0060b97049c651cdd5593182243da50f83812a65c335d487b9f2000ea387909e7709a9d74706d65fe2793381eb07f1f1209495327ab0422ad282442b60cd3908607188a1c60f3f062ad84a60a03a625144bd24dcc01d4c75715cc2629a7b835132d0974e52539c6c20443f379dfa102aee3c7f0eb91eed573fbe235f730911d21395800790bbf4578ad301e1657e8641476dd8bc739777b6f0aa94abc3a0ab3d03eac0e18539bab5813aa8b8419208d241ab924953d1428d4f6cc5a969b037320061039df0c4a6ad4473ebfc922e64128b50bd6990a61b3abe750909c129ac4d6455ddb72763b6b32526a7ef4309c9b4c788fa836fa54572d89362042f39113be8363b8c2aa6472359f7ebbc842b86169285f4835cbc00908d54af4c811703faac0411a34a575c7bb666f80866a7f96a32c659da8549ae3c547533ac3763bee36b4a3f943cbc6371d212caf246c76937083b799cbe3476bdeb94c8c6b838e51cbffa08e9c7a2e2d38d146b4a40489429cb9d2de4197f8397be324d5fe8a2427795f08277987c6f3010bf296bb5c7e34c83ba16115650f226b5e130650c4b5aea314e87d46d27b248ef062e28eb78d80b26c6b567fc36afa2749f1ae847d4356773d807f03b88dc7b32ed5b7c38b71fad3b5ae7d8abc6f939de32b2a388b9d1a34942acbb38470818f83f0d6511a6d56ea6e2c98ce4004c09ae22f636ff98cec72769e23a7a8361ae07b8a414768ec6605546b658c7176f178b2b623538a9172d055a4180b660ace604939b06cd1651c73c2a92287e6c623630f788fb63126e639b2feba181aa079d9b93c34121454504cc421c33bc171126caaac1b50a02a94c42c009c64d5936654a040c62d068119791d17cbf495611911395fcb541d457c897fc9bd2c5b0cc2767ce735b1d21090c9a44ea8c03176ab92c72087765c4399c44bb38bd581341d6096c98650abd46880fb3cd49bb1b94c69a3109c0018c0d7d1c733d405f3bb74c175cae5b645930eaa024d77642106e2ddb660d926951f3c205046b67250dd34937abc68e7bb33218b9a86d06839eeb8a42688960e57883f8b958148d6156a7e3030d40c7b82bac913e46324677ba3c0a376c1457d12aad17786d149974f471511b684631a21ac4352082b0b9f53816bf0b4eaf71ca4b3982356594a6c5b24a6c52e8d70c8fd44e2b3597f5b6ceee27c8c2fac0cae1910804616db672e232c96acb56b81931fe7c318dd26ac25a0287f0242a445e0db859979c10f48a0c1259870ef4b6ba88055a8525e8f40f275120b266498a8b5b48359860555ebdba3c4a4c3e8651a9e4b14040f28a644821a912a216a652ef95c918005d980297527b9889c5b0ccd4271a241ba43c5f25046a17ac4fee708fde3a6af012028d400f5fbc395ae25882e4b8d38171f218332ec077887aa51424c029da43b590762b4b232c7c9de83c714fa5c6c2e42fa3f06efacc63c55a94de43ac3b36c0f0e107bc8964809b5d06cc3dfbc604a9b91f5cf10f84f30e69638ed5632904b29797480916367d898612372b99e53ac19d1bb84475c689668456342fbd6932c39ba112bbd971f485c3808929e495985cc973c0df5d504a2eab"
+    }
+  }
+}

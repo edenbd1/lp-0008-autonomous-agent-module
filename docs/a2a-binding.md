@@ -158,8 +158,24 @@ so the requirement is met.
 
 ### 3.1 What a conforming card looks like
 
-The card `agent.card` builds (`CardSkill` in `agent_skills.cpp`), and the one
-`scripts/a2a-task.sh` publishes to testnet, field for field:
+There are two producers of a card in this repository, and a reader has to know
+which one made the document in front of them, because they do not carry the same
+`skills` array:
+
+- **`agent.card`** (`CardSkill` in `agent_skills.cpp`) builds a card from the
+  module's own registry, so it advertises **every** skill that module registers
+  — all 28 of them — each with the parameter schema that skill answers
+  `parameterSchema()` with. That is the card the two loaded modules in
+  `scripts/delivery-in-plugin.sh` publish and discover.
+- **`scripts/agent-card.py`** builds the card an agent is *deployed to sell*: the
+  one priced service, with the price it is settled at. That is what is committed
+  under `artifacts/agent-cards/`, what `scripts/a2a-task.sh` publishes to
+  testnet, and what `scripts/use-cases/02-services-marketplace.sh` reads back as
+  `skills[0]`.
+
+Everything outside `skills` is the same in both, field for field. This section
+used to assert that the two were the same document altogether, which was
+comfortable and not true. A worked example, the committed storage agent's card:
 
 ```json
 {
@@ -188,20 +204,42 @@ The card `agent.card` builds (`CardSkill` in `agent_skills.cpp`), and the one
       "tags": ["storage"],
       "inputModes": ["application/json"],
       "outputModes": ["application/json"],
-      "x-logos-parameters": { "type": "object", "properties": { "…": {} } }
+      "x-logos-parameters": {
+        "type": "object",
+        "required": ["path"],
+        "properties": { "path": {"type": "string"}, "label": {"type": "string"} }
+      }
     }
   ],
   "x-logos": {
     "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
     "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
-    "pricePerTask": 5,
+    "shieldedPaymentKeys": { "npk": "c10c15ac…", "vpk": "3d367795…" },
+    "pricePerTask": 1,
     "settlement": "lez-chained-authenticated-transfer"
   },
   "signatures": [ { "protected": "eyJhbGci…", "signature": "…" } ]
 }
 ```
 
-The live one is in [`artifacts/agent-cards/storage.json`](../artifacts/agent-cards/storage.json).
+The `x-logos-parameters` value above is not an illustration: it is
+`UploadSkill::parameterSchema()`, and it is on the card because
+`scripts/agent-card.py` reads it out of the module rather than restating it.
+
+**`pricePerTask` is 1, and this section said 5 for as long as it was 1.** The
+number is not free-standing prose — the card is signed over its own contents, a
+client pays what the card advertises (`scripts/use-cases/02-services-marketplace.sh`
+takes the price from the card and from nowhere else), and the last five rows of
+`artifacts/a2a-task.tsv` are settlements of exactly 1 LEZ. So the artefact was
+right, the document was stale, and 5 was a figure from a run two prices ago that
+no longer matched anything on chain. The default in `scripts/a2a-task.sh` has
+moved to 1 with it, so the script and the card it writes cannot disagree again.
+
+The live cards are in [`artifacts/agent-cards/`](../artifacts/agent-cards) — one
+for each of the three deployed agents, each signed by the key that owns the
+account it asks to be paid into, each with its verifying key published beside it
+as `<category>.pub`. The storage agent's is
+[`storage.json`](../artifacts/agent-cards/storage.json).
 
 Rules a producer MUST follow:
 
@@ -222,6 +260,18 @@ Rules a producer MUST follow:
   declare input/output schemas, so it travels as an extension member rather than
   being dropped. If that schema has a string `description`, it becomes the
   skill's `description`.
+
+  **The published card did not carry it, and this paragraph did.** The module
+  emits it — `CardSkill` copies each registry entry's `parameters` onto the skill,
+  `installBuiltinSkills` fills that member from the skill's own
+  `parameterSchema()`, and `module/tests/agent_skills_test.cpp` asserts it is
+  there. What did not emit it was the *other* producer: a JSON heredoc inside
+  `scripts/a2a-task.sh`, hand-written beside the generator it was meant to agree
+  with, and the one that wrote the only committed card. So the single artefact a
+  reviewer would open was the single card in this repository missing the field
+  this document names as the binding's answer to the schema requirement. The
+  heredoc is gone; `scripts/agent-card.py` derives the schema from the module's
+  own source, so restating it is no longer something anyone can get wrong.
 - **`capabilities.streaming: true`** means this binding's streaming (§4.5), not
   SSE. **`pushNotifications: false`** is not a placeholder: there are no
   webhooks here and `tasks/pushNotificationConfig/*` is not implemented.
@@ -290,6 +340,19 @@ no longer true: `installBuiltinSkills` (`installBuiltinSkills` in
 is option 1 — subscribe and read, with the warm-up window that implies. Two
 loaded modules discovering each other's signed cards over the public network is
 that binding working, and `docs/basecamp.md` carries the run.
+
+**"Each other's" needs two cards, and for a long time only one was committed.**
+The live run always had two — each module builds and signs its own with
+`agent.card` before it publishes — but the offline evidence had one, so a reader
+who did not run two processes could check the storage agent's card and had
+nothing to check the peer's against. Cards for all three deployed agents are now
+committed, each signed by that agent's own key with its verifying key beside it,
+so "two agents discover each other via Agent Cards" is inspectable from both
+ends rather than from one. Signing them costs nothing on chain: the key is in
+the agent's own wallet home and `scripts/sign-agent-card.py` never touches the
+sequencer. What the second and third cards do **not** add is a second settlement
+— the messaging agent has never been paid for a task, which is why its card
+advertises a price of 0 rather than a figure with no transaction behind it.
 
 What is still absent is option 2: no `storeQuery` backfill, so a card published
 before this node subscribed is not recovered. The refusal "no discovery
@@ -400,8 +463,9 @@ signer while this section recorded it as false, and it has now been corrected in
 the file itself rather than only contradicted here.
 
 **What does close it, out of band.** The x-only key is published *beside* the
-card — [`artifacts/agent-cards/storage.pub`](../artifacts/agent-cards/storage.pub)
-— and `scripts/use-cases/verify-agent-card.py --public-key` performs steps 4, 5
+card — [`artifacts/agent-cards/storage.pub`](../artifacts/agent-cards/storage.pub),
+and a `<category>.pub` for each of the other two agents — and
+`scripts/use-cases/verify-agent-card.py --public-key` performs steps 4, 5
 and 6 against it with no wallet at all. That is what CI runs on every push, on a
 runner that has no agent wallet and must never be given one. So "nobody can
 verify a card" is not the state of this repository, and this section used to be
@@ -1504,6 +1568,8 @@ renaming a symbol out from under this document turns it red.
 | Content topics | `discoveryTopic`, `module/src/messaging_skills.cpp` |
 | Reliable channels vs bare topics | `CreateGroupSkill`, `module/src/messaging_skills.cpp`; `OwnerChannel`, `module/src/owner_channel.h` |
 | Where the ports are handed in | `struct SkillPorts`, `module/src/agent_module_plugin.h` |
+| Card building, as published | `scripts/agent-card.py` |
 | Card signing, as published | `scripts/sign-agent-card.py` |
+| Card verification, with no wallet | `scripts/use-cases/verify-agent-card.py` |
 | The end-to-end evidence path | `scripts/a2a-task.sh` |
 | Lifecycle and card unit tests | `module/tests/agent_skills_test.cpp` |

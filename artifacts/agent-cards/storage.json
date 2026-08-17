@@ -21,7 +21,7 @@
   "signatures": [
     {
       "protected": "eyJhbGciOiJzZWNwMjU2azEtYmlwMzQwIiwia2lkIjoiNVNhMTNOeU5Gc1RxQWozQXRkb1E3a3pDNlpaSkpONTdBWXFoTmRkSHRqbloifQ",
-      "signature": "Oog5_4etpbC-ABMLSZDYomKr-i9TqyBEEtPohbYejScJPQa8pfU02vnZH3QDSyWFMZItPf3Dj_VEKgvlX2_vyw"
+      "signature": "Rl53LF89sm8Pg1ztwNX6lZzpYxhgCWygzIeyOT--eu-2rN9RRN1pb7JnL9kPgPnKgseTZZPnQttIGKpsr8Y7mA"
     }
   ],
   "skills": [
@@ -37,7 +37,21 @@
       ],
       "tags": [
         "storage"
-      ]
+      ],
+      "x-logos-parameters": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
     }
   ],
   "url": "logos-messaging://9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",

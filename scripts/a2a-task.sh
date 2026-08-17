@@ -170,7 +170,20 @@ balance_or_die() { # account what-for -> a decimal balance on stdout
   printf '%s\n' "$v"
 }
 
-PRICE=${A2A_PRICE:-25}         # inside the client's per-transaction limit
+# The price this run advertises and settles, and it is also the price written
+# into the card this script publishes — so the default here is the number a
+# reader finds in `artifacts/agent-cards/storage.json`, or the artefact and the
+# script that writes it disagree about what an agent charges.
+#
+# It was 25, which is the client's per-transaction ceiling and was the right
+# figure while there was a faucet. There is not. A settlement is real money on a
+# public testnet, the paying agent holds a handful of LEZ, and an account at zero
+# cannot sign at all — so this is priced at the smallest amount that is not zero,
+# which is the same reason `scripts/delivery-in-plugin.sh settle` defaults to 1.
+# The last five rows of `artifacts/a2a-task.tsv` are settlements at 1. Set
+# `A2A_PRICE` to run at any other figure; the envelope check below is unchanged
+# and still refuses anything above the ceiling the chain is holding.
+PRICE=${A2A_PRICE:-1}          # inside the client's per-transaction limit
 
 # The envelope, read off the chain rather than out of the manifest. The policy
 # account's data IS the policy now — owner, both limits, the period and the
@@ -211,85 +224,29 @@ rule "1. the server agent publishes a signed A2A Agent Card"
 #   payment account included. It is signed below by the key that owns that very
 #   account, so the reader checks the card against the thing the card is asking
 #   them to trust.
-# The server agent's shielded receiving keys, straight out of its own wallet.
+# THE CARD IS NOT BUILT HERE ANY MORE, AND THAT IS THE POINT.
 #
-# Both are PUBLIC keys — `npk` is a nullifier public key, `vpk` an ML-KEM-768
-# encapsulation key — and together they are the whole address a payer needs to
-# credit this agent privately. They go inside the signed payload for the same
-# reason `paymentAccount` does: a card is how a payer learns where money goes,
-# and an unsigned answer to that question is worth nothing.
+# It used to be a heredoc in this file: a JSON literal, hand-written beside a
+# generator it was supposed to agree with. It did not. `CardSkill::invoke`
+# (module/src/agent_skills.cpp) puts each skill's parameter schema on the card as
+# `x-logos-parameters` — the member docs/a2a-binding.md §1.3 and §3.1 name as
+# this binding's answer to the prize's "skills declare input/output schemas",
+# and the member module/tests/agent_skills_test.cpp asserts is present under a
+# comment reading "the shape scripts/a2a-task.sh publishes, field for field".
+# The heredoc did not carry it, and the heredoc wrote the only committed card,
+# so the artefact a reviewer inspects was the one card here that lacked the
+# schema its own document, module and unit test said it carried.
 #
-# Empty is not fatal. An operator running against a wallet that does not hold
-# this agent's key gets a card with a public payment address and no shielded
-# one, which is the pre-existing behaviour, rather than a run that stops.
+# `scripts/agent-card.py` reads that schema out of the module instead of
+# restating it, builds the same card for any of the three deployed agents, signs
+# it with the same `scripts/sign-agent-card.py`, and publishes the verifying key
+# beside it. Everything below reads the card back off disk, exactly as a
+# discovering peer would.
 AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
-SHIELDED_KEYS=""
-if [ -x "${WALLET_BIN:-}" ]; then
-  SHIELDED_KEYS=$(LEE_WALLET_HOME_DIR="$AGENT_HOMES/$SERVER_CAT" \
-                  NSSA_WALLET_HOME_DIR="$AGENT_HOMES/$SERVER_CAT" \
-                  "$WALLET_BIN" account show-keys --account-id "Private/$SERVER_ID" \
-                  </dev/null 2>/dev/null | grep -E '^[0-9a-f]{64,}$' | head -2)
-fi
-SHIELDED_MEMBER=""
-if [ "$(printf '%s\n' "$SHIELDED_KEYS" | grep -c .)" = "2" ]; then
-  SHIELDED_MEMBER=$(printf '    "shieldedPaymentKeys": { "npk": "%s", "vpk": "%s" },' \
-                    "$(printf '%s\n' "$SHIELDED_KEYS" | head -1)" \
-                    "$(printf '%s\n' "$SHIELDED_KEYS" | tail -1)")
-else
-  echo "  no shielded receiving keys for $SERVER_CAT (set WALLET_BIN); the card will" >&2
-  echo "  advertise only the public payment account" >&2
-fi
-
-cat > "$CARDS/$SERVER_CAT.json" <<JSON
-{
-  "protocolVersion": "0.3.0",
-  "name": "logos-storage-agent",
-  "description": "Encrypts and stores a file on Logos Storage, returns its content address",
-  "url": "logos-messaging://$SERVER_ID",
-  "preferredTransport": "logos-messaging",
-  "provider": {
-    "organization": "LP-0008 reference agent",
-    "url": "https://github.com/logos-co/lambda-prize"
-  },
-  "version": "0.1.0",
-  "capabilities": {
-    "streaming": true,
-    "stateTransitionHistory": true,
-    "pushNotifications": false
-  },
-  "defaultInputModes": ["application/json"],
-  "defaultOutputModes": ["application/json"],
-  "skills": [
-    {
-      "id": "storage.upload",
-      "name": "storage.upload",
-      "description": "Encrypt and upload a file, returning a content address",
-      "tags": ["storage"],
-      "inputModes": ["application/json"],
-      "outputModes": ["application/json"]
-    }
-  ],
-  "x-logos": {
-    "lezAccount": "$SERVER_ID",
-    "paymentAccount": "Public/$SERVER_PAY",
-$SHIELDED_MEMBER
-    "pricePerTask": $PRICE,
-    "settlement": "lez-chained-authenticated-transfer"
-  }
-}
-JSON
-# RFC 7515 JWS with a detached payload, the construction the module produces and
-# its discovery path verifies: `protected` and `signature`, over the card
-# without its own signatures. The key is the server agent's own account key —
-# BIP-340 Schnorr over secp256k1, which is what a LEZ account key is — so `kid`
-# is the account being advertised for payment.
-AGENT_HOMES="${AGENT_HOMES:-$HOME/.lp0008-agents}"
-SIGNED=$(python3 scripts/sign-agent-card.py \
-  --wallet-home "$AGENT_HOMES/$SERVER_CAT" --account "$SERVER_PAY" \
-  < "$CARDS/$SERVER_CAT.json") || {
-  echo "  the card could not be signed, so it is not published" >&2; exit 1; }
-printf '%s\n' "$SIGNED" > "$CARDS/$SERVER_CAT.json"
-echo "  published $CARDS/$SERVER_CAT.json"
+AGENT_HOMES="$AGENT_HOMES" WALLET_BIN="${WALLET_BIN:-}" \
+python3 scripts/agent-card.py --category "$SERVER_CAT" --price "$PRICE" \
+  --agents "$AGENTS" --out "$CARDS" || {
+  echo "  the card could not be published, so nothing below is worth running" >&2; exit 1; }
 python3 -c "
 import json
 d=json.load(open('$CARDS/$SERVER_CAT.json'))
