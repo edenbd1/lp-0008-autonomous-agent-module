@@ -273,6 +273,15 @@ jobs:
           restore-keys: companions-${{ runner.os }}-
 
       - name: Build the three companion modules from their published sources
+        env:
+          # Build the Delivery library a SECOND time, at the revision the
+          # use-case drivers are written against. This machine has always had
+          # both — build-companions/logos-delivery at the module's flake.lock
+          # pin, and _external/logos-delivery at the revision the package
+          # ships — and a runner had one, which is why share_drive.c compiled
+          # here for months and never there. The revision itself comes from
+          # module/third-party/liblogosdelivery/README.md, not from this file.
+          DELIVERY_DRIVER_SRC: ${{ github.workspace }}/_external/logos-delivery
         run: |
           set -euo pipefail
           set +e
@@ -405,7 +414,11 @@ jobs:
       - name: Use case 1 — a file encrypted, stored, addressed and sent back
         env:
           STORAGE_SRC: ${{ github.workspace }}/_external/logos-storage-nim
-          DELIVERY_SRC: ${{ github.workspace }}/build-companions/logos-delivery
+          # The DRIVER's revision, not the module's. share_drive.c is written
+          # against the nim-ffi 0.3.0 typed ABI and the module's pin predates
+          # it; pointing this at build-companions/logos-delivery is what gave
+          # `unknown type name 'LogosdeliverySendReq'`.
+          DELIVERY_SRC: ${{ github.workspace }}/_external/logos-delivery
         run: |
           set -euo pipefail
           # The library this points at has to be there before the script says so
@@ -415,6 +428,14 @@ jobs:
             || { echo "no liblogosdelivery under $DELIVERY_SRC — the companion"; \
                  echo "build's layout moved and this step's DELIVERY_SRC has to move"; \
                  echo "with it"; ls -R "$DELIVERY_SRC" 2>/dev/null | head -20; exit 1; }
+          # ...and it has to be the revision the driver speaks, not merely a
+          # library. The generated header is the only thing that says which.
+          grep -q 'LogosdeliverySendReq' \
+            "$DELIVERY_SRC/library/generated/logosdelivery.h" \
+            || { echo "the library under $DELIVERY_SRC does not export"; \
+                 echo "LogosdeliverySendReq, so it predates nim-ffi 0.3.0 and"; \
+                 echo "share_drive.c cannot compile against it. This is the"; \
+                 echo "module's pin, not the driver's."; exit 1; }
           set +e
           ./scripts/use-cases/01-file-vault.sh > uc01.out 2>&1; rc=$?
           set -e

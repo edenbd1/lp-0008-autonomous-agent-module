@@ -69,6 +69,14 @@ GO_WALLET_SDK_REV="${GO_WALLET_SDK_REV:-f6c0924394c5bdf361bd16b739a80432e68291f5
 # github:logos-messaging/logos-delivery, as pinned by logos-delivery-module's
 # own flake.lock. NOT the tip; see the note above.
 DELIVERY_LIB_REV="${DELIVERY_LIB_REV:-f8b036594ea2a36b529e10b584b7d2851a3ac5c8}"
+# The OTHER revision of the same library: the one the use-case drivers are
+# written against. Read out of module/third-party/liblogosdelivery/README.md,
+# which is the record of what `module/agent.lgx` actually ships, so this cannot
+# drift away from the library that is redistributed. Restating the hash here
+# would be a second place for it to be wrong.
+DELIVERY_DRIVER_REV="${DELIVERY_DRIVER_REV:-$(
+  sed -n 's/^| Commit | `\([0-9a-f]\{40\}\)` |.*/\1/p' \
+    "$ROOT/module/third-party/liblogosdelivery/README.md" 2>/dev/null | head -1)}"
 # ── the dependencies the lock names and the build does not install ──────────
 #
 # `logos-delivery`'s `build-deps` runs `nimble setup --localdeps`, which resolves
@@ -318,61 +326,92 @@ fetch() { # url rev
   FETCHED="$dir"
 }
 
+# build_delivery <checkout> <revision>
+#
+# One function because this library is needed at TWO revisions, which is not a
+# workaround but a fact about the tree:
+#
+#   logos-delivery-module @ 3f0f2d8 compiles only against the ABI from BEFORE
+#   nim-ffi 0.3.0 (upstream's 4a85db1b). Building it against anything newer is
+#   the seventeen errors in api_call_handler.h, and the co-existence criterion
+#   forbids modifying the companion modules, so that pin is not ours to move.
+#
+#   scripts/use-cases/share_drive.c and module/tests/*_drive.c are written
+#   against the nim-ffi 0.3.0 typed ABI — LogosdeliverySendReq, a one-argument
+#   logosdelivery_destroy — which is what module/third-party/liblogosdelivery
+#   records as the revision the package actually ships.
+#
+# This machine has had both all along, in two directories, which is exactly why
+# they never collided here and collided immediately on a runner with one.
+build_delivery() {
+  _src="$1"; _rev="$2"
+  _out="$_src/build/liblogosdelivery.$SO"
+  if [ ! -f "$_out" ]; then
+    command -v nim >/dev/null || export PATH="$HOME/.nimble/bin:$PATH"
+    command -v nim >/dev/null \
+      || die "no nim on PATH (nimble installs it into ~/.nimble/bin and does not add it)"
+    if [ ! -d "$_src/.git" ]; then
+      echo "  cloning (this is a large repository and the build is not quick)"
+      git clone -q --recurse-submodules --shallow-submodules \
+          https://github.com/logos-messaging/logos-delivery "$_src" \
+        || die "could not clone logos-delivery"
+    fi
+    git -C "$_src" fetch -q --depth 200 origin "$_rev" \
+      || die "could not fetch logos-delivery@$_rev"
+    git -C "$_src" checkout -qf "$_rev" \
+      || die "could not check out logos-delivery@$_rev"
+    ( cd "$_src" && make -j"${JOBS:-8}" build-deps ) \
+      || die "logos-delivery's build-deps failed"
+    # The lock pins, see the header note. Done after `build-deps` because that is
+    # what populates nimbledeps/ — and undone by nothing, because a rebuilt
+    # nimbledeps re-resolves them wrong every time.
+    _pins="$DELIVERY_PINNED_PKGS"
+    [ -n "$_pins" ] || _pins="$(lock_pkgs "$_src")"
+    [ -n "$_pins" ] || die "logos-delivery has no readable nimble.lock, so there is
+nothing to pin its dependencies to — and an unpinned set is what this step
+exists to prevent. Do not skip past this."
+    echo "  pinning dependencies to nimble.lock ($(printf '%s\n' $_pins | wc -w | tr -d ' ') package(s) named)"
+    _pinned=0
+    for _p in $_pins; do
+      pin_locked_pkg "$_src" "$_p" && _pinned=$((_pinned+1))
+    done
+    echo "  $_pinned package(s) considered; the lock is now what is on disk"
+    # librln BEFORE liblogosdelivery, and it is not part of `build-deps`.
+    # `liblogosdelivery`'s Nim link line ends in `--passL:librln_v2.0.2.a`, and
+    # that archive is built by its own Makefile target, which first does
+    # `git submodule update --init vendor/zerokit` and then compiles a Rust
+    # static library. On this machine the file already existed from an earlier
+    # build, so the ordering never mattered and was never written down; on a
+    # fresh checkout the Nim compile dies with an unhelpful `[OSError]` naming
+    # the archive it cannot find. Measured on the first run of the alongside
+    # workflow that got this far.
+    if [ ! -f "$_src/librln_v2.0.2.a" ]; then
+      command -v cargo >/dev/null \
+        || die "librln_v2.0.2.a is missing and cargo is not on PATH: it is a Rust
+static library and logos-delivery builds it from vendor/zerokit. Install a Rust
+toolchain, or supply the archive."
+      ( cd "$_src" && make -j"${JOBS:-8}" librln ) \
+        || die "librln did not build; liblogosdelivery cannot link without it"
+    fi
+    ( cd "$_src" && make -j"${JOBS:-8}" liblogosdelivery ) \
+      || die "liblogosdelivery did not build; the log above says where"
+  fi
+  [ -f "$_out" ] || die "no $_out after building"
+  echo "  $_out  ($(du -h "$_out" | cut -f1))"
+}
+
 # ── 1. the Logos Delivery library, at the module's own pin ────────────────
 say "[1/6] liblogosdelivery @ ${DELIVERY_LIB_REV:0:7} (logos-delivery-module's flake.lock pin)"
 DELIVERY_DYLIB="$DELIVERY_LIB_SRC/build/liblogosdelivery.$SO"
-if [ ! -f "$DELIVERY_DYLIB" ]; then
-  command -v nim >/dev/null || export PATH="$HOME/.nimble/bin:$PATH"
-  command -v nim >/dev/null \
-    || die "no nim on PATH (nimble installs it into ~/.nimble/bin and does not add it)"
-  if [ ! -d "$DELIVERY_LIB_SRC/.git" ]; then
-    echo "  cloning (this is a large repository and the build is not quick)"
-    git clone -q --recurse-submodules --shallow-submodules \
-        https://github.com/logos-messaging/logos-delivery "$DELIVERY_LIB_SRC" \
-      || die "could not clone logos-delivery"
-  fi
-  git -C "$DELIVERY_LIB_SRC" fetch -q --depth 200 origin "$DELIVERY_LIB_REV" \
-    || die "could not fetch logos-delivery@$DELIVERY_LIB_REV"
-  git -C "$DELIVERY_LIB_SRC" checkout -qf "$DELIVERY_LIB_REV" \
-    || die "could not check out logos-delivery@$DELIVERY_LIB_REV"
-  ( cd "$DELIVERY_LIB_SRC" && make -j"${JOBS:-8}" build-deps ) \
-    || die "logos-delivery's build-deps failed"
-  # The lock pins, see the header note. Done after `build-deps` because that is
-  # what populates nimbledeps/ — and undone by nothing, because a rebuilt
-  # nimbledeps re-resolves them wrong every time.
-  _pins="$DELIVERY_PINNED_PKGS"
-  [ -n "$_pins" ] || _pins="$(lock_pkgs "$DELIVERY_LIB_SRC")"
-  [ -n "$_pins" ] || die "logos-delivery has no readable nimble.lock, so there is
-nothing to pin its dependencies to — and an unpinned set is what this step
-exists to prevent. Do not skip past this."
-  echo "  pinning dependencies to nimble.lock ($(printf '%s\n' $_pins | wc -w | tr -d ' ') package(s) named)"
-  _pinned=0
-  for _p in $_pins; do
-    pin_locked_pkg "$DELIVERY_LIB_SRC" "$_p" && _pinned=$((_pinned+1))
-  done
-  echo "  $_pinned package(s) considered; the lock is now what is on disk"
-  # librln BEFORE liblogosdelivery, and it is not part of `build-deps`.
-  # `liblogosdelivery`'s Nim link line ends in `--passL:librln_v2.0.2.a`, and
-  # that archive is built by its own Makefile target, which first does
-  # `git submodule update --init vendor/zerokit` and then compiles a Rust
-  # static library. On this machine the file already existed from an earlier
-  # build, so the ordering never mattered and was never written down; on a
-  # fresh checkout the Nim compile dies with an unhelpful `[OSError]` naming
-  # the archive it cannot find. Measured on the first run of the alongside
-  # workflow that got this far.
-  if [ ! -f "$DELIVERY_LIB_SRC/librln_v2.0.2.a" ]; then
-    command -v cargo >/dev/null \
-      || die "librln_v2.0.2.a is missing and cargo is not on PATH: it is a Rust
-static library and logos-delivery builds it from vendor/zerokit. Install a Rust
-toolchain, or supply the archive."
-    ( cd "$DELIVERY_LIB_SRC" && make -j"${JOBS:-8}" librln ) \
-      || die "librln did not build; liblogosdelivery cannot link without it"
-  fi
-  ( cd "$DELIVERY_LIB_SRC" && make -j"${JOBS:-8}" liblogosdelivery ) \
-    || die "liblogosdelivery did not build; the log above says where"
+build_delivery "$DELIVERY_LIB_SRC" "$DELIVERY_LIB_REV"
+
+# ...and again at the revision the drivers speak, when asked for. Off by
+# default: it is another full Nim build, and nothing needs it unless a use-case
+# driver is going to be compiled in this environment.
+if [ -n "${DELIVERY_DRIVER_SRC:-}" ]; then
+  say "[1b/6] liblogosdelivery @ ${DELIVERY_DRIVER_REV:0:7} (the ABI the drivers are written against)"
+  build_delivery "$DELIVERY_DRIVER_SRC" "$DELIVERY_DRIVER_REV"
 fi
-[ -f "$DELIVERY_DYLIB" ] || die "no $DELIVERY_DYLIB after building"
-echo "  $DELIVERY_DYLIB  ($(du -h "$DELIVERY_DYLIB" | cut -f1))"
 
 # ── 2. go-wallet-sdk's c-archive ──────────────────────────────────────────
 say "[2/6] libgowalletsdk @ ${GO_WALLET_SDK_REV:0:7} (logos-wallet-module's flake.nix pin)"
