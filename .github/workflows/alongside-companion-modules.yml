@@ -104,7 +104,7 @@ jobs:
       # building" is not a message anyone wants to receive about a Go bump.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
 
       # Nim, for `liblogosdelivery`. `nimble` puts itself in ~/.nimble/bin and
       # does NOT add it to PATH; `build-companion-modules.sh` prepends that

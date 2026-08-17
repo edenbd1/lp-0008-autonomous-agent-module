@@ -250,6 +250,38 @@ command -v cmake >/dev/null || { echo "missing: cmake" >&2; missing=$((missing+1
 command -v go    >/dev/null || {
   echo "missing: go (the wallet module links go-wallet-sdk's c-archive)" >&2
   missing=$((missing+1)); }
+# ...and the RIGHT go, which is a different question. A runner with Go 1.23 and
+# a go-wallet-sdk whose go.mod says `go 1.24.0` passes the check above, builds
+# for another ten minutes, and then dies inside upstream's Makefile with
+#
+#     go: downloading go1.24.0 (linux/amd64)
+#     Go is not installed or not in PATH.
+#
+# which is false twice over: go is installed and it is on PATH. The toolchain
+# tried to fetch the newer one, could not, and upstream's check-go target
+# reported the only failure it knows how to name. Ask the question here, where
+# the answer is cheap and the message can be true.
+#
+# The requirement is READ OUT OF the sdk's own go.mod when the checkout exists;
+# no checkout yet means no claim, not a guess.
+if command -v go >/dev/null; then
+  _gomod="$SRC/go-wallet-sdk/go.mod"
+  if [ -f "$_gomod" ]; then
+    _want="$(awk '$1=="go"{print $2; exit}' "$_gomod")"
+    _have="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
+    if [ -n "$_want" ] && [ -n "$_have" ]; then
+      # sort -V: "1.23" is not less than "1.9" lexically, and this has to be
+      # a version comparison or it is worse than nothing.
+      _older="$(printf '%s\n%s\n' "$_want" "$_have" | sort -V | head -1)"
+      if [ "$_older" = "$_have" ] && [ "$_have" != "$_want" ]; then
+        echo "go is $_have, and go-wallet-sdk's go.mod asks for $_want. Upstream's" >&2
+        echo "Makefile will report this as \"Go is not installed or not in PATH\"," >&2
+        echo "which is not what is wrong. Install $_want or newer." >&2
+        missing=$((missing+1))
+      fi
+    fi
+  fi
+fi
 LGX_BIN="${LGX_BIN:-}"
 for candidate in "$LGX_BIN" "$HOME/logos/src/logos-package/build/lgx" "$(command -v lgx || true)"; do
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then LGX_BIN="$candidate"; break; fi
