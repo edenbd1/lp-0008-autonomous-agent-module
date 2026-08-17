@@ -83,9 +83,15 @@ jobs:
           # was written on had it from Homebrew and never had to name it -- the
           # ordinary way a dependency goes unrecorded. Measured on the first run
           # of this workflow, which got no further than its second step.
+          # libboost-dev for the same reason, one build further along:
+          # logos-delivery-module's delivery_module_plugin.cpp:14 includes
+          # <boost/beast/core/detail/base64.hpp>, and Beast is header-only, so
+          # the headers alone are the whole dependency. Homebrew put Boost on
+          # the machine this list was written on years before this project
+          # existed. Measured on the first run that got as far as [4/6].
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             --no-install-recommends squashfs-tools nlohmann-json3-dev \
-            libsodium-dev \
+            libsodium-dev libboost-dev \
             cmake ninja-build unzip xz-utils
 
       # Rust, for `librln_v2.0.2.a`. `liblogosdelivery`'s link line ends in
