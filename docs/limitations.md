@@ -1306,6 +1306,53 @@ invoked. The shim is not decoration: with the same `PATH` and
   publishes. Not measured here: this repository is cloned, not downloaded as a
   zip, in every procedure it documents.
 
+## The Delivery library pinned for CI does not build, and ours came from elsewhere
+
+`scripts/build-companion-modules.sh` pins `logos-delivery` at `f8b0365`, which
+is what `logos-delivery-module`'s own `flake.lock` names — the right revision to
+pin, on the face of it, because it is the one the module that consumes the
+library was built against.
+
+**It does not compile.** The `alongside` workflow, dispatched for the first time
+on 2026-08-17, fetched that revision on a clean runner and Nim refused upstream's
+own code:
+
+```
+logos_delivery/waku/rest_api/endpoint/relay/handlers.nim(233, 15)
+  Error: waitFor withTimeout(publish(node, …), futTimeout)
+         has an illegal effect: NestedPoll
+```
+
+That is an effect-tracking rejection inside `logos-delivery`, not a mistake in
+anything here, and the `[OSError]` the nimble wrapper prints underneath it names
+the link line rather than the compile that failed — which is why the first two
+readings of this failure blamed a missing `librln_v2.0.2.a` archive.
+
+**And the library this repository has actually been using was built from a
+different revision.** `_external/logos-delivery` is checked out at `0d433ea`,
+built on 15 August; `f8b0365` is not even an ancestor of it. So every local run
+that links `liblogosdelivery` — including the `--alongside` evidence for "loads
+alongside the wallet, storage and messaging modules" — used a library from a
+revision the recipe does not pin, and nothing noticed, because the build script
+skips the build entirely when the artefact is already there.
+
+What is true, stated exactly:
+
+- the four-module load itself is real and was run; it is in the transcript, and
+  each companion answered across the runtime's transport;
+- the Delivery library it linked was built here, from `0d433ea`, and is not
+  reproducible by following this repository's own instructions;
+- the revision those instructions name does not currently build from clean.
+
+Neither pinning `0d433ea` nor keeping `f8b0365` is obviously right. The first
+makes the recipe reproduce what was measured and diverges from the consuming
+module's lock; the second keeps the lock and reproduces nothing. Resolving it
+means either finding the dependency set under which `f8b0365` compiles — the
+`taskpools` pin a few lines above it in the build script is the precedent — or
+establishing that `0d433ea` is the revision the module is compatible with and
+saying why. Until then this is written down rather than papered over, and the
+`alongside` workflow is red for a real reason.
+
 ## One command, and what it needs before it will run
 
 The prize asks that "the owner can deploy the agent and configure it with a
