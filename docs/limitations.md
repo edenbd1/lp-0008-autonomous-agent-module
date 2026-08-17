@@ -1407,6 +1407,43 @@ invoked. The shim is not decoration: with the same `PATH` and
   publishes. Not measured here: this repository is cloned, not downloaded as a
   zip, in every procedure it documents.
 
+## The standalone-sequencer e2e cannot go green while this repository is private
+
+Not a flaky job, not an unlucky draw, and not something a longer timeout fixes.
+GitHub's own documentation gives the standard `ubuntu-latest` runner as **4 CPU
+and 16 GB for public repositories and 2 CPU and 8 GB for private ones**, and
+every run of this job matches that split exactly:
+
+| run | `Mem:` | outcome |
+|---|---|---|
+| 31916748823 | 15 GiB | success, lifecycle 3 h 05 |
+| 31929846814 | 15 GiB | success, lifecycle 2 h 16 |
+| 31950647965 | 7 GiB | killed at the 340-minute cap |
+| 31968154176 | 7 GiB | killed at the cap |
+| 31984691347 | 7 GiB | killed at the cap |
+
+Proving is CPU-bound: r0vm sat at ~190 % of two cores throughout the failures,
+and each proof took 1 h 42 against the 25 minutes the same proof takes on four.
+Three proofs at that rate exceed five hours before the build steps are counted,
+and 340 minutes is not a budget anyone chose — it is the ceiling for a
+GitHub-hosted job.
+
+So there is nothing to tune. Re-dispatching does not help either, because the
+runner class is not drawn at random: it follows the repository's visibility, and
+this repository is private. Five consecutive small runners is not a coincidence,
+it is the documented allocation.
+
+**The unlock is the same click three criteria already need.** "Full documentation
+and a clean **public** repository are delivered" is one criterion; "**Public
+repository** with the Logos Core module…" is the first submission requirement;
+and this job is the third. Making the repository public satisfies the first two
+directly and makes the third achievable, because the same workflow then runs on
+the four-core machine it was measured on.
+
+Until then the job refuses a runner it cannot finish on — a red in forty
+seconds, naming the reason, rather than five hours and forty minutes spent
+arriving at the same place. `E2E_ALLOW_SMALL_RUNNER=1` spends them anyway.
+
 ## The Delivery library pinned for CI does not build, and ours came from elsewhere
 
 `scripts/build-companion-modules.sh` pins `logos-delivery` at `f8b0365`, which
