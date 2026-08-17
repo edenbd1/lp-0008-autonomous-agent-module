@@ -59,7 +59,7 @@
         "cpp/module_proxy.cpp": "9ce401f5154d78d60fddb785ebe0fa8125c6ffb9e1157bfdc4daacf1c58a0118",
         "cpp/qt_provider_object.cpp": "0684e5dbc8d777a51b74ccb147a15f97b04b9cea6d3b175a040906d7d1f2dc8a"
       },
-      "sha256": "2ff9a5659c08faa6c944d34b021197d543941f33859ba494f80e25ae11b764a9",
+      "sha256": "e30ce4234c983bd5a13bed1a827b4647e7692836ced5b1f00f2c40bad0e44c16",
       "version_needs": {}
     },
     "linux-amd64": {

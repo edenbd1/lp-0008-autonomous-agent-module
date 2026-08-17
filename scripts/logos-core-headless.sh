@@ -389,6 +389,34 @@ HARNESS_FROM_SOURCE=1 and --build-harness ask for."
 compile_harness() { # output-path with-local-rpaths(0|1)
   local out="$1" want_rpaths="$2" rpaths=()
   local MOC="$QT_ROOT/libexec/moc"
+  # Qt's inline headers use __FILE__, so every binary compiled against a Qt
+  # installation carries that installation's absolute path as a STRING LITERAL
+  # in __TEXT,__cstring — eighteen of them here, naming
+  # $QT_ROOT/lib/QtCore.framework/Headers/*.h. Not debug info: `strip`, `strip
+  # -x` and `strip -S` all leave them, which is how they were found.
+  #
+  # That is not a leak of anything, but it does mean two machines with Qt at
+  # different paths produce different bytes from identical sources, and it puts
+  # whoever built it in the shipped file. -ffile-prefix-map rewrites the prefix
+  # at compile time, so the binary says `QT/lib/QtCore.framework/...` wherever
+  # it was built.
+  #
+  # In the ONE recipe, deliberately: a flag applied only to the shipped binary
+  # is exactly the drift the note below this function refuses, and a reviewer
+  # rebuilding would then get a different program from the one shipped.
+  # The SDK checkout is mapped for the same reason: its own sources' __FILE__
+  # names wherever the operator cloned logos-cpp-sdk.
+  #
+  # THE TWO LINUX VARIANTS PREDATE THIS FLAG. They carry no path from anybody's
+  # home directory — they were built in containers where Qt and the SDK sit at
+  # system paths — so there was nothing for this to fix in them, and they are
+  # carried forward byte-identical rather than rebuilt on a machine that cannot
+  # rebuild them. The consequence, stated because it is the kind of thing that
+  # is otherwise found by surprise: rebuilding either Linux variant today would
+  # produce different bytes from the committed one, differing only in those
+  # embedded path strings.
+  local PREFIX_MAP=(-ffile-prefix-map="$QT_ROOT=QT"
+                    -ffile-prefix-map="$SDK=SDK")
   [ -x "$MOC" ] || die "no moc at $MOC (an incomplete Qt install: see docs/basecamp.md)"
   mkdir -p "$BUILD/sdkobj" "$(dirname "$out")" || die "could not create $(dirname "$out")"
   (
@@ -408,13 +436,13 @@ compile_harness() { # output-path with-local-rpaths(0|1)
              moc_logos_api_consumer.cpp moc_logos_api_provider.cpp; do
       o="$(basename "${f%.cpp}").o"
       [ -f "$o" ] && [ "$o" -nt "$f" ] && continue
-      c++ -std=c++17 -c -I. -I"$SDK/cpp" -I"$SDK/core" -I"$EXTRA_INC" \
-          "${QT_INC[@]}" "$f" -o "$o" || exit 1
+      c++ -std=c++17 "${PREFIX_MAP[@]}" -c -I. -I"$SDK/cpp" -I"$SDK/core" \
+          -I"$EXTRA_INC" "${QT_INC[@]}" "$f" -o "$o" || exit 1
     done
   ) || die "the SDK translation units did not build"
 
   [ "$want_rpaths" -eq 1 ] && rpaths=("${LOCAL_RPATH[@]}")
-  c++ -std=c++17 -o "$out" "$SRC" "$BUILD"/sdkobj/*.o \
+  c++ -std=c++17 "${PREFIX_MAP[@]}" -o "$out" "$SRC" "$BUILD"/sdkobj/*.o \
       -I"$SDK/cpp" -I"$SDK/core" -I"$EXTRA_INC" "${QT_INC[@]}" \
       "${QT_LINK[@]}" "${CORE_LINK[@]}" ${rpaths[@]+"${rpaths[@]}"} \
     || die "the harness did not build"
