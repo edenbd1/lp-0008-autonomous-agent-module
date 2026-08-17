@@ -88,6 +88,15 @@ jobs:
             libsodium-dev \
             cmake ninja-build unzip xz-utils
 
+      # Rust, for `librln_v2.0.2.a`. `liblogosdelivery`'s link line ends in
+      # `--passL:librln_v2.0.2.a`, which logos-delivery builds from its own
+      # `vendor/zerokit` submodule with cargo. It was absent from this list
+      # because the machine the list was written on had that archive from an
+      # earlier build; a fresh runner gets an `[OSError]` from the Nim compiler
+      # naming a file nothing had built. Measured, on the first run that got
+      # past the packager.
+      - uses: dtolnay/rust-toolchain@stable
+
       # `logos-wallet-module` links `status-im/go-wallet-sdk` as a c-archive, so
       # Go is a build dependency of a module this repository does not own.
       # Pinned to the toolchain action rather than the image's default: the

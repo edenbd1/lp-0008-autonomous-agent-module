@@ -196,6 +196,23 @@ if [ ! -f "$DELIVERY_DYLIB" ]; then
     rm -rf "$tp.locked/.git" && rm -rf "$tp" && mv "$tp.locked" "$tp"
     printf '%s' "$meta" > "$tp/nimblemeta.json"
   fi
+  # librln BEFORE liblogosdelivery, and it is not part of `build-deps`.
+  # `liblogosdelivery`'s Nim link line ends in `--passL:librln_v2.0.2.a`, and
+  # that archive is built by its own Makefile target, which first does
+  # `git submodule update --init vendor/zerokit` and then compiles a Rust
+  # static library. On this machine the file already existed from an earlier
+  # build, so the ordering never mattered and was never written down; on a
+  # fresh checkout the Nim compile dies with an unhelpful `[OSError]` naming
+  # the archive it cannot find. Measured on the first run of the alongside
+  # workflow that got this far.
+  if [ ! -f "$DELIVERY_LIB_SRC/librln_v2.0.2.a" ]; then
+    command -v cargo >/dev/null \
+      || die "librln_v2.0.2.a is missing and cargo is not on PATH: it is a Rust
+static library and logos-delivery builds it from vendor/zerokit. Install a Rust
+toolchain, or supply the archive."
+    ( cd "$DELIVERY_LIB_SRC" && make -j"${JOBS:-8}" librln ) \
+      || die "librln did not build; liblogosdelivery cannot link without it"
+  fi
   ( cd "$DELIVERY_LIB_SRC" && make -j"${JOBS:-8}" liblogosdelivery ) \
     || die "liblogosdelivery did not build; the log above says where"
 fi
