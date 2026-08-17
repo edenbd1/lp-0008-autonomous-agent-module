@@ -48,13 +48,39 @@ BARE_RE = re.compile(r"\b(\d{11})\b")
 
 
 def sh(*args):
-    return subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
+    """Run a command, and treat "it is not installed" as a failed run.
+
+    subprocess.run RAISES FileNotFoundError when the binary is absent rather
+    than returning a non-zero code, so every `if out.returncode != 0` below was
+    unreachable in the one case the docstring above promises to handle. The
+    negative control — running this with gh off PATH — produced a traceback
+    instead of the sentence explaining what was wrong. Exiting non-zero by
+    crashing is not the same as saying so.
+    """
+    try:
+        return subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
+    except (FileNotFoundError, PermissionError) as exc:
+        return subprocess.CompletedProcess(args, 127, "", "%s: %s" % (args[0], exc))
 
 
 def main():
-    probe = sh("gh", "auth", "status")
+    # PROBE WITH THE THING THIS SCRIPT ACTUALLY DOES, not with `gh auth status`.
+    #
+    # `gh auth status` validates the token against /user, which a GitHub Actions
+    # job token legitimately cannot read — it is a repository-scoped token, not
+    # a user one. It answered "The token in GH_TOKEN is invalid" on 2026-08-17
+    # and turned this gate red on a commit that changed a sentence in a markdown
+    # file, while `gh run view` — the only gh call below — worked fine in the
+    # same job. It had also passed in the four runs before that, which is worse
+    # than failing consistently: a probe that is a coin flip teaches everyone to
+    # re-run rather than to read.
+    #
+    # So the probe is one real query of the same kind the checks below make. If
+    # that works, they will; if it does not, nothing here can be checked and
+    # this exits non-zero and says so.
+    probe = sh("gh", "run", "list", "--limit", "1", "--json", "databaseId")
     if probe.returncode != 0:
-        print("gh is not available or not authenticated, so no citation could be\n"
+        print("gh cannot list this repository's runs, so no citation could be\n"
               "checked. This gate has no skip path on purpose: passing here without\n"
               "having looked is the exact failure it exists to prevent.\n"
               + (probe.stderr or probe.stdout).strip())
