@@ -492,6 +492,68 @@ else
   bad "$SHIELDED is missing: the claim that an agent can be paid at its shielded account has no manifest"
 fi
 
+# --- the above-threshold path, which nothing re-checked --------------------
+#
+# `artifacts/approved-spend.tsv` records the one demonstration that the
+# above-threshold branch EXECUTES: an owner claimed, a policy anchored, an
+# `approve_spend` signed by that same owner as its SECOND program transaction,
+# and a `spend_approved` that moved money. It was the strongest new artifact in
+# the repository and the only one nothing re-read -- `verify-deployment.sh`
+# checked agents.tsv, a2a-task.tsv and shielded-settlement.tsv and not this one.
+# An artifact no gate reads is a hand-written claim with extra columns.
+APPROVED=artifacts/approved-spend.tsv
+echo
+echo "the above-threshold path (${APPROVED})"
+if [ ! -f "$APPROVED" ]; then
+  bad "$APPROVED is missing: the claim that an approved spend executes has no manifest"
+else
+  a_rows=$(rows "$APPROVED" | wc -l | tr -d " ")
+  c_tx=$(col "$APPROVED" tx); c_blk=$(col "$APPROVED" block)
+  c_what=$(col "$APPROVED" what); c_out=$(col "$APPROVED" outcome)
+  if [ -z "$c_tx" ] || [ -z "$c_blk" ] || [ -z "$c_what" ] || [ -z "$c_out" ]; then
+    bad "$APPROVED has no tx/block/what/outcome column: read by header name, and a header moved"
+  else
+    a_confirmed=0; a_approve=0; a_spend=0
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      tx=$(printf "%s" "$line" | cut -f"$c_tx"); blk=$(printf "%s" "$line" | cut -f"$c_blk")
+      what=$(printf "%s" "$line" | cut -f"$c_what"); out=$(printf "%s" "$line" | cut -f"$c_out")
+      case "$tx" in
+        *[!0-9a-f]*|"") continue ;;   # a step that submitted nothing, by design
+      esac
+      # The block the manifest claims, checked against the block the chain
+      # names -- not merely "getTransaction is non-null", which this chain
+      # answers identically for four different situations.
+      got=$(rpc getTransaction "[\"$tx\"]" \
+            | python3 -c "import json,sys; r=json.load(sys.stdin).get('result'); print(r[1] if r else '')" 2>/dev/null)
+      if [ -z "$got" ]; then
+        case "$out" in
+          *never*included*|*not*included*|*frozen*)
+            ok "  ${what}: not on chain, which is what this row records" ;;
+          *) bad "  ${what}: $APPROVED says block $blk and the chain does not hold ${tx}" ;;
+        esac
+      elif [ "$got" != "$blk" ]; then
+        bad "  ${what}: $APPROVED says block $blk, the chain says $got"
+      else
+        a_confirmed=$((a_confirmed + 1))
+        case "$what" in *approve_spend*) a_approve=1 ;; esac
+        case "$what" in *spend_approved*) a_spend=1 ;; esac
+      fi
+    done <<EOF
+$(rows "$APPROVED")
+EOF
+    ok "$a_confirmed of $a_rows recorded step(s) are in the block this manifest names"
+    # The two that carry the claim. Without both, the file is a deployment
+    # transcript and not a demonstration that the above-threshold path runs.
+    [ "$a_approve" -eq 1 ] \
+      && ok "an approve_spend is among them, signed after the same owner had already anchored" \
+      || bad "no confirmed approve_spend in $APPROVED: the owner half of the above-threshold path is unevidenced"
+    [ "$a_spend" -eq 1 ] \
+      && ok "and a spend_approved: the payment above the ceiling actually executed" \
+      || bad "no confirmed spend_approved in $APPROVED: the approval was never redeemed"
+  fi
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "DEPLOYMENT.md agrees with artifacts/ and with the chain."

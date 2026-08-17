@@ -118,6 +118,31 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      # Every CI run this repository CITES must have run on a commit this
+      # branch has. The history was rewritten once, for a good reason, and
+      # orphaned every green run named in the documents — a reader following
+      # one of those links lands on a commit the repository does not contain,
+      # which reads like a history covering something up. The gate that finds
+      # them existed for hours before anything ran it, which is its own lesson:
+      # a check nobody runs is a check that does not exist.
+      #
+      # It needs `gh`, which is on the runner and authenticated by GITHUB_TOKEN.
+      # It has no skip path — if `gh` is missing it exits non-zero and says so,
+      # because a citation checker that passes when it could not check is the
+      # failure it was written to prevent, one level up.
+      - name: Every cited CI run is on a commit this branch has
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e -o pipefail
+          ./scripts/check-run-citations.py | tee citations.out
+          # The count, for the same reason every other floor in this file
+          # exists: "checked 0 cited run(s)" and "checked 7, all reachable" are
+          # the same exit code, and the first one means the matcher died.
+          n=$(sed -n 's/^checked \([0-9][0-9]*\) cited CI run(s).*/\1/p' citations.out)
+          [ -n "$n" ] || { echo "it printed no coverage line"; exit 1; }
+          [ "$n" -ge 1 ] || { echo "it found no citations at all: the matcher is not seeing the documents"; exit 1; }
+
       # `--locked` throughout. Without it cargo re-resolves to the newest
       # compatible dependencies and ignores the committed lock, which is how a
       # build that was green yesterday goes red today on an upstream release
