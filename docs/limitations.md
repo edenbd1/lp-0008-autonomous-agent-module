@@ -1478,14 +1478,14 @@ run is not CI: the criterion asks for the job, and the job is what a reader can
 check. What it does establish is that the failing runs failed for want of cores
 and nothing else.
 
-## The Delivery library pinned for CI does not build, and ours came from elsewhere
+## The Delivery library's revision was never the variable; its dependencies are
 
 `scripts/build-companion-modules.sh` pins `logos-delivery` at `f8b0365`, which
 is what `logos-delivery-module`'s own `flake.lock` names — the right revision to
 pin, on the face of it, because it is the one the module that consumes the
 library was built against.
 
-**It does not compile.** The `alongside` workflow, dispatched for the first time
+**It did not compile.** The `alongside` workflow, dispatched for the first time
 on 2026-08-17, fetched that revision on a clean runner and Nim refused upstream's
 own code:
 
@@ -1495,35 +1495,67 @@ logos_delivery/waku/rest_api/endpoint/relay/handlers.nim(233, 15)
          has an illegal effect: NestedPoll
 ```
 
-That is an effect-tracking rejection inside `logos-delivery`, not a mistake in
-anything here, and the `[OSError]` the nimble wrapper prints underneath it names
-the link line rather than the compile that failed — which is why the first two
-readings of this failure blamed a missing `librln_v2.0.2.a` archive.
+The `[OSError]` the nimble wrapper prints underneath that names the link line
+rather than the compile that failed, which is why the first two readings of this
+failure blamed a missing `librln_v2.0.2.a` archive.
 
-**And the library this repository has actually been using was built from a
-different revision.** `_external/logos-delivery` is checked out at `0d433ea`,
-built on 15 August; `f8b0365` is not even an ancestor of it. So every local run
-that links `liblogosdelivery` — including the `--alongside` evidence for "loads
-alongside the wallet, storage and messaging modules" — used a library from a
-revision the recipe does not pin, and nothing noticed, because the build script
-skips the build entirely when the artefact is already there.
+### Two things this section said, which were wrong
 
-What is true, stated exactly:
+**"`f8b0365` is not even an ancestor of `0d433ea`."** It is. Same branch,
+`master`, fourteen commits and fifteen days apart — `f8b0365` on 30 July,
+`0d433ea` on 14 August. That claim was read off `_external/logos-delivery`, which
+is a **grafted** clone, and in a shallow clone every ancestry question answers
+no. This repository has a gate against exactly that mistake — `check-run-citations.py`
+refuses to run in a shallow clone, for this reason, in a comment that says so —
+and the mistake was then made one document over, in prose, where no gate looks.
 
-- the four-module load itself is real and was run; it is in the transcript, and
-  each companion answered across the runtime's transport;
-- the Delivery library it linked was built here, from `0d433ea`, and is not
-  reproducible by following this repository's own instructions;
-- the revision those instructions name does not currently build from clean.
+**"Neither pinning `0d433ea` nor keeping `f8b0365` is obviously right."** The
+question was mis-framed: neither is right, because the revision is not what
+decides this. `handlers.nim`, the file that fails, is **byte-identical at both
+revisions**, and nothing in the fourteen commits between them touches it.
 
-Neither pinning `0d433ea` nor keeping `f8b0365` is obviously right. The first
-makes the recipe reproduce what was measured and diverges from the consuming
-module's lock; the second keeps the lock and reproduces nothing. Resolving it
-means either finding the dependency set under which `f8b0365` compiles — the
-`taskpools` pin a few lines above it in the build script is the precedent — or
-establishing that `0d433ea` is the revision the module is compatible with and
-saying why. Until then this is written down rather than papered over, and the
-`alongside` workflow is red for a real reason.
+### What actually decides it
+
+`logos_delivery.nimble` requires `"chronos >= 4.2.0"` — no upper bound.
+`nimble.lock` pins chronos to 4.2.2. Upstream's own `build-deps` target runs
+`nimble setup --localdeps`, which resolves afresh instead of honouring that lock:
+of the 46 packages under `nimbledeps/pkgs2` here, **21 differ from the locked
+revision**, chronos and taskpools among them.
+
+And `NestedPoll` is a chronos effect that appeared between those versions:
+
+| chronos | released | has `NestedPoll` |
+|---|---|---|
+| 4.2.2 — what `nimble.lock` pins | 2026-03-26 | no |
+| 4.2.3 | 2026-07-09 | no |
+| 4.2.4 — what this machine resolved, 14 August | 2026-07-21 | no |
+| 4.4.0 | 2026-07-17 | **yes** |
+
+So the two builds differed by the day they ran, not by the revision they built.
+This machine resolved 4.2.4 and compiled; the runner resolved a chronos carrying
+the new effect and refused. Pointing the recipe at `0d433ea` would have changed
+nothing at all.
+
+The `taskpools` pin already in the build script is this same failure, met once
+and patched as a single instance — `nimble setup --localdeps` resolved a
+taskpools without `channels_spsc_single`, and the answer was to hardcode one
+revision over it. That is the class, and chronos is its second member.
+
+### What is true, stated exactly
+
+- the four-module load is real and was run; it is in the transcript, and each
+  companion answered across the runtime's transport;
+- the library it linked was built from `0d433ea` with dependencies resolved on
+  14 August, and the recipe as written does not name that dependency set;
+- a clean build is reproducible only against a package server that has not moved,
+  which is not a property anybody should have to rely on.
+
+The build script now installs the lock's revision over whatever was resolved, for
+chronos and taskpools both, **reading each revision out of `nimble.lock` rather
+than restating it** — a restated constant is one more thing that can drift from
+the thing it claims to mirror. Whether that is sufficient is a question for the
+`alongside` run, not for this paragraph: until that run is green, this is a
+diagnosis with a fix attached, not a fixed problem.
 
 ## One command, and what it needs before it will run
 

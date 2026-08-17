@@ -69,13 +69,89 @@ GO_WALLET_SDK_REV="${GO_WALLET_SDK_REV:-f6c0924394c5bdf361bd16b739a80432e68291f5
 # github:logos-messaging/logos-delivery, as pinned by logos-delivery-module's
 # own flake.lock. NOT the tip; see the note above.
 DELIVERY_LIB_REV="${DELIVERY_LIB_REV:-f8b036594ea2a36b529e10b584b7d2851a3ac5c8}"
-# nim-taskpools, as pinned by logos-delivery's nimble.lock at that revision.
-# `nimble setup --localdeps` resolves a different one (7d96007), which has no
-# `taskpools/channels_spsc_single` — the module the locked `ffi` imports — so the
-# build fails with `cannot open file: taskpools/channels_spsc_single` unless the
-# lock's revision is put in place. This is a dependency of the library, not of
-# any module, and nothing in the three module checkouts is affected by it.
-TASKPOOLS_REV="${TASKPOOLS_REV:-9e8ccc754631ac55ac2fd495e167e74e86293edb}"
+# ── the dependencies the lock names and the build does not install ──────────
+#
+# `logos-delivery`'s `build-deps` runs `nimble setup --localdeps`, which resolves
+# the newest thing satisfying each constraint instead of what `nimble.lock` pins.
+# Measured on the tree in `_external`: 21 of the 46 packages it installed differ
+# from the locked revision. The constraints have no upper bounds — chronos is
+# `>= 4.2.0` — so what you get depends on the day you build.
+#
+# Both known failures are that:
+#
+#   taskpools  the lock pins 0.1.0; resolution gives 0.2.1, which has no
+#              `taskpools/channels_spsc_single` — the module the locked `ffi`
+#              imports — so the build dies with `cannot open file:
+#              taskpools/channels_spsc_single`.
+#   chronos    the lock pins 4.2.2; 4.4.0 introduced a `NestedPoll` effect that
+#              rejects upstream's own `handlers.nim:233`. 4.2.2, 4.2.3 and 4.2.4
+#              do not have it, which is why this machine (which resolved 4.2.4 on
+#              14 August) built happily while a clean runner on 17 August did not.
+#
+# So the revisions are READ OUT OF `nimble.lock`, not written here. A restated
+# constant is one more thing that can quietly stop matching what it mirrors, and
+# the point of this block is to stop trusting a copy over the source.
+DELIVERY_PINNED_PKGS="${DELIVERY_PINNED_PKGS:-taskpools chronos}"
+
+# lock_rev <checkout> <package>  -> the vcsRevision nimble.lock names, or empty
+lock_rev() {
+  python3 -c '
+import json,sys
+try:
+    with open(sys.argv[1]+"/nimble.lock") as fh: lock=json.load(fh)
+except Exception: sys.exit(0)
+p=lock.get("packages",{}).get(sys.argv[2],{})
+sys.stdout.write(p.get("vcsRevision") or "")
+' "$1" "$2" 2>/dev/null
+}
+
+# lock_url <checkout> <package>  -> the url nimble.lock names, or empty
+lock_url() {
+  python3 -c '
+import json,sys
+try:
+    with open(sys.argv[1]+"/nimble.lock") as fh: lock=json.load(fh)
+except Exception: sys.exit(0)
+p=lock.get("packages",{}).get(sys.argv[2],{})
+sys.stdout.write(p.get("url") or "")
+' "$1" "$2" 2>/dev/null
+}
+
+# pin_locked_pkg <checkout> <package>
+#
+# Replace whatever `nimble setup` resolved with the revision the lock names,
+# keeping nimble's own `nimblemeta.json` so the package still looks installed.
+# Silent when the package is absent or already correct; loud when it acts.
+pin_locked_pkg() {
+  _co="$1"; _pkg="$2"
+  # `find` rather than a glob: an unmatched glob is silent in bash and an error
+  # in zsh, and this file gets sourced by both. `sort` because find does not
+  # promise an order and `head -1` would otherwise pick a different directory on
+  # different machines.
+  _dir="$(find "$_co/nimbledeps/pkgs2" -maxdepth 1 -type d -name "$_pkg-*" \
+            2>/dev/null | sort | head -1)"
+  [ -n "$_dir" ] || return 0
+  _rev="$(lock_rev "$_co" "$_pkg")"
+  _url="$(lock_url "$_co" "$_pkg")"
+  if [ -z "$_rev" ] || [ -z "$_url" ]; then
+    echo "  $_pkg: nimble.lock names no revision for it; leaving resolution alone"
+    return 0
+  fi
+  # Already the locked revision? `nimble setup` leaves no .git behind, so the
+  # only durable marker is one this script writes.
+  if [ -f "$_dir/.locked-rev" ] && [ "$(cat "$_dir/.locked-rev")" = "$_rev" ]; then
+    return 0
+  fi
+  echo "  $_pkg: installing nimble.lock's ${_rev:0:7} over what nimble resolved"
+  _meta="$(cat "$_dir/nimblemeta.json" 2>/dev/null || echo '{}')"
+  rm -rf "$_dir.locked"
+  git clone -q "$_url" "$_dir.locked" || die "could not clone $_url for $_pkg"
+  git -C "$_dir.locked" checkout -q "$_rev" \
+    || die "$_pkg has no revision $_rev, which is what its own nimble.lock names"
+  rm -rf "$_dir.locked/.git" && rm -rf "$_dir" && mv "$_dir.locked" "$_dir"
+  printf '%s' "$_meta" > "$_dir/nimblemeta.json"
+  printf '%s' "$_rev" > "$_dir/.locked-rev"
+}
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  VARIANT=darwin-arm64; SO=dylib ;;
@@ -181,21 +257,12 @@ if [ ! -f "$DELIVERY_DYLIB" ]; then
     || die "could not check out logos-delivery@$DELIVERY_LIB_REV"
   ( cd "$DELIVERY_LIB_SRC" && make -j"${JOBS:-8}" build-deps ) \
     || die "logos-delivery's build-deps failed"
-  # The taskpools pin, see the header note. Done after `build-deps` because that
-  # is what populates nimbledeps/ — and undone by nothing, because a rebuilt
-  # nimbledeps re-resolves it wrong every time.
-  tp="$(ls -d "$DELIVERY_LIB_SRC"/nimbledeps/pkgs2/taskpools-* 2>/dev/null | head -1)"
-  if [ -n "$tp" ] && [ ! -f "$tp/taskpools/channels_spsc_single.nim" ]; then
-    echo "  nimble resolved taskpools without channels_spsc_single; installing the"
-    echo "  nimble.lock revision ${TASKPOOLS_REV:0:7} over it"
-    meta="$(cat "$tp/nimblemeta.json" 2>/dev/null || echo '{}')"
-    rm -rf "$tp.locked"
-    git clone -q https://github.com/status-im/nim-taskpools "$tp.locked" \
-      || die "could not clone nim-taskpools"
-    git -C "$tp.locked" checkout -q "$TASKPOOLS_REV" || die "no such taskpools revision"
-    rm -rf "$tp.locked/.git" && rm -rf "$tp" && mv "$tp.locked" "$tp"
-    printf '%s' "$meta" > "$tp/nimblemeta.json"
-  fi
+  # The lock pins, see the header note. Done after `build-deps` because that is
+  # what populates nimbledeps/ — and undone by nothing, because a rebuilt
+  # nimbledeps re-resolves them wrong every time.
+  for _p in $DELIVERY_PINNED_PKGS; do
+    pin_locked_pkg "$DELIVERY_LIB_SRC" "$_p"
+  done
   # librln BEFORE liblogosdelivery, and it is not part of `build-deps`.
   # `liblogosdelivery`'s Nim link line ends in `--passL:librln_v2.0.2.a`, and
   # that archive is built by its own Makefile target, which first does
