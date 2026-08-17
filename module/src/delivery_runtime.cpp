@@ -674,8 +674,30 @@ DeliveryPort DeliveryRuntime::deliveryPort()
     port.receive = [this](const std::string &topic) { return received(topic); };
     // A "channel" in `messaging.create_group` is the reliable channel, opened on
     // the group's own content topic with this node as the sender.
+    //
+    // THE MIDDLE ARGUMENT IS A CONTENT TOPIC, AND IT USED TO BE THE GROUP ID.
+    //
+    // `channelCreate(channelId, channelId, channelId)` is what stood here, and a
+    // real node refuses it: it subscribes to the middle argument before opening
+    // the channel, and a bare identifier is not a content topic. So
+    // `messaging.create_group` succeeded through a `DeliveryPort` a HOST supplied
+    // — hosts build a topic — and failed through the port the module builds for
+    // itself, which is the only port a loaded plugin has. Every unit test passed
+    // throughout: a fake `channelCreate` takes whatever string it is given.
+    // `owner_channel.cpp` has always passed `ownerTopic(account)` in this
+    // position, which is why the owner channel worked live and this did not, and
+    // why the difference went unnoticed for as long as it did.
+    //
+    // `groupTopic` rather than `discoveryTopic` — both satisfy the node, and only
+    // one keeps group frames off the topic `agent.discover` reads Agent Cards
+    // from. Its header carries the measurement.
     port.channelCreate = [this](const std::string &channelId) {
-        return channelCreate(channelId, channelId, channelId);
+        const std::string topic = groupTopic(channelId);
+        // Refuse rather than fall back to the id. An empty topic here means the
+        // caller's group id is not one the grammar can carry, and opening the
+        // channel on something else would put the group somewhere nobody named.
+        if (topic.empty()) return false;
+        return channelCreate(channelId, topic, channelId);
     };
     return port;
 }

@@ -906,10 +906,13 @@ is believed. `scripts/agent-spend.py` is the last two, and what it performs is
 the anchored policy program's own `spend` instruction, so the chain applies the
 same limits to a module's payment as to `scripts/a2a-task.sh`'s.
 
-Stated plainly, because a reviewer will check: the **storage, sequencer and
-toolchain skills have no ports wired** —
-those need a storage node and a local `spel` inside the module's process, which
-is a different problem from the transport one and is not solved. `wallet.send`
+Stated plainly, because a reviewer will check: the **sequencer and toolchain
+skills have no ports wired** — `program.call` and `program.deploy` would have to
+take a program id, an instruction and arguments from a stranger's A2A request
+and put them on a command line, and the module's one delegation mechanism passes
+input on stdin precisely to avoid that. The storage skills came off this list:
+the module `dlopen`s `libstorage` and opens its own node on
+`meta.configure("storage","on")`, exactly as it already did for Delivery. `wallet.send`
 still cannot move money from a loaded module either: its envelope is fixed at
 `start()` and there is no live read behind it, so only `agent.task` pays.
 Each of those refuses *as itself* —

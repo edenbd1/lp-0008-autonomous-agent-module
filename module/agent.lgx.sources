@@ -29,16 +29,16 @@
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "471abbc64a806ccb6d74313d0f6a5039a7935ff5b1f6115c543e04ee68882653",
-    "module/src/agent_module_plugin.h": "472d32c8e8dab19848599694237eb1c1a098c9539d3815c93d06e0d1fa013a6e",
-    "module/src/agent_skills.cpp": "e741574536996fe0f8ae0bebefefa3caa6d5e88a461db6826a590ae182045374",
+    "module/src/agent_module_plugin.cpp": "01230bc915300325741ee9b96f554fdc22ec22a522abead876772dfedcf5870c",
+    "module/src/agent_module_plugin.h": "646644b697dc453d2e161e7cecdfd3ba059a831314aa0b7704ff91dab95bb8c2",
+    "module/src/agent_skills.cpp": "375ea45408f197034f2dc962d1478de555751c19d868a8b60944bc84fbb89a52",
     "module/src/agent_skills.h": "d2cc5d784f57603269ac69bccb904f8e1f0115f505398e52b2d19e106ba3820f",
-    "module/src/delivery_runtime.cpp": "f24125316343998c7aa0f8bf8d4b673dabcf2ecd2bd2463bd997fa0394747497",
+    "module/src/delivery_runtime.cpp": "912925371b22ef7afb7e3e4531f82b806821bcb04ef426d8851f3eb5017d6296",
     "module/src/delivery_runtime.h": "5cd0c108bdf342f2a260cd6043b22dc1f5ae3d9bc981537878aa7e5a53227892",
     "module/src/inference.cpp": "ecb0d3048ee7c26688f31af1621db7da2bf52437547e16920ea323c82a34c3fa",
     "module/src/inference.h": "5c27af5158edd83fe9bcaaa355a86d90748f68cfc787f922d8190a5969ac2732",
-    "module/src/messaging_skills.cpp": "b71da530a0631b679d4490a485385f1d523117df881ff2881b6d51a0a59b38a6",
-    "module/src/messaging_skills.h": "6b23d21679cb1c27be21d5765d25e2856be6d84de7b846718685db417c5cc113",
+    "module/src/messaging_skills.cpp": "a3d65d382a0f750c5ddec000274b1ac4d17168e6411f8068c19bb621de8ef770",
+    "module/src/messaging_skills.h": "1c2f1eb6677e15135d9eda5f5c65737e5606c7b623ec1eb168ba2390b3fdce7e",
     "module/src/owner_channel.cpp": "1fd284251653869cc8721e5051e298b56d8b4f4444611526e28e7288bc9f002e",
     "module/src/owner_channel.h": "d84c978a8d5e6189e39ac2accdc4d0de430577f5bf195d0f016ac2e21cb7f8d5",
     "module/src/owner_skills.cpp": "c46d9c614ded7cdafa37c3f2c7ad55e6c4607e7eb175868eb9efaf3610d34939",
@@ -47,8 +47,8 @@
     "module/src/program_skills.h": "820dc8abe2870a6bb10cb519f979d8add33a152536cc34d1b35a7cccb769ca97",
     "module/src/spend_marker.cpp": "f16403e06be5a6125b880199fcd840581d5ccbc67dd2c39ccf454d02311c3f43",
     "module/src/spend_marker.h": "bb8814c2060ff609b965691bc6a36dc5b26f24ef85fb4ca6624e0708a96ef5ab",
-    "module/src/storage_skills.cpp": "e4d3df2ff25c277f177c20a4a807d09fba082934abbbc42771fab4661fcfa247",
-    "module/src/storage_skills.h": "40356f6b968451036a8c7761235a071304faea2b99cfaf75efb7f4932fbdd324",
+    "module/src/storage_skills.cpp": "7a8c12fe82fcf14952b7021f2e90172a4487c3c31e4f0da241583ae6b750239f",
+    "module/src/storage_skills.h": "8eea474093bd2cb504e45dc84dfd424e56a1cac12ce5524caab065e952fd5a87",
     "module/src/task_persistence.cpp": "666fac67ff5b49f5ada0123e4e2fde991c59bbcf345365479d4e40793086b7bb",
     "module/src/task_persistence.h": "9b8d2bf2a7af021274a929e4ccedefaf61cadaca8b30dda757abd12690c5d81d",
     "module/src/wallet_skills.cpp": "882ad5e54ef681c377f49e0b378c9f205e81ba90422e67a3ac406e6333f5568e",
@@ -56,40 +56,40 @@
   },
   "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
   "package": "module/agent.lgx",
-  "package_root_hash": "fd3f07fbaeec18864a587bca46964dbc3e84d8d661fa25919dcd185176042954",
+  "package_root_hash": "1dd4a8b67d80d7348ca5682db3acdd3209a7627cda74407256a66614a519a37e",
   "variants": {
     "darwin-arm64": {
       "built_on": null,
-      "bytes": 4442640,
+      "bytes": 4551936,
       "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
       "delivery": null,
       "format": "Mach-O arm64",
       "main": "agent_plugin.dylib",
       "qt": "6.9",
       "qt_reported": "6.9.2",
-      "sha256": "978ef374da49f39239556a2171039189912a6320a515b30239b58daa55cf5162"
+      "sha256": "1fc69f424e41ad1268e26730c098740cce6cec1ea1fda4aa1ff383cca8ed3b26"
     },
     "linux-amd64": {
       "built_on": null,
-      "bytes": 6955896,
+      "bytes": 7099608,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
       "format": "ELF x86-64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "e23dd725936474b642ce7a3b2695f98a90878cb3d54d45a08d55943009118fe5"
+      "sha256": "c8a5fad5289853b687f1a2576785c2e673a68a25ecc1b1028410371027e33421"
     },
     "linux-arm64": {
       "built_on": null,
-      "bytes": 7033832,
+      "bytes": 7163120,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
       "format": "ELF aarch64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "45baa42c5dc5d4a9c72e6546cba104198ce41bd253ada5af3b346334f382be5f"
+      "sha256": "ddf777d2925646b939cab773dc621078f522abe388443cbf79c1da1ef0346c49"
     }
   }
 }

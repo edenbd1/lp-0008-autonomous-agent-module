@@ -383,10 +383,13 @@ private:
 
     /// Act on a setting that does something rather than only being stored.
     ///
-    /// `delivery` is the one that matters: `on` brings this module's OWN Logos
-    /// Delivery node up, which is what turns every `"delivery node is not
-    /// started"` refusal into a working transport without anything crossing the
-    /// plugin boundary except these two strings. See @ref delivery_.
+    /// `delivery` and `storage` are the two that matter: `on` brings this
+    /// module's OWN Logos Delivery or Logos Storage node up, which is what turns
+    /// every `"… node is not started"` refusal into a working transport without
+    /// anything crossing the plugin boundary except these two strings. See
+    /// @ref delivery_ and @ref storage_. `storage_data_dir` is the one piece of
+    /// configuration a Storage node cannot be brought up without, and it is read
+    /// here rather than guessed.
     void applySetting(const std::string &key, const std::string &value);
 
     /// Run the command configured under `settingKey` with `input` on its stdin,
@@ -576,6 +579,23 @@ private:
     // public network takes tens of seconds and is a decision an operator makes,
     // not a side effect of loading a module.
     std::unique_ptr<logos::agent::DeliveryRuntime> delivery_;
+
+    /// The module's own Logos Storage node, on exactly the same argument.
+    ///
+    /// This one was left out for a release, and the gap was not small: because
+    /// `installBuiltinSkills` consumed `ports.storage` verbatim, a LOADED plugin
+    /// — which is handed `SkillPorts{}` — answered `"storage node is not
+    /// started"` to `storage.upload`, `download`, `list` and `share` in every
+    /// shipped configuration. The refusal was true and the reason was not the
+    /// one it suggested: the node was not down, there was no port to reach one
+    /// through. `meta.configure("storage_data_dir", …)` and
+    /// `meta.configure("storage","on")` are what fill it now, and both are
+    /// strings.
+    ///
+    /// Declared after `skills_` for the same reason `delivery_` is: members are
+    /// destroyed in reverse order, the skills capture ports that point here, and
+    /// so the skills have to go first.
+    std::unique_ptr<logos::agent::StorageRuntime> storage_;
 
     /// The owner channel, on this module's own node, when one is configured.
     /// Guarded by `ownerChannelMutex_` rather than `mutex_`: opening it and

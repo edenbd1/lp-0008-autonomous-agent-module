@@ -743,15 +743,27 @@ int main(int argc, char **argv)
     // -----------------------------------------------------------------------
     step("11. shut down");
     // -----------------------------------------------------------------------
-    if (node.ctx != nullptr) {
-        node.up.store(false);
-        node.arm();
-        storage_stop(node.ctx, &StorageNode::callback, &node);
-        check(node.settled(60), "the storage node stopped");
-        node.arm();
-        storage_close(node.ctx, &StorageNode::callback, &node);
-        node.settled(30);
-        check(storage_destroy(node.ctx) == RET_OK, "the storage context was destroyed");
+    if (moduleMode && storageUp) {
+        // Down the same way it came up: two strings. And it must go all the way
+        // down — `StorageRuntime::shutDown` stops, closes and destroys, because
+        // a node left running holds a LevelDB lock on the repository and the
+        // next run against the same directory would fail for a reason that has
+        // nothing to do with the caller.
+        r = call(agent, "meta.configure", json{{"key", "storage"}, {"value", "off"}});
+        check(answered(r), "meta.configure('storage','off') is accepted");
+        const json sEnd = storageStatus(agent);
+        note("meta.status storage: " + compact(sEnd));
+        check(sEnd.value("state", std::string()) == "off", "the storage node is down again");
+        check(!sEnd.contains("peerId"),
+              "and it no longer reports a peer id, because there is no node to have one");
+
+        // And the skills refuse again, with the message they gave before any
+        // node existed. A port that stayed live after the node was destroyed
+        // would be the worse failure: calls into a freed context.
+        r = call(agent, "storage.upload", json{{"path", uploadPath}});
+        note("storage.upload: " + compact(r));
+        check(refused(r) && errorOf(r) == "storage node is not started",
+              "and storage.upload refuses with the message it gave before any node existed");
     }
     agent.stop();
 

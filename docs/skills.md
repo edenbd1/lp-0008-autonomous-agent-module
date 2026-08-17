@@ -280,18 +280,23 @@ question:
 
 Two further boundaries, for completeness:
 
-- **The storage, wallet, sequencer and toolchain skills have no ports wired
-  inside a loaded plugin.** This used to say twenty of the twenty-two, "for the  (count-as-it-was)
+- **The wallet, sequencer and toolchain skills have no ports wired inside a
+  loaded plugin.** This used to say twenty of the twenty-two, "for the  (count-as-it-was)
   same `std::function` reason", and the reason was the wrong one: a host cannot
   *pass* a closure over Qt Remote Objects, and it does not follow that a module
-  cannot *build* one. The module now links `liblogosdelivery` and constructs its
-  own `DeliveryPort` (`module/src/delivery_runtime.cpp`), so `messaging.*`,
-  `agent.discover`, `agent.task`, `agent.subscribe`, `agent.update` and
-  `agent.poll` work in a loaded plugin — see `docs/basecamp.md`. What is left needs a storage node, a signing wallet or
-  a local `spel` inside the module's process, which no amount of port plumbing
-  supplies. Each of those refuses naming the port it is missing, which is the
-  opposite of the failure worth hiding: a module that loads, answers `skills()`
-  with `[]`, and looks like it works.
+  cannot *build* one. The module opens its own Logos Delivery node
+  (`module/src/delivery_runtime.cpp`) and its own Logos Storage node
+  (`module/src/storage_skills.cpp`) and constructs both ports from them, so
+  `messaging.*`, `storage.*`, `agent.discover`, `agent.task`, `agent.subscribe`,
+  `agent.update` and `agent.poll` work in a loaded plugin — see `docs/basecamp.md`
+  and the transcript behind `./scripts/skills-live.sh`. `wallet.history` answers
+  from the module's own submission journal. What is left needs a signing wallet
+  or a local `spel` inside the module's process, taking arguments that arrive
+  from a stranger, which no amount of port plumbing supplies safely — the last
+  paragraphs of [Status, honestly](#status-honestly) give the reasoning. Each of
+  those refuses naming the port it is missing, which is the opposite of the
+  failure worth hiding: a module that loads, answers `skills()` with `[]`, and
+  looks like it works.
 - **`meta.skills` is a registered skill, and for a while it was not.** It is
   worth recording because of what the failure looked like: three C++ doc
   comments and `docs/a2a-binding.md` described it as existing, and
@@ -478,13 +483,14 @@ demonstration, and it is external, separately compiled, and self-checking.
 | Category | Skill | State |
 |---|---|---|
 | Blockchain | `wallet.send` | **on chain** — `spend`, enforced by the anchored envelope |
-| Blockchain | `program.call` | **on chain** — same path, same threshold |
-| Blockchain | `wallet.balance`, `wallet.history`, `program.query` | reads over JSON-RPC, and reachable from `agent-console` — §5 has the recorded answers |
+| Blockchain | `program.call`, `program.deploy` | **on chain** — same path, same threshold — when a host wires `ProgramPort`. Inside a *loaded* plugin they still refuse, and unlike storage this one is not port plumbing: see the last paragraphs of this section |
+| Blockchain | `wallet.balance`, `program.query` | reads over JSON-RPC, and reachable from `agent-console` — §5 has the recorded answers. Both need a sequencer connection, which a *loaded* plugin has no port for: see the last paragraphs of this section |
+| Blockchain | `wallet.history` | **answers in a loaded plugin**, from the module's own submission journal — the port is wired to the task store, where every settled task carries its `settlementTx`. It reports each row as `unverified` and the list as `confirmedAgainstChain:false`, because confirming a hash needs a sequencer and this plugin links no HTTP client |
 | Agent | `agent.card`, `agent.discover`, `agent.task` | **demonstrated** by `scripts/a2a-task.sh`, settled on the public testnet, and between two loaded modules by `./scripts/delivery-in-plugin.sh` |
 | Agent | `agent.update`, `agent.poll` | **demonstrated between two loaded modules** — `./scripts/delivery-in-plugin.sh peers`, where each agent's own `TaskStore` reaches `completed` on updates the other account published, and a self-authored one on the same topic is counted and refused |
 | Messaging | `messaging.send`, `messaging.receive`, `messaging.join` | **run against live Delivery nodes** from a loaded plugin — `send` and `receive` between two of them on the public network (`delivery-in-plugin.sh peers`), `join` against a started node (`delivery-in-plugin.sh`, no argument) |
-| Messaging | `messaging.create_group` | **run as a skill against a live Delivery node** by `./scripts/skills-live.sh`, and it opens a channel only through a `DeliveryPort` a *host* supplies: through the port the module builds for itself the node refuses it. That is a one-line defect in `module/src`, it is measured rather than inferred, and the paragraphs below carry the measurement |
-| Storage | `storage.upload`, `download`, `list`, `share` | **run as skills against a live Storage node** by `./scripts/skills-live.sh`, through `AgentModuleImpl::invoke()` — not through the C driver, which is the library proven and not the skills. The ports are the host's: nothing in `module/src` opens a Storage node, so a module *loaded* by Basecamp still refuses every `storage.*` call |
+| Messaging | `messaging.create_group` | **run as a skill against a live Delivery node** by `./scripts/skills-live.sh`, through the port the module builds for itself. It used to open a channel only through a port a *host* supplied; the paragraphs below carry the measurement, the one-line cause and the fix |
+| Storage | `storage.upload`, `download`, `list`, `share` | **run as skills against a live Storage node the module opened for itself**, by `./scripts/skills-live.sh`, through `AgentModuleImpl::invoke()` from a `SkillPorts` that was completely empty — the state of every plugin Basecamp loads. Not through the C driver, which is the library proven and not the skills |
 | Meta | `meta.status`, `meta.skills` | **answered by the loaded `.lgx`** — the two the module wires to itself, asserted over both load harnesses |
 | Inference | `agent.evaluate_task` | **tested against fakes** in CI; no model has ever been run against it — see below |
 | Meta | `meta.status` | answers in the loaded module, including its `durability` block — the task snapshot's path and what the last recovery found |
@@ -508,62 +514,117 @@ skill from a registered one.
 The messaging and storage rows used to read "written against the API, compiled,
 not yet exercised against a running node", and that disclosure was narrower than
 its consequence: for those five skills, "all default skills are implemented"
-rested on unit tests against fake ports. `./scripts/skills-live.sh` closes it.
+rested on unit tests against fake ports. `./scripts/skills-live.sh` closes it,
+and in closing it found two defects that only a real node could have shown.
+
 Every call it makes is `AgentModuleImpl::invoke("<skill>", …)` on the module's
-own dispatcher, against a real Logos Storage node and a real Logos Delivery
-node; `scripts/skills-live-drive.cpp` is the host that links the module and hands
-it the ports.
+own dispatcher. In pass A the `SkillPorts` handed to `registerBuiltinSkills` is
+**completely empty** — no storage port, no share port, no delivery port — which
+is the state of every plugin Basecamp loads, and the module opens both nodes for
+itself from `meta.configure`. The driver links no storage library at all, so it
+could not have opened one on the module's behalf even if it tried.
 
-Four of the five work. `storage.upload` returns a content address — base58 and
-starting `z`, which is asserted, because "non-empty" would have accepted the
-upload session id one call earlier. `storage.download` writes the content to a
-path, and the *shell* recomputes `shasum -a 256` over what went in and what came
-back: a driver comparing its own bytes to its own bytes would pass with no node
-involved. `storage.list` names that address and not the control one.
-`storage.share` verifies the address against the node, publishes it on the
-recipient's owner topic, and `messaging.receive` reads the frame back. Each
-claim has a control that could fail: both skills refuse, naming the node that is
-not started, before either node exists; the control address is not a mutant but
-one the node itself answers that it does not hold — `vault_drive.c` measured
-`storage_exists` saying *true* for a one-character mutant, so a control that was
-merely well-formed-and-different would sometimes be an address the node has;
-that control address is refused by `download` and by `share`; the refused
+**The first defect: there was no storage port.** `installBuiltinSkills` consumed
+`ports.storage` verbatim, so all four `storage.*` skills answered `"storage node
+is not started"` in every shipped configuration. The refusal was true and it
+pointed in the wrong direction — the node was not down, there was nothing that
+could open one. `DeliveryRuntime` had already made the argument that settles it
+and it had not been applied here: a host cannot *pass* a `std::function` over Qt
+Remote Objects, and that is not the module being unable to *construct* one.
+`module/src/storage_skills.cpp` now carries a `StorageRuntime` that opens a Logos
+Storage node from the module's own configuration and builds `StoragePort` out of
+it. Two strings travel — `meta.configure("storage_data_dir", …)` and
+`meta.configure("storage","on")` — and the port is constructed on the far side.
+It differs from the delivery path in three ways worth knowing: the library is
+resolved by `dlopen` with no build-system input at all (the storage C ABI has no
+structs, so the header is not needed to compile against it, and the code path is
+therefore in *every* packaged variant identically); every call is serialised,
+because the library's callbacks carry no correlation token and two concurrent
+uploads would otherwise cross their session ids; and a data directory is
+required rather than invented, so a module nobody configured refuses with a
+sentence naming the setting instead of taking a lock on a directory nobody chose.
+
+**The second: the module's own delivery port asked for an impossible channel.**
+`deliveryPort` built `channelCreate(channelId, channelId, channelId)` — the group
+id in the **content topic** argument. A real node subscribes to that content
+topic before it opens the channel and a bare identifier is not one, so the node
+refused and `messaging.create_group` answered `delivery refused to create the
+channel` through the only port a loaded plugin has, while succeeding through a
+port a host supplied. Measured on one node, in one process, two calls apart: the
+bare id is refused and the same channel with a documented content topic is
+accepted. `OwnerChannel` passes `ownerTopic(account)` in that position and has
+always worked live, which is why nothing else caught it. It now passes
+`groupTopic(channelId)` — a third builder in the same grammar rather than a reuse
+of `discoveryTopic`, which would have put group frames on the topic
+`agent.discover` reads Agent Cards from.
+
+All five skills now work through the module's own ports. `storage.upload` returns
+a content address — base58 and starting `z`, which is asserted, because
+"non-empty" would have accepted the upload session id one call earlier.
+`storage.download` writes the content to a path, and the *shell* recomputes
+`shasum -a 256` over what went in and what came back: a driver comparing its own
+bytes to its own bytes would pass with no node involved. `storage.list` names
+that address and not the control one. `storage.share` verifies the address
+against the node, publishes it on the recipient's owner topic, and
+`messaging.receive` reads the frame back. `messaging.create_group` opens a real
+reliable channel and both invitations arrive on the members' own owner topics.
+`meta.status` reports the storage node's libp2p **peer id**, which is the one
+field this module cannot invent: `state: ready` is the module's own bookkeeping,
+a peer identity is the node's.
+
+Each claim has a control that could fail, and every one of them has been watched
+fail. Both skills refuse, naming the node that is not started, before either node
+exists, and again after the nodes are put back down. The control address is not a
+mutant but one the node itself answers that it does not hold — `vault_drive.c`
+measured `storage_exists` saying *true* for a one-character mutant, so a control
+that was merely well-formed-and-different would sometimes be an address the node
+has. That control address is refused by `download` and by `share`; the refused
 download leaves no file behind, checked by the shell rather than by the driver;
-and the refused share leaves the topic's frame count unchanged, which a share
-that refused an address and published anyway would not.
+the refused share leaves the topic's frame count unchanged, which a share that
+refused an address and published anyway would not; and the altered copy of the
+retrieved file is run through the identical `shasum` comparison, which must
+refuse it. In `host-port` the bare-id `channelCreate` is still called directly on
+the same node the skill succeeds against, so the second defect stays *measured*
+after being fixed rather than becoming a story about the source.
 
-The fifth found something no fake could have. `messaging.create_group` asks its
-port for a channel, and `deliveryPort` in `module/src/delivery_runtime.cpp`
-builds that port with `channelCreate(channelId, channelId, channelId)` — the
-group id in the **content topic** argument. A real node subscribes to that
-content topic before it opens the channel, and a bare identifier is not a
-content topic, so the node refuses and the skill answers `delivery refused to
-create the channel`. Measured on one node, in one process, two calls apart: the
-bare id is refused and the same channel with `/lp-0008/1/discovery-<id>/json` is
-accepted. `OwnerChannel` in `module/src/owner_channel.cpp` passes
-`ownerTopic(account)` and has always worked live, which is why nothing else
-caught it. Handed a port that passes a content topic, the skill opens a real
-reliable channel, invites two members, and both invitations arrive on the
-members' own owner topics.
+And the whole of pass A has a negative control. The self-wiring line is removed
+from a copy of `agent_module_plugin.cpp` outside `module/`, the driver is rebuilt
+against it, and the run must go red — it fails six assertions, and it fails with
+the node *up* and `storage.upload` still unable to reach it, which is the
+signature of a missing port and of nothing else. Without that, "the module wires
+its own storage" would be a claim consistent with a harness that passes against
+any module at all.
 
-So the honest state of `messaging.create_group` is two statements, not one: the
-**skill** works against a real node, and the **port the module builds for
-itself** does not. The fix is one line in `module/src`, and it is deliberately
-not made here — that source is what the shipped `agent.lgx` is built from, and
-changing it without repackaging all three variants trades a known defect for a
-package that no longer matches its source. `./scripts/skills-live.sh` asserts
-both halves, so neither can change quietly in either direction.
+Three things this does not improve, stated rather than left to be noticed.
 
-Two things this does not improve. The storage ports are the **host's**: there is
-no `StorageRuntime` to match `DeliveryRuntime`, so `installBuiltinSkills` has
-nothing to fill `ports.storage` from and a module loaded by Basecamp still
-refuses every `storage.*` call with "storage node is not started". And every
-read-back above is a node receiving its own publication, which shows the frame
-went through the relay path and came back — not that a second peer got it; two
-processes and two nodes is `./scripts/delivery-in-plugin.sh peers`. Separately,
-`scripts/exercise-nodes.sh` still drives the two libraries through the C drivers
-in `module/tests/` — the node half proven, which remains a different claim from
-the skills.
+Every read-back above is a node receiving its own publication, which shows the
+frame went through the relay path and came back — not that a second peer got it.
+Two processes and two nodes is `./scripts/delivery-in-plugin.sh peers`.
+
+`storage.download` resolves addresses in the node's **local store**.
+`DownloadSkill` asks `exists` first and `storage_exists` is a datastore key
+lookup, so an address this node does not already hold is refused before any
+network fetch is attempted. Pulling a peer's content into the local store is
+`storage_fetch`, and no skill exposes it — so an address shared *to* this agent
+by another one is not yet downloadable through `storage.download`.
+
+`program.call`, `program.deploy` and the sequencer reads behind `wallet.balance`
+and `program.query` are **not** closed the same way, and the reason is not that
+nobody has got to them. `wallet.history` could be closed because its port asks
+the module for something the module already has — its own record of what it
+submitted. `ProgramPort` asks for something else: `call` runs `spel` and `deploy`
+runs a wallet, with a program id, an instruction and arguments that arrive from a
+stranger's A2A request. This module has exactly one delegation mechanism —
+`runConfiguredCommand`, the one `card_signer`, `pay_signer` and `policy_source`
+use — and it passes its input on **stdin, never on a command line**, precisely
+because a shell interpolation of attacker-influenced text would be a command
+injection with the agent's key on the other end. Wiring `program.call` through it
+would mean either building a command line out of caller-supplied arguments, which
+is that injection, or adding a second `fork`/`execvp` mechanism that submits
+transactions and has never been run against a chain. Neither is shipped: the
+first is a defect and the second would be a code path that spends money and has
+only ever been compiled, which is the exact standard the rest of this page is
+written against. They refuse, naming the port they are missing.
 
 Two things the messaging code does that a stub would not. It **refuses** when the
 node is not started rather than returning success, because `start` returns as

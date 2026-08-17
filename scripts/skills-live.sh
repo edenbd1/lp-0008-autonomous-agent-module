@@ -148,11 +148,23 @@ rule "1. build the driver against the module, unmodified"
 # exercise of the shipped module rather than of a subset compiled for the
 # occasion — and `-DLP0008_WITH_DELIVERY` is what lets the module open its own
 # Delivery node, exactly as the packaged plugin is built.
+#
+# NOTHING LINKS THE STORAGE LIBRARY, AND THAT IS THE POINT.
+#
+# `-lstorage` and `-I$STORAGE_SRC/library` used to be on this line, because the
+# driver opened a Storage node of its own and handed the module a port. It does
+# not any more: `module/src/storage_skills.cpp` opens the node, and it opens it
+# with `dlopen` — the same run-time resolution a plugin loaded by Basecamp uses,
+# and for the same reason (`liblogosdelivery.h`'s note: a link-time dependency
+# turns one missing file into a plugin that will not load at all, which Basecamp
+# reports to nobody). So the driver here has no storage symbols in it and could
+# not open a node if it tried. `LP0008_STORAGE_LIB` below is what tells the
+# module where to look, exactly as an operator would.
 BIN="$WORK/skills-live-drive"
 before="$(git status --porcelain module/ 2>/dev/null || true)"
 "$CXX" -std=c++17 -Wall -Wextra -O1 -DLP0008_WITH_DELIVERY \
   -I"$ROOT/module/src" -I"$SDK/cpp" -I"$NLOHMANN_INCLUDE" \
-  -I"$DELIVERY_SRC/library" -I"$STORAGE_SRC/library" \
+  -I"$DELIVERY_SRC/library" \
   scripts/skills-live-drive.cpp \
   module/src/agent_module_plugin.cpp \
   module/src/delivery_runtime.cpp \
@@ -166,7 +178,7 @@ before="$(git status --porcelain module/ 2>/dev/null || true)"
   module/src/owner_channel.cpp \
   module/src/owner_skills.cpp \
   module/src/task_persistence.cpp \
-  -L"$STORAGE_SRC/build" -lstorage -Wl,-rpath,"$STORAGE_SRC/build" $DL \
+  $DL \
   -o "$BIN" || die "the driver did not compile"
 ok "$BIN"
 
@@ -204,6 +216,7 @@ rule "3. pass A — the storage skills, and create_group through the module's ow
 # and the storage node is started, written to and read back before that.
 LOG_A="$WORK/pass-a.log"
 export LP0008_DELIVERY_LIB="$DLIB"
+export LP0008_STORAGE_LIB="$SLIB"
 ( cd "$WORK" && "$BIN" module-port "$RUN_ID" "$WORK/store" "$IN" "$OUT" "$CONTROL_OUT" ) \
   > "$LOG_A" 2>&1; rc_a=$?
 grep -E "$SHOW" "$LOG_A" | sed 's/^/  /'
@@ -281,15 +294,74 @@ GROUP=$(awk '/^GROUP /{print $2}' "$LOG_B")
 if [ -n "$GROUP" ]; then ok "messaging.create_group opened channel $GROUP"
 else bad "no channel was opened"; fi
 
-rule "7. what is still open, in one sentence"
-cat <<'TXT'
-   messaging.create_group cannot open a channel through the port the module
-   builds for itself: module/src/delivery_runtime.cpp's deliveryPort() passes the
-   group id as the content topic, and a real node refuses it. One line, in
-   module/src, deliberately not changed here — that source is what the shipped
-   agent.lgx is built from, and editing it makes the package stale. docs/skills.md
-   records the state rather than the intention.
-TXT
+rule "7. the negative control — pass A can fail"
+# Everything above is a claim that the MODULE wires its own storage port. The
+# claim is only worth what its falsification is worth, so: put the module back in
+# the state it was in before that wiring existed — `ports.storage` consumed
+# verbatim, which is exactly what `installBuiltinSkills` did — rebuild, and
+# assert the run goes red.
+#
+# Without this, "the module self-wires storage" is consistent with a driver that
+# would pass against any module at all, and this repository has twice shipped an
+# assertion that could not fail.
+#
+# The mutation is written OUTSIDE module/, so step 8 below still means what it
+# says. `! diff` on a line of its own is not a guard — under `set -e` bash does
+# not exit when a return value is inverted with `!` — so it is written as
+# `! diff … || { …; exit 1; }`, which is what makes the inversion load-bearing.
+MUT="$WORK/unwired_plugin.cpp"
+sed 's|        ports.storage = store->storagePort();|        (void)store;|' \
+  module/src/agent_module_plugin.cpp > "$MUT"
+if ! diff -q module/src/agent_module_plugin.cpp "$MUT" > /dev/null; then
+  ok "the control removes the storage self-wiring"
+else
+  bad "the control changed nothing, so it tests nothing"
+fi
+MUT_BIN="$WORK/skills-live-drive-unwired"
+"$CXX" -std=c++17 -w -O1 -DLP0008_WITH_DELIVERY \
+  -I"$ROOT/module/src" -I"$SDK/cpp" -I"$NLOHMANN_INCLUDE" \
+  -I"$DELIVERY_SRC/library" \
+  scripts/skills-live-drive.cpp \
+  "$MUT" \
+  module/src/delivery_runtime.cpp \
+  module/src/spend_marker.cpp \
+  module/src/messaging_skills.cpp \
+  module/src/storage_skills.cpp \
+  module/src/inference.cpp \
+  module/src/wallet_skills.cpp \
+  module/src/program_skills.cpp \
+  module/src/agent_skills.cpp \
+  module/src/owner_channel.cpp \
+  module/src/owner_skills.cpp \
+  module/src/task_persistence.cpp \
+  $DL \
+  -o "$MUT_BIN" || die "the control did not compile"
+LOG_C="$WORK/pass-control.log"
+rm -rf "$WORK/store-control"; mkdir -p "$WORK/store-control"
+( cd "$WORK" && "$MUT_BIN" module-port "${RUN_ID}c" "$WORK/store-control" "$IN" \
+    "$WORK/control-out.txt" "$WORK/control-ctl.txt" ) > "$LOG_C" 2>&1; rc_c=$?
+# Red FOR THE RIGHT REASON. A non-zero exit alone is satisfied by a binary that
+# dies before it runs a single assertion — a missing library, an abort in a
+# static initialiser — so the failure count and the failing line are both read.
+fails_c=$(grep -c '^  FAIL  ' "$LOG_C" || true)
+if [ "$rc_c" -ne 0 ] && [ "$fails_c" -gt 0 ]; then
+  ok "the unwired module fails pass A: $fails_c assertion(s), exit $rc_c"
+  grep -m3 '^  FAIL  ' "$LOG_C" | sed 's/^/    /'
+else
+  bad "a module with no storage self-wiring PASSED pass A — the run above proves nothing"
+fi
+# And it must fail for the RIGHT reason, which is a precise and unusual pair: the
+# node still comes up — `meta.status` is wired to the runtime either way, so the
+# control leaves that half alone — and the skill still cannot reach it. That is
+# the signature of a missing port and of nothing else. A control that only
+# asserted "it went red" would be satisfied by a node that failed to start.
+if grep -qF "ok    the module's own Storage node came up and reported it ready" "$LOG_C" \
+   && grep -qF 'FAIL  the skill answered ok' "$LOG_C"; then
+  ok "and for the right reason: the node came up, and storage.upload still could not reach it"
+  grep -m1 -F 'storage.upload: ' "$LOG_C" | sed 's/^/    /'
+else
+  bad "it failed somewhere other than the storage port — see $LOG_C"
+fi
 
 rule "8. nothing under module/ was touched"
 # The same check `examples/agent-console/run.sh` makes, for the same reason: this
@@ -309,9 +381,13 @@ echo
 echo "logs: $LOG_A"
 echo "      $LOG_B"
 finish "storage.upload, storage.download, storage.list and storage.share were each
-called through AgentModuleImpl::invoke() against a running Storage node: an
-address came back, the bytes came back and matched shasum, an address the node
-does not hold was refused by both the download and the share, and the shared
-address travelled over a real Delivery node. messaging.create_group opened a real
-reliable channel and invited two members through a host-supplied port, and is
-refused through the module's own — which is the one-line defect named above."
+called through AgentModuleImpl::invoke() against a Logos Storage node THE MODULE
+OPENED FOR ITSELF, from a SkillPorts that was completely empty: an address came
+back, the bytes came back and matched shasum computed outside the driver, an
+address the node does not hold was refused by both the download and the share
+and left no file behind, and the shared address travelled over a real Delivery
+node the module also opened. messaging.create_group opened a real reliable
+channel and invited two members through the module's OWN port, which it could not
+do before, and the bare-id control keeps that difference measured on a live node.
+The driver links no storage library: the module found one with dlopen, which is
+the path a plugin loaded by Basecamp takes."

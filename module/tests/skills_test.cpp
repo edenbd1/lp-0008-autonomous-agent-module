@@ -738,12 +738,23 @@ int main()
         // not exist, and not as ok:true, and not as a crash on an empty
         // std::function.
         //
-        // `meta.status` and `meta.skills` are the two exceptions, and they are
-        // exceptions for one reason: both answer questions about *this module*,
-        // which it can answer honestly with nothing wired. Everything else is a
-        // question about the world outside it.
+        // `meta.status`, `meta.skills` and `wallet.history` are the exceptions,
+        // and they are exceptions for one reason: each answers a question about
+        // *this module*, which it can answer honestly with nothing wired.
+        // Everything else is a question about the world outside it.
+        //
+        // `wallet.history` became the third of them, and the reason is worth the
+        // line. Its port is documented as "the agent's own record of what it has
+        // submitted … because the chain has no per-account history endpoint",
+        // and this module has kept exactly that record all along — every settled
+        // task carries its `settlementTx`. So `installBuiltinSkills` wires the
+        // journal from the task store, and an unwired module answers `ok:true`
+        // with an empty history instead of refusing. It still reports
+        // `confirmedAgainstChain:false`, because confirming a hash needs a
+        // sequencer and this plugin links no HTTP client.
         const auto selfAnswering = [](const std::string &name) {
-            return name == "meta.status" || name == "meta.skills";
+            return name == "meta.status" || name == "meta.skills"
+                   || name == "wallet.history";
         };
         int dispatched = 0;
         int refusedCleanly = 0;
@@ -780,8 +791,18 @@ int main()
               "the module answered as a running agent, not 'agent is not started'");
         check(sameCount(std::size_t(dispatched), kBuiltinCount) && kBuiltinCount > 0,
               "each dispatches to a skill rather than answering 'no skill named'");
-        check(sameCount(std::size_t(refusedCleanly), kBuiltinCount - 2),
+        check(sameCount(std::size_t(refusedCleanly), kBuiltinCount - 3),
               "and each unwired one refuses, naming what it is missing");
+
+        // The third exception, asserted rather than merely excused. An unwired
+        // module answers its own payment history — empty, because it has paid
+        // nothing — and says in the same breath that nothing in it has been
+        // checked against the chain.
+        const auto hist = jsonOf(m.invoke("wallet.history", "{}"));
+        check(hist.value("ok", false) && hist.value("count", -1) == 0,
+              "wallet.history answers from the module's own journal, with nothing in it");
+        check(hist.value("confirmedAgainstChain", true) == false,
+              "and does not claim any of it was confirmed against the chain");
 
         // The refusal that matters most: an unwired module must not be able to
         // move money, and must not claim it did.
@@ -900,6 +921,183 @@ int main()
               "the card carries exactly one wallet.send");
         check(okOf(m.invoke("wallet.send", "{}")) && mine,
               "and it is the one invoke() dispatches to");
+    }
+    {
+        // -------------------------------------------------------------------
+        // The module's OWN storage port, which is the one a loaded plugin has.
+        //
+        // Everything else in this file hands `SkillPorts` a storage port and
+        // then asserts the skill logic on top of it — which is exactly how the
+        // defect this section covers stayed invisible for a release.
+        // `installBuiltinSkills` consumed `ports.storage` verbatim, so a plugin
+        // LOADED by Basecamp (handed `SkillPorts{}`, because a `std::function`
+        // cannot cross Qt Remote Objects) had no storage port at all and refused
+        // all four `storage.*` skills in every shipped configuration.
+        //
+        // These assertions run with NO storage library present, which is the
+        // situation on a CI runner, and that is deliberate: what is under test
+        // here is that the module TRIES and REPORTS, not that a node comes up.
+        // `scripts/skills-live.sh` is what puts a real node behind it, and it
+        // carries its own negative control.
+        // -------------------------------------------------------------------
+        AgentModuleImpl m;
+        m.configure("owner-1", anchored);
+        m.registerBuiltinSkills(logos::agent::SkillPorts{});
+        m.start();
+
+        const json before = jsonOf(m.invoke("meta.status", "{}"));
+        check(before.contains("storage") && before["storage"].is_object(),
+              "meta.status reports a storage block, not null, with no ports wired");
+        check(before["storage"].value("linked", false),
+              "and says this build knows how to open Logos Storage at all");
+        check(before["storage"].value("state", std::string()) == "off",
+              "and that no node has been opened, because nobody asked");
+        check(!before["storage"].contains("peerId"),
+              "and reports no peer id, because there is no node to have one");
+
+        // The refusal a caller gets before a node exists. It must be the
+        // node-is-down message and NOT "storage upload is not wired": the port
+        // is present now, so a caller is being told the truth about the node
+        // rather than about the module's own plumbing.
+        check(errOf(m.invoke("storage.upload", R"({"path":"/tmp/x"})"))
+                  == "storage node is not started",
+              "storage.upload refuses by naming the node, not the wiring");
+
+        // Two words and no third, the same rule `delivery` follows.
+        check(!okOf(m.invoke("meta.configure",
+                             R"({"key":"storage","value":"yes"})")),
+              "meta.configure refuses a 'storage' value that is not on or off");
+        check(!okOf(m.invoke("meta.configure",
+                             R"({"key":"storage_data_dir","value":""})")),
+              "and refuses an empty storage_data_dir");
+
+        // Asked to start with nowhere to put a repository, and with no host to
+        // provide one, it must refuse in words that name the setting — not
+        // crash, and not come up somewhere nobody chose.
+        check(okOf(m.invoke("meta.configure", R"({"key":"storage","value":"on"})")),
+              "meta.configure('storage','on') is accepted");
+        const json nodir = jsonOf(m.invoke("meta.status", "{}"));
+        check(nodir["storage"].value("state", std::string()) == "failed",
+              "with no data directory the node does not come up");
+        check(nodir["storage"].value("error", std::string())
+                  .find("storage_data_dir") != std::string::npos,
+              "and the error names the setting to make");
+
+        // Given one, it gets as far as the library — which is not on a CI
+        // runner — and reports the file it wanted and where it looked. That is
+        // the difference between "not started yet" and "could not start", and
+        // the whole reason the state is a word rather than a boolean.
+        check(okOf(m.invoke("meta.configure",
+                            R"({"key":"storage","value":"off"})")),
+              "meta.configure('storage','off') is accepted");
+        check(okOf(m.invoke("meta.configure",
+                            R"({"key":"storage_data_dir","value":"/tmp/lp0008-unit"})")),
+              "meta.configure('storage_data_dir', …) is accepted");
+        check(jsonOf(m.invoke("meta.status", "{}"))["storage"].value("dataDir", std::string())
+                  == "/tmp/lp0008-unit",
+              "and meta.status names the repository it was told to open");
+    }
+    {
+        // The `//` trap, which cost a run of `scripts/skills-live.sh` to find:
+        // a data-dir with a doubled slash produces a node that starts, answers
+        // every query, reports a peer id and refuses every write with `Path is
+        // outside of 'root' directory!`. Normalised in one place, so the value
+        // `meta.status` reports and the directory the node opens cannot differ.
+        logos::agent::StorageRuntime rt;
+        rt.setDataDir("/tmp//lp0008//store/");
+        check(rt.dataDir() == "/tmp/lp0008/store",
+              "a data directory is normalised: doubled and trailing slashes go");
+        // Shown capable of saying no: an already-clean path must come back
+        // untouched, or the normaliser is eating something it should not.
+        rt.setDataDir("/tmp/lp0008/store");
+        check(rt.dataDir() == "/tmp/lp0008/store", "and a clean one is left exactly as it is");
+        check(rt.state() == "off" && !rt.ready(),
+              "a runtime nobody started is off, and is not ready");
+        // Every entry point answers no rather than reaching into a null context.
+        check(rt.upload("/tmp/whatever", 1024).empty() && !rt.download("z", "/tmp/o")
+                  && rt.manifests().empty() && !rt.exists("z"),
+              "and every call on it refuses instead of touching a node that is not there");
+    }
+    {
+        // -------------------------------------------------------------------
+        // `wallet.history` over the module's OWN journal, with something in it.
+        //
+        // The store is supplied through `ports.tasks` because that is the only
+        // way a test can reach the same store the module reads — and it is also
+        // the shape a host uses, so this exercises the resolution in
+        // `taskStore()` rather than a store of its own.
+        // -------------------------------------------------------------------
+        logos::agent::TaskStore tasks;
+        std::string err;
+        const std::string paidTx(64, 'b');
+        tasks.create("t1", "c1", "peer-1", "storage.upload", err);
+        tasks.recordPayment("t1", 42, "Public/payee-1", paidTx, err);
+        // A second task that was never paid. It must NOT appear: a history that
+        // listed unpaid work as payments would overstate what the agent moved.
+        tasks.create("t2", "c2", "peer-2", "agent.task", err);
+
+        AgentModuleImpl m;
+        m.configure("owner-1", anchored);
+        logos::agent::SkillPorts ports;
+        ports.tasks = &tasks;
+        m.registerBuiltinSkills(std::move(ports));
+        m.start();
+
+        const json h = jsonOf(m.invoke("wallet.history", "{}"));
+        check(h.value("ok", false) && h.value("count", -1) == 1,
+              "wallet.history reports the one settlement the module recorded");
+        const json rows = h.value("transactions", json::array());
+        // Indexed only after the size is known. `json::operator[]` past the end
+        // of an array is undefined, so an assertion written to read row zero
+        // regardless would turn a failing test into a crashed one — which is
+        // how this very block first went wrong.
+        check(rows.is_array() && rows.size() == 1, "and lists exactly that one transaction");
+        const json row = rows.size() == 1 ? rows[0] : json::object();
+        check(row.value("tx", std::string()) == paidTx,
+              "and names the transaction hash it was settled with");
+        check(row.value("recipient", std::string()) == "Public/payee-1"
+                  && row.value("amount", std::string()) == "42",
+              "with the recipient and amount that went with it");
+        // Unverified, not confirmed. The hash is the agent's own record; nothing
+        // here has asked a chain about it, and saying "confirmed" would be the
+        // one overstatement this skill exists to avoid.
+        check(row.value("status", std::string()) == "unverified",
+              "and marked unverified, because no sequencer connection is wired");
+
+        // THE CONTROL. A settlement hash that is not 64 hex characters must cost
+        // that row and not the whole history — `WalletHistorySkill` refuses the
+        // entire call on one entry it cannot confirm, so a single malformed
+        // value restored out of a snapshot would otherwise wipe an operator's
+        // payment history. Written straight into the store, which is what a
+        // corrupt or hand-edited snapshot amounts to.
+        tasks.create("t3", "c3", "peer-3", "agent.task", err);
+        tasks.recordPayment("t3", 7, "Public/payee-3", "not-a-transaction-hash", err);
+        const json h2 = jsonOf(m.invoke("wallet.history", "{}"));
+        check(h2.value("ok", false) && h2.value("count", -1) == 1,
+              "control: a malformed settlement hash costs its own row, not the history");
+        // And the check must be shown capable of admitting a second good row,
+        // or "still 1" would be equally consistent with a journal that stopped
+        // reading after the first entry.
+        tasks.create("t4", "c4", "peer-4", "agent.task", err);
+        tasks.recordPayment("t4", 9, "Public/payee-4", std::string(64, 'c'), err);
+        check(jsonOf(m.invoke("wallet.history", "{}")).value("count", -1) == 2,
+              "control: a second well-formed settlement does appear, so the count can move");
+    }
+    {
+        // `groupTopic`, which is the fix for the other half of the same class of
+        // defect: `DeliveryRuntime::deliveryPort()` passed the group id where
+        // the content topic goes, so `messaging.create_group` was refused by a
+        // real node through the module's own port and succeeded through a
+        // host's. Every fake `channelCreate` accepted both, which is why no
+        // test caught it.
+        check(logos::agent::groupTopic("g1") == "/lp-0008/1/group-g1/json",
+              "a group's channel topic is in the grammar Logos documents");
+        check(logos::agent::groupTopic("../../owner-victim").empty(),
+              "and an id that would name a different topic produces no topic at all");
+        // It must not be the topic Agent Cards are published on: group frames in
+        // front of `agent.discover` would be parsed as cards.
+        check(logos::agent::groupTopic("g1") != logos::agent::discoveryTopic("g1"),
+              "and it is not the discovery topic, which carries Agent Cards");
     }
     {
         // Registration goes through registerSkill, which takes the module's own

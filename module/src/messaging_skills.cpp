@@ -21,6 +21,12 @@ std::string discoveryTopic(const std::string &ns)
     return "/lp-0008/1/discovery-" + ns + "/json";
 }
 
+std::string groupTopic(const std::string &group)
+{
+    if (!isTopicIdentifier(group)) return {};
+    return "/lp-0008/1/group-" + group + "/json";
+}
+
 namespace {
 
 /// Every skill answers in the same shape, so a caller — including another agent

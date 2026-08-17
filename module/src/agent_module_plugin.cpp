@@ -64,6 +64,18 @@ bool isPolicyHashHex(const std::string &s)
 /// on-disk persistence directory, and the directory is what makes this unique.
 constexpr const char *kTaskSnapshotFile = "/tasks.json";
 
+/// Where this module's own Logos Storage node keeps its repository when nobody
+/// has said otherwise: a subdirectory of the same host-provisioned instance
+/// directory the task snapshot lives in.
+///
+/// A subdirectory and not the directory itself, deliberately. A Storage node
+/// takes a LevelDB lock over its `data-dir` and writes a tree of its own inside
+/// it; pointed at the instance root it would be sharing that root with
+/// `tasks.json`, and the first question anyone asks after an upgrade — "is it
+/// safe to delete the storage repository" — would have the answer "yes, and you
+/// will lose the agent's pending task state with it".
+constexpr const char *kStorageRepoDir = "/storage-repo";
+
 /// How long the built-in owner channel sleeps between polls while waiting for an
 /// approval. Short enough that an owner answering promptly is not left waiting
 /// on a poll interval, long enough that a two-minute wait is not a busy loop.
@@ -279,17 +291,58 @@ std::string AgentModuleImpl::setting(const char *key) const
 
 void AgentModuleImpl::applySetting(const std::string &key, const std::string &value)
 {
-    // One key, and it is the one this whole file exists to make possible. The
-    // rest are stored and read back by whatever reads them; `meta.configure`
+    // Three keys, and they are the ones this whole file exists to make possible.
+    // The rest are stored and read back by whatever reads them; `meta.configure`
     // already reports which of those are `effective` and which are not.
-    if (key != "delivery" || !delivery_) {
+    if (key == "delivery" && delivery_) {
+        if (value == "on") {
+            std::string err;
+            delivery_->bringUp(err);
+        } else if (value == "off") {
+            delivery_->shutDown();
+        }
         return;
     }
-    if (value == "on") {
-        std::string err;
-        delivery_->bringUp(err);
-    } else if (value == "off") {
-        delivery_->shutDown();
+    if (!storage_) {
+        return;
+    }
+    // Where the repository goes. Applied to the runtime as well as stored,
+    // because `bringUp` reads it off the runtime and not out of the settings
+    // map — the runtime is the thing that has to normalise it (a `data-dir`
+    // containing `//` produces a node that starts and refuses every write) and
+    // one normalisation in one place is the only way the stored value and the
+    // opened directory cannot drift apart.
+    //
+    // Deliberately NOT applied while a node is up: `storage_new` takes the
+    // directory once, so a later change would leave `meta.status` naming a
+    // directory the running node is not using. An operator who means it can turn
+    // the node off, set the directory, and turn it back on — three calls, all of
+    // which say what they do.
+    if (key == "storage_data_dir") {
+        if (storage_->state() == "off" || storage_->state() == "failed") {
+            storage_->setDataDir(value);
+        }
+        return;
+    }
+    if (key == "storage") {
+        if (value == "on") {
+            // Nothing configured, and nothing to guess from: fall back to the
+            // per-instance directory the host provisions, which is where this
+            // module already keeps its task snapshot. A module loaded outside a
+            // host gets an empty string there, and `bringUp` then refuses with a
+            // sentence naming the setting to make — which is the whole of the
+            // "reports what it could not open" contract.
+            if (storage_->dataDir().empty()) {
+                const std::string instance = instancePersistencePath();
+                if (!instance.empty()) {
+                    storage_->setDataDir(instance + kStorageRepoDir);
+                }
+            }
+            std::string err;
+            storage_->bringUp(err);
+        } else if (value == "off") {
+            storage_->shutDown();
+        }
     }
 }
 
@@ -816,11 +869,124 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
         ownerResponder_ = std::make_shared<OwnerResponder>(std::move(responderPort));
     }
 
+    // ---- and the module's own storage, on the same argument -----------------
+    //
+    // This block is the one that was missing, and the miss was invisible from
+    // inside the module: `StoragePort` is filled in by tests and by every host
+    // that LINKS the module, so all four `storage.*` skills were green
+    // everywhere except in the only configuration that ships. A LOADED plugin is
+    // handed `SkillPorts{}`, `ports.storage` stayed empty, and `storage.upload`,
+    // `storage.download`, `storage.list` and `storage.share` each answered
+    // `"storage node is not started"` — a sentence that is true, and that points
+    // at the network when the actual cause was three lines below this comment
+    // not existing.
+    //
+    // Nothing starts on its own here either. `StorageRuntime` is constructed
+    // unstarted, so loading this module opens no repository and takes no lock on
+    // one until an operator asks with `meta.configure("storage","on")`.
+    if (!storage_) {
+        storage_ = std::make_unique<StorageRuntime>();
+        // The same pump, for the same measured reason as the Delivery node's:
+        // every synchronous call into the Storage library is reached from
+        // `invoke()`, which in a loaded module runs on the `logos_host` event
+        // loop that dispatches everything this module emits.
+        std::function<void()> hostIdle;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            hostIdle = ownerIdle_;
+        }
+        if (hostIdle) {
+            storage_->setIdle(std::move(hostIdle));
+        }
+        // A directory configured before the skills were installed — which is the
+        // order `logos-core-headless` and every load harness use — would
+        // otherwise be stored and never reach the runtime.
+        const std::string configuredDir = setting("storage_data_dir");
+        if (!configuredDir.empty()) {
+            storage_->setDataDir(configuredDir);
+        }
+    }
+    StorageRuntime *store = storage_.get();
+
     // A caller that wired its own transport keeps it. `ready` is the field to
     // test on: it is the one every wire skill consults first, so a port with
     // anything in it at all has a `ready`, and one with nothing in it has none.
     if (!ports.delivery.ready) {
         ports.delivery = node->deliveryPort();
+    }
+    if (!ports.storage.ready) {
+        ports.storage = store->storagePort();
+    }
+    // The other half of `storage.share`, and it is not a second transport.
+    // Sharing a content address IS a messaging act — there is nothing to copy or
+    // re-permission — so this is the module's own `SendSkill` rule applied to the
+    // module's own Delivery node: derive the recipient's owner topic, refuse a
+    // recipient that is not a topic identifier rather than publishing somewhere
+    // else, and publish. A recipient that could name a different topic is the
+    // one thing that must not get through here, because the address being shared
+    // is the whole content.
+    if (!ports.share.send) {
+        ports.share.send = [node](const std::string &recipient, const std::string &message) {
+            const std::string topic = ownerTopic(recipient);
+            if (topic.empty()) return false;
+            return node->publish(topic, message);
+        };
+    }
+
+    // ---- the agent's own submission journal --------------------------------
+    //
+    // `wallet.history` refused in a loaded plugin for the same reason the
+    // storage skills did — `ports.wallet` was consumed verbatim — and unlike
+    // them it needs no node, no library and no key to answer. Its port is
+    // documented as "the agent's own record of what it has submitted … it exists
+    // because the chain has no per-account history endpoint", and this module
+    // has kept exactly that record the whole time: `agent.task` calls
+    // `recordPayment`, and every settled task carries its `settlementTx` in the
+    // store that `task_persistence.cpp` makes survive a restart.
+    //
+    // So the journal is not something to invent; it is something to read back.
+    // What is deliberately NOT wired beside it is `getTransaction`: confirming a
+    // hash means reaching the sequencer, this plugin links no HTTP client, and
+    // `WalletHistorySkill` already answers `"unverified"` with
+    // `"no sequencer connection is wired"` for exactly that case. That is the
+    // honest answer and it is better than the alternative on offer — a
+    // "confirmed" this process cannot substantiate.
+    if (!ports.wallet.journal) {
+        ports.wallet.journal = [this] {
+            auto snap = json::parse(taskStore().snapshot(), nullptr, false);
+            json out = json::array();
+            if (!snap.is_array()) return dumpSafe(out);
+            for (const auto &t : snap) {
+                if (!t.is_object()) continue;
+                if (!t.contains("settlementTx") || !t["settlementTx"].is_string()) continue;
+                const std::string tx = t["settlementTx"].get<std::string>();
+                // 64 lower-case hex, checked here as well as at the point the
+                // hash was produced. `WalletHistorySkill` refuses the WHOLE call
+                // on one entry it cannot confirm, so a single malformed value
+                // restored out of a snapshot would otherwise cost an operator
+                // their entire payment history rather than one row of it.
+                if (tx.size() != 64) continue;
+                bool hex = true;
+                for (const char c : tx) {
+                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) hex = false;
+                }
+                if (!hex) continue;
+                json row{{"tx", tx}};
+                if (t.contains("payAccount") && t["payAccount"].is_string()) {
+                    row["recipient"] = t["payAccount"];
+                }
+                // A decimal string, matching how every other amount crosses this
+                // module's boundaries — `pricePaid` is a u64 and JSON numbers are
+                // doubles to plenty of readers.
+                if (t.contains("pricePaid") && t["pricePaid"].is_number_unsigned()) {
+                    row["amount"] = std::to_string(t["pricePaid"].get<std::uint64_t>());
+                }
+                if (t.contains("id") && t["id"].is_string()) row["task"] = t["id"];
+                if (t.contains("skill") && t["skill"].is_string()) row["skill"] = t["skill"];
+                out.push_back(std::move(row));
+            }
+            return dumpSafe(out);
+        };
     }
     if (!ports.task.ready) {
         ports.task.ready = [node] { return node->ready(); };
@@ -964,6 +1130,14 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
             }
             return dumpSafe(d);
         };
+    }
+    // The storage node, in the same shape as the transport above, because the
+    // two questions a reader has to be able to tell apart look identical from
+    // every other vantage point: a node nobody has asked to start, and a node
+    // that was asked and could not open its library or its repository. `state`
+    // separates them and `error` names the file.
+    if (!ports.status.storage) {
+        ports.status.storage = [store] { return store->statusJson(); };
     }
 
     // ---- the built-in owner channel ---------------------------------------

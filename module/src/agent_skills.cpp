@@ -1916,8 +1916,9 @@ std::string ConfigureSkill::parameterSchema() const
            R"("properties":{"key":{"type":"string","enum":["owner_address","policy_hash",)"
            R"("per_tx","per_period","period_blocks","price_per_task","discovery_topic",)"
            R"("approval_timeout_blocks","approval_timeout_ms","approval_resend_ms",)"
-           R"("delivery","agent_account","agent_name","pay_account","card_signer",)"
-           R"("pay_signer","policy_source","owner_channel_account"]},)"
+           R"("delivery","storage","storage_data_dir","agent_account","agent_name",)"
+           R"("pay_account","card_signer","pay_signer","policy_source",)"
+           R"("owner_channel_account"]},)"
            R"("value":{"type":"string"}}})";
 }
 
@@ -1942,24 +1943,31 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
     // there.
     const bool anchored = key == "per_tx" || key == "per_period" || key == "period_blocks";
 
-    // The transport switch. `on` is what makes a *loaded* module — one Logos
-    // Core runs in its own process and reaches over Qt Remote Objects — open a
-    // Logos Delivery node of its own and build its own wire ports out of it,
-    // which is the one thing a host cannot do for it: a port is a set of
-    // `std::function`s and there is no wire format for a closure. Two strings
-    // travel; the ports are constructed on the far side.
+    // The two transport switches. `on` is what makes a *loaded* module — one
+    // Logos Core runs in its own process and reaches over Qt Remote Objects —
+    // open a Logos Delivery or Logos Storage node of its own and build its own
+    // ports out of it, which is the one thing a host cannot do for it: a port is
+    // a set of `std::function`s and there is no wire format for a closure. Two
+    // strings travel; the ports are constructed on the far side.
+    //
+    // `storage` was added a release after `delivery` and the delay is worth
+    // recording, because the symptom was so quiet: without it `ports.storage`
+    // stayed empty in every LOADED plugin, and all four `storage.*` skills
+    // answered "storage node is not started" — a true sentence about a node
+    // nobody could have started, in a configuration where the tests all passed
+    // because tests hand the port in.
     //
     // Two words and no third, for the same reason `approveSpend` takes two: a
     // value the module cannot read is not a reason to guess, and here the guess
     // would be "join the public network".
-    if (key == "delivery") {
+    if (key == "delivery" || key == "storage") {
         if (value != "on" && value != "off") {
-            return fail("'delivery' must be 'on' or 'off'");
+            return fail("'" + key + "' must be 'on' or 'off'");
         }
     } else if (key == "owner_address" || key == "discovery_topic" ||
                key == "agent_account" || key == "agent_name" || key == "pay_account" ||
                key == "card_signer" || key == "pay_signer" || key == "policy_source" ||
-               key == "owner_channel_account") {
+               key == "storage_data_dir" || key == "owner_channel_account") {
         if (value.empty()) return fail("'" + key + "' cannot be empty");
     } else if (key == "policy_hash") {
         if (!isLowerHex64(value)) {
@@ -1977,8 +1985,9 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
                     "' is not a configurable key. Known keys: owner_address, policy_hash, "
                     "per_tx, per_period, period_blocks, price_per_task, discovery_topic, "
                     "approval_timeout_blocks, approval_timeout_ms, approval_resend_ms, "
-                    "delivery, agent_account, agent_name, pay_account, card_signer, "
-                    "pay_signer, policy_source, owner_channel_account");
+                    "delivery, storage, storage_data_dir, agent_account, agent_name, "
+                    "pay_account, card_signer, pay_signer, policy_source, "
+                    "owner_channel_account");
     }
 
     if (!port_.set || !port_.set(key, value)) {

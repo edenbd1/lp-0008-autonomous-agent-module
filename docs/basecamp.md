@@ -535,8 +535,12 @@ Stated plainly, because a reviewer will check.
   installs from a configured package repository only — so **both** packages are
   installed by hand, by the procedures below, and a reviewer cannot do it
   through the GUI either.
-- **The storage skills have no ports wired**, and neither do the sequencer, the
-  local toolchain, or the *reading* half of the wallet.
+- **The sequencer and the local toolchain have no ports wired**, and neither
+  does the *reading* half of the wallet. The storage skills are no longer on
+  that list: the module opens its own Logos Storage node when
+  `meta.configure("storage","on")` asks it to, the same way it opens its own
+  Delivery node, and `scripts/skills-live.sh` drives all four through
+  `invoke()` from a completely empty `SkillPorts`.
   `invoke("wallet.balance", "{}")` returns `{"ok":false,"error":"no account to
   read: the agent has none configured and none was given"}`, and `meta.status`
   reports `balance: null` with `balance_error` rather than `0`. Those need a
@@ -1110,7 +1114,7 @@ Variants:       darwin-arm64, linux-amd64, linux-arm64
 ```
 
 That prints root hash
-`fd3f07fbaeec18864a587bca46964dbc3e84d8d661fa25919dcd185176042954`. Rebuilding
+`1dd4a8b67d80d7348ca5682db3acdd3209a7627cda74407256a66614a519a37e`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,
@@ -1942,9 +1946,11 @@ ok    wallet_module @ f6f9c16: no tracked file changed; 2 added path(s), all und
   `app/agent-ui.lgx` gained their Linux variants.
 - **They are loaded and answering, not driven.** The criterion is about
   coexistence, and nothing here has the agent *call* `storage_module` or
-  `wallet_module`. The agent's own `storage.*` skills still have no ports wired
-  — see "What was NOT verified" above — and loading somebody else's storage
-  module into the same runtime does not change that.
+  `wallet_module`. The agent's own `storage.*` skills reach a Logos Storage node
+  the module opens for itself, which is a different node from the one
+  `storage_module` runs — so this section still proves coexistence and not
+  interoperation, and loading somebody else's storage module into the same
+  runtime does not change that.
 - **`logos-chat-module` is not built.** It is a Rust `cdylib` whose
   `metadata.json` declares `delivery_module` as its dependency, and
   `delivery_module` is the messaging module the criterion names, so it would add

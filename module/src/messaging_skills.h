@@ -95,6 +95,35 @@ std::string ownerTopic(const std::string &account);
 /// identifier the grammar cannot carry, for the same reason.
 std::string discoveryTopic(const std::string &namespace_);
 
+/// Content topic a group's reliable channel is opened on. Empty on an
+/// identifier the grammar cannot carry, for the same reason as the two above.
+///
+/// WHY THIS IS A THIRD BUILDER AND NOT A REUSE OF ONE OF THEM
+///
+/// A reliable channel needs a content topic, and `DeliveryRuntime::deliveryPort`
+/// used to pass the **group id itself** in that position —
+/// `channelCreate(group, group, group)`. A bare identifier is not a content
+/// topic: a real node subscribes to it before opening the channel and refuses.
+/// The consequence was that `messaging.create_group` worked through a
+/// `DeliveryPort` a *host* supplied and failed through the port the module built
+/// for itself, which is the only port a loaded plugin has. Measured on one node,
+/// in one process, two calls apart — the same call, differing only here:
+///
+///     channelCreate("g", "g", "g")                            -> false
+///     channelCreate("g", "/lp-0008/1/group-g/json", "g")      -> true
+///
+/// `owner_channel.cpp` passes `ownerTopic(account)` in the same position, which
+/// is why the owner channel has always worked against a live node and why
+/// nothing caught this.
+///
+/// It is not `discoveryTopic`, though that would also satisfy the node. That
+/// topic is where agents publish and read Agent Cards, so opening group channels
+/// on it would put group frames in front of `agent.discover`, which parses what
+/// it finds there as cards. A group named like a discovery namespace would then
+/// quietly corrupt discovery for it. A third `<name>` segment in the same
+/// grammar costs one function and keeps the two kinds of traffic apart.
+std::string groupTopic(const std::string &group);
+
 /// `messaging.send(recipient, message)`
 class SendSkill final : public ISkill {
 public:
