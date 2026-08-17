@@ -742,10 +742,30 @@ def check(repo, rebuild_dir=None):
             r.ok("docs/basecamp.md quotes this package's root hash, not an "
                  "earlier one")
         else:
-            stale = sorted(set(re.findall(r"\b[0-9a-f]{64}\b", text)))
+            # NAME ONLY WHAT COULD BE A PACKAGE HASH. This listed every
+            # 64-hex string in the document, which on a repackage means the
+            # message hands you a chain transaction beside the stale root and
+            # invites you to "update" it -- one agent was told to change
+            # `ed8c3514...`, the settlement in block 9477, and rightly refused.
+            # A failure message that suggests falsifying a chain citation to
+            # satisfy a docs check is a bad message.
+            # A WINDOW, not a line. The citation reads "That prints root hash"
+            # and then the hash on the NEXT line, because it is prose that
+            # wraps -- a same-line match found nothing and would have reported
+            # "none", which is worse than the over-broad list it replaced.
+            lines = text.splitlines()
+            near = []
+            for i, line in enumerate(lines):
+                window = " ".join(lines[max(0, i - 2):i + 1])
+                if not re.search(r"(?i)root hash|package hash|agent\.lgx", window):
+                    continue
+                near += re.findall(r"\b[0-9a-f]{64}\b", line)
+            stale = sorted(set(near))
             r.fail("docs/basecamp.md does not quote this package's root hash "
-                   "(%s); it still cites %s. The document is describing a "
-                   "package that is no longer the one committed."
+                   "(%s); the hash(es) it cites for the package are %s. The "
+                   "document is describing a package that is no longer the one "
+                   "committed. Other 64-hex strings in that file are NOT "
+                   "candidates -- several are transactions on chain."
                    % (got_root[:16], ", ".join(h[:16] for h in stale) or "none"))
 
     # ---- layer 1: the record describes THIS source ------------------------

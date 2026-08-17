@@ -2632,10 +2632,13 @@ jobs:
       # passes `SETTLE=1`, and the two scripts that can write to the chain are
       # run in their re-check modes.
       #
-      # There is no agent wallet on the runner and there must not be one. The
+      # There is no agent wallet on the runner and there must not be one. Each
       # Agent Card is verified against the public key published beside it
-      # (`artifacts/agent-cards/storage.pub`) instead — the same 32 bytes the
-      # wallet would have supplied, so the same signature check.
+      # (`artifacts/agent-cards/<agent>.pub`) instead — the same 32 bytes the
+      # wallet would have supplied, so the same signature check. All three
+      # committed cards are checked, each with a mutation control: this comment
+      # named only `storage.pub` for as long as that was the only card there
+      # was.
       - name: Use case 2 — every settlement decoded from the chain's own copy
         run: |
           set -euo pipefail
