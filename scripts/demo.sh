@@ -59,6 +59,46 @@ FAILED=0
 
 rule "0. environment"
 echo "RISC0_DEV_MODE=$RISC0_DEV_MODE  (0 = real proofs, no mock receipts)"
+
+# WHAT THIS NEEDS, NAMED BEFORE ANYTHING RUNS.
+#
+# Run from a clean clone with no Rust toolchain, this used to print
+#
+#     ./scripts/demo.sh: line 62: rustc: command not found
+#     ./scripts/demo.sh: line 76: cargo: command not found
+#       FAIL the policy tests did not pass
+#
+# — a raw shell error a third of the way in, then a FAIL that reads as "this
+# repository's tests are broken" when what is broken is that the machine has no
+# compiler. A reader who sees that says the demo does not run, and they are
+# right to.
+#
+# So it is asked here, all of it at once, and it REFUSES rather than continuing
+# past a missing prerequisite. Not a skip: every section below either runs or
+# this exits non-zero saying why. A demo that quietly leaves out the part it
+# cannot do is worth less than one that says what it needs.
+missing=0
+need_cmd() { # command what-it-is how-to-get-it
+  command -v "$1" >/dev/null 2>&1 && return 0
+  echo "  missing: $1 — $2" >&2
+  echo "           $3" >&2
+  missing=$((missing + 1))
+}
+need_cmd rustc  "the Rust compiler, for the policy tests in section 1" \
+                "install it from https://rustup.rs — there is no flag to skip section 1"
+need_cmd cargo  "Cargo, which runs those tests" \
+                "ships with rustup; if rustc is present and cargo is not, the install is partial"
+need_cmd curl   "curl, for every chain read below" \
+                "preinstalled on macOS and in most Linux images"
+need_cmd python3 "Python 3, which decodes the account bytes" \
+                "preinstalled on macOS; apt install python3 on Debian/Ubuntu"
+if [ "$missing" -gt 0 ]; then
+  echo >&2
+  echo "$missing prerequisite(s) are missing, so this demo would report failures" >&2
+  echo "that are about this machine rather than about this repository. Nothing" >&2
+  echo "has been checked. Install them and run it again." >&2
+  exit 1
+fi
 rustc --version
 
 rule "1. the spending policy, adversarially"
