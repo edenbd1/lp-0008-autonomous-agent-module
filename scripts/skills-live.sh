@@ -51,11 +51,18 @@
 #
 # WHAT THIS DOES NOT PROVE, stated here rather than left to be noticed:
 #
-#   - A module LOADED by Basecamp still has no storage ports. It is not that the
-#     package is stale; `installBuiltinSkills` has nothing to fill `ports.storage`
-#     from — there is no `StorageRuntime` to match `DeliveryRuntime` — so a
-#     loaded plugin refuses every `storage.*` call. Only a host that LINKS the
-#     module can wire it, which is what this driver is.
+#   - THAT A LOADED PLUGIN WORKS. This driver LINKS the module; it does not load
+#     `module/agent.lgx`. The distinction mattered enormously when this header
+#     was written, because `installBuiltinSkills` then had nothing to fill
+#     `ports.storage` from and a loaded plugin refused every `storage.*` call
+#     while this driver went green. That gap is closed — `StorageRuntime` now
+#     matches `DeliveryRuntime` and the module opens its own node on
+#     `meta.configure("storage","on")` — but the closing is not proved HERE. It
+#     is proved by `scripts/logos-core-headless.sh`, which installs the package
+#     and drives the extracted plugin through the runtime's own transport.
+#     What this driver proves is that the behaviour holds in the sources the
+#     package is built from; `scripts/check-package-fresh.py` ties those sources
+#     to the shipped bytes.
 #   - The shares and invitations below are read back off the topics they were
 #     published on, by the node that published them. A Waku node receives its own
 #     publications, so that proves the frame went through the node's relay path

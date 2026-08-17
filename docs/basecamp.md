@@ -1114,7 +1114,7 @@ Variants:       darwin-arm64, linux-amd64, linux-arm64
 ```
 
 That prints root hash
-`1dd4a8b67d80d7348ca5682db3acdd3209a7627cda74407256a66614a519a37e`. Rebuilding
+`ff4e250b8acbd0fb9869bdd2e322784f9eb6dc9f0edd3db3244a5ff08f496318`. Rebuilding
 the module changes it; none of the checks below depend on the value, and this
 line no longer has to be remembered — the same hash is in
 `module/agent.lgx.sources`, written by the packaging script and checked by CI,

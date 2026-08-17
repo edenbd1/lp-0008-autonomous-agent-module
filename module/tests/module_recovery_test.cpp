@@ -36,6 +36,7 @@
 // The mutations run against this suite are listed at the bottom.
 
 #include "../src/agent_module_plugin.h"
+#include "../src/spend_marker.h"
 
 #include <nlohmann/json.hpp>
 
@@ -681,6 +682,175 @@ int main()
               "and a verdict this agent cannot read is refused, not guessed at");
     }
 
+    std::printf("\nand an owner who approves: the spend is SUBMITTED\n");
+    {
+        // THE STEP AFTER THE APPROVAL, WHICH USED TO BE THE STEP THAT WAS
+        // MISSING.
+        //
+        // `wallet.send` waited for the owner, heard `approved`, and then
+        // answered that submitting it "goes through the policy program's
+        // spend_approved path, which this module does not wire". Both halves of
+        // the exchange were real and the payment stopped between them: the chain
+        // half is on the public testnet — `approve_spend` at block 10776 and
+        // `spend_approved` at 10786 — and it was produced by hand, not by this
+        // module.
+        //
+        // The module reaches it the way it reaches every other thing a 4 MB Qt
+        // plugin cannot link: a command an operator names, JSON on its stdin,
+        // one line back, checked before anything believes it. A shell script
+        // stands in for the operator's signer here, and it records what it was
+        // handed — which is the part worth asserting, because the recipient in
+        // that document came out of a call parameter.
+        const std::string dir = scenarioDir("approved");
+        const std::string stdinPath = dir + "/signer-stdin.json";
+        const std::string argvPath = dir + "/signer-argv.txt";
+        const std::string signerPath = dir + "/approved-signer.sh";
+        const std::string approvedTx(64, 'd');
+        writeFile(signerPath, "#!/bin/sh\nprintf '%s' \"$*\" > " + argvPath + "\ncat > " +
+                                  stdinPath + "\nprintf '%s\\n' " + approvedTx + "\n");
+        check(::chmod(signerPath.c_str(), 0700) == 0, "an approved-spend signer is put in place");
+
+        AgentModuleImpl m;
+        std::string requestId;
+        m.setOwnerNotifier([&](const std::string &requestJson, int attempt) {
+            requestId = parsed(requestJson).value("id", std::string{});
+            if (attempt == 2) m.approveSpend(requestId, "approved");
+            return true;
+        });
+
+        SkillPorts ports;
+        ports.envelope.perTx = "50";
+        ports.envelope.perPeriod = "500";
+        int autonomousSpends = 0;
+        ports.wallet.spentThisPeriod = [] { return std::string("0"); };
+        ports.wallet.spend = [&autonomousSpends](const SpendRequest &) {
+            ++autonomousSpends;
+            SpendReceipt r;
+            r.submitted = true;
+            r.txHash = std::string(64, 'b');
+            return r;
+        };
+        m.registerBuiltinSkills(ports);
+        m.configure("owner-1", kPolicy);
+        m.start();
+        m.invoke("meta.configure", R"({"key":"approval_timeout_ms","value":"3000"})");
+        m.invoke("meta.configure", R"({"key":"approval_resend_ms","value":"30"})");
+        // The agent's own account. The approval account's address is derived
+        // from it, so a module that does not know who it is cannot present an
+        // approval — which is asserted below, after this one is asserted first.
+        check(parsed(m.invoke("meta.configure",
+                              json{{"key", "agent_account"}, {"value", kPeer}}.dump()))
+                  .value("ok", false),
+              "the agent is told which account it is");
+        const json signerSet = parsed(m.invoke(
+            "meta.configure", json{{"key", "approved_pay_signer"}, {"value", signerPath}}.dump()));
+        check(signerSet.value("ok", false),
+              "and `approved_pay_signer` is a configurable key, distinct from `pay_signer`");
+
+        const json sent = parsed(m.invoke(
+            "wallet.send", json{{"recipient", "Public/" + kPayee}, {"amount", 100}}.dump()));
+
+        check(sent.value("ok", false) && sent.value("submitted", false),
+              "an above-threshold spend the owner approved is SUBMITTED by the module itself");
+        check(sent.value("tx", std::string{}) == approvedTx,
+              "and the reply carries the hash the approved-spend path returned");
+        check(sent.value("outcome", std::string{}) == "approved",
+              "reported as the approved spend it is");
+        check(autonomousSpends == 0,
+              "while the autonomous instruction is never touched: the chain refuses that one "
+              "above the per-transaction ceiling");
+
+        // What the signer was actually handed. `spend_approved` needs the
+        // recipient, the amount, the nonce and the approval marker — and the
+        // marker is derived HERE, exactly as the chain derives it, rather than
+        // asked for, so the signer presents the account the owner really made.
+        const json handed = parsed(readFile(stdinPath));
+        check(handed.value("kind", std::string{}) == "spend_approved",
+              "the signer is told which instruction this is, not left to guess");
+        check(handed.value("recipient", std::string{}) == "Public/" + kPayee &&
+                  handed.value("amount", std::string{}) == "100",
+              "with the recipient and the amount the owner was asked about");
+        check(handed.value("agent", std::string{}) == kPeer,
+              "the agent whose policy account bounds it");
+        const std::string handedNonce = handed.value("nonce", std::string{});
+        check(!handedNonce.empty() &&
+                  handedNonce.find_first_not_of("0123456789") == std::string::npos,
+              "the nonce, as decimal text rather than a JSON number a reader would round");
+        check(handed.value("marker_seed", std::string{}).size() == 64,
+              "and the approval marker seed, derived here as 32 bytes of hex");
+        check(handed.value("marker_seed", std::string{}) ==
+                  approvalMarkerSeed(kPeer, "Public/" + kPayee, "100", std::stoull(handedNonce)),
+              "which is the seed these exact terms derive, and not a value anybody supplied");
+        check(handed.value("request_id", std::string{}) == requestId,
+              "under the correlation id the owner answered");
+
+        // Nothing on the command line. The recipient is a call parameter and a
+        // quote in it would end an argument; `runConfiguredCommand` puts the
+        // document on stdin for exactly that reason, and this is the assertion
+        // that the approved path did not invent a second way.
+        check(readFile(argvPath).empty(),
+              "and the signer was invoked with NO arguments: nothing a caller supplied reaches "
+              "a command line");
+    }
+
+    std::printf("\nan approved spend the module cannot submit is not reported as paid\n");
+    {
+        // Every refusal here is a `submitted:false` with a sentence naming what
+        // was missing. None of them is a payment, and none of them falls back to
+        // the autonomous instruction the chain would refuse.
+        const std::string dir = scenarioDir("approved-refused");
+        const std::string junkSigner = dir + "/junk-signer.sh";
+        writeFile(junkSigner, "#!/bin/sh\ncat > /dev/null\necho 'error: approval already spent'\n");
+        ::chmod(junkSigner.c_str(), 0700);
+
+        const auto attempt = [&](const char *agentAccount, const char *signer) {
+            AgentModuleImpl m;
+            m.setOwnerNotifier([&m](const std::string &requestJson, int attempt) {
+                if (attempt == 2) {
+                    m.approveSpend(parsed(requestJson).value("id", std::string{}), "approved");
+                }
+                return true;
+            });
+            SkillPorts ports;
+            ports.envelope.perTx = "50";
+            ports.envelope.perPeriod = "500";
+            ports.wallet.spentThisPeriod = [] { return std::string("0"); };
+            m.registerBuiltinSkills(ports);
+            m.configure("owner-1", kPolicy);
+            m.start();
+            m.invoke("meta.configure", R"({"key":"approval_timeout_ms","value":"3000"})");
+            m.invoke("meta.configure", R"({"key":"approval_resend_ms","value":"30"})");
+            if (*agentAccount) {
+                m.invoke("meta.configure",
+                         json{{"key", "agent_account"}, {"value", agentAccount}}.dump());
+            }
+            if (*signer) {
+                m.invoke("meta.configure",
+                         json{{"key", "approved_pay_signer"}, {"value", signer}}.dump());
+            }
+            return parsed(m.invoke(
+                "wallet.send", json{{"recipient", "Public/" + kPayee}, {"amount", 100}}.dump()));
+        };
+
+        const json noSigner = attempt(kPeer.c_str(), "");
+        check(noSigner.value("submitted", true) == false &&
+                  noSigner.value("outcome", std::string{}) == "approved_not_submitted",
+              "with no approved-spend signer configured, an approval submits nothing");
+        check(mentions(noSigner.value("error", std::string{}), "approved_pay_signer") &&
+                  mentions(noSigner.value("error", std::string{}), "pay_signer"),
+              "and names the setting to make, and why it is not the autonomous one");
+
+        const json noAccount = attempt("", "/bin/true");
+        check(noAccount.value("submitted", true) == false &&
+                  mentions(noAccount.value("error", std::string{}), "agent_account"),
+              "an agent that does not know its own account cannot present an approval");
+
+        const json junk = attempt(kPeer.c_str(), junkSigner.c_str());
+        check(junk.value("submitted", true) == false &&
+                  mentions(junk.value("error", std::string{}), "transaction hash"),
+              "and a signer that printed a diagnostic instead of a hash is not a settlement");
+    }
+
     std::printf("\nan unhosted module has no owner channel, and does not pretend to wait\n");
     {
         // No notifier: a module constructed directly, which is every unit test
@@ -734,11 +904,24 @@ int main()
 //     were wired to (`taskStore()` -> `tasks_`) ...........................  4
 //   swallow the save error again, so `invoke` answers ok:true for work
 //     whose record was never written .....................................   5
+//   `wallet.send` reports the approval and submits nothing, which is what
+//     it did before `WalletPort::spendApproved` existed ...................  7
+//   the module leaves `ports.wallet.spendApproved` unwired, so the skill
+//     can submit and has no submitter .....................................  7
 //
-// The first row and the last two were measured against the suite as it stands.
+// The first row and the last four were measured against the suite as it stands.
 // The six in between were measured before the last two scenarios were added and
 // are therefore floors rather than current counts: a suite that grew can only
 // notice a mutation more.
+//
+// The last two are the approval half, and they separate cleanly: the first is a
+// mutation to `wallet_skills.cpp` and takes `wallet_skills_test` down with it (9
+// FAIL there); the second is a mutation to `agent_module_plugin.cpp` and leaves
+// `wallet_skills_test` entirely GREEN, because that suite hands the skill its
+// own submitter and cannot see a module that wires none. The composition is what
+// was missing — the chain half of this path has been on the public testnet since
+// block 10786 and was produced by hand — so the assertion that it is wired has
+// to live here, at the module.
 //
 // One caveat, recorded because this list exists to admit them. "A call that
 // changes nothing rewrites nothing" was written as a comparison of the file's

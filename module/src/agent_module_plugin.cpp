@@ -465,6 +465,87 @@ std::string AgentModuleImpl::payWithConfiguredSigner(const std::string &payAccou
     return out;
 }
 
+logos::agent::SpendReceipt
+AgentModuleImpl::submitApprovedSpend(const logos::agent::ApprovedSpendRequest &request) const
+{
+    logos::agent::SpendReceipt receipt;
+
+    // Refused before anything runs, and each with the sentence that names the
+    // thing to fix. Every one of these is a `submitted:false`, never an empty
+    // hash that a caller might read as "the wallet declined": `wallet.send`
+    // passes `error` straight through to the operator.
+    if (setting("approved_pay_signer").empty()) {
+        receipt.error = "no 'approved_pay_signer' command is configured, so this deployment has "
+                        "no way to submit an approved spend. It is deliberately not "
+                        "'pay_signer': that command performs the policy program's autonomous "
+                        "spend instruction, which the chain refuses above the anchored "
+                        "per-transaction ceiling";
+        return receipt;
+    }
+    const std::string agentAccount = setting("agent_account");
+    if (agentAccount.empty()) {
+        receipt.error = "this agent does not know its own account ('agent_account' is unset), "
+                        "and the approval account's address is derived from it";
+        return receipt;
+    }
+    if (request.recipient.empty() || request.amount.empty()) {
+        receipt.error = "an approved spend must name a recipient and an amount";
+        return receipt;
+    }
+
+    // The account the owner's `approve_spend` created, derived here rather than
+    // asked for. It is a pure function of terms this process already holds, and
+    // deriving it is the difference between presenting the approval the owner
+    // signed and presenting whatever a caller said the approval was.
+    const std::string markerSeed = logos::agent::approvalMarkerSeed(
+        agentAccount, request.recipient, request.amount, request.nonce);
+    if (markerSeed.empty()) {
+        receipt.error = "the approval marker for this payment could not be derived from " +
+                        agentAccount + ", " + request.recipient + " and " + request.amount +
+                        ": one of them is not an account id or an amount this build can decode";
+        return receipt;
+    }
+
+    // Built through the JSON library and delivered on stdin, like every other
+    // delegate here. The recipient came out of a call parameter and the amount
+    // is decimal text; a hand-built document would let a quote in either forge
+    // the field beside it, and a command line would let it forge the command.
+    const std::string input =
+        dumpSafe(json{{"kind", "spend_approved"},
+                      {"agent", agentAccount},
+                      {"recipient", request.recipient},
+                      // Decimal strings, as everywhere else amounts cross this
+                      // module's boundaries: on-chain amounts are u128 and a
+                      // JSON number is a double to plenty of readers.
+                      {"amount", request.amount},
+                      {"nonce", std::to_string(request.nonce)},
+                      {"marker_seed", markerSeed},
+                      {"request_id", request.requestId}}) +
+        "\n";
+    const std::string out = runConfiguredCommand("approved_pay_signer", input);
+
+    // 64 lower-case hex, the same discipline `payWithConfiguredSigner` applies
+    // and for a stronger reason: what comes back here is reported to the owner
+    // as the settlement of a payment they personally authorised, so a signer
+    // that printed "error: approval already spent" must not become one.
+    if (out.size() != 64) {
+        receipt.error = "the approved-spend signer did not answer with a transaction hash, so "
+                        "nothing here can be shown to have settled";
+        return receipt;
+    }
+    for (const char c : out) {
+        const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!hex) {
+            receipt.error = "the approved-spend signer answered with something that is not a "
+                            "transaction hash";
+            return receipt;
+        }
+    }
+    receipt.submitted = true;
+    receipt.txHash = out;
+    return receipt;
+}
+
 std::string AgentModuleImpl::anchoredEnvelopeField(const char *field) const
 {
     const std::string out = runConfiguredCommand("policy_source", {});
@@ -988,6 +1069,25 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
             return dumpSafe(out);
         };
     }
+    // ---- the submitter for a spend the owner approved ----------------------
+    //
+    // The step after a successful approval, which used to be the step that was
+    // missing: `wallet.send` waited for the owner, heard `approved`, and then
+    // reported that submitting it "goes through the policy program's
+    // spend_approved path, which this module does not wire". Both halves of the
+    // exchange were real and the payment stopped between them.
+    //
+    // It is wired the way `agent.task`'s payment is wired — a command an
+    // operator names, JSON on its stdin, one line back, checked before anything
+    // believes it — because that is the only mechanism a loaded plugin has and
+    // a second one would be a second set of quoting rules. `spend_approved` is
+    // a different *instruction* from `spend`, so it is a different key: see
+    // `submitApprovedSpend`.
+    if (!ports.wallet.spendApproved) {
+        ports.wallet.spendApproved = [this](const ApprovedSpendRequest &request) {
+            return submitApprovedSpend(request);
+        };
+    }
     if (!ports.task.ready) {
         ports.task.ready = [node] { return node->ready(); };
     }
@@ -1040,6 +1140,66 @@ StdLogosResult AgentModuleImpl::installBuiltinSkills(logos::agent::SkillPorts po
     if (!ports.task.pay) {
         ports.task.pay = [this](const std::string &payAccount, std::uint64_t amount) {
             return payWithConfiguredSigner(payAccount, amount);
+        };
+    }
+    // ---- and the record that keeps it from happening twice -----------------
+    //
+    // `TaskPersistence` has carried a payment journal since it was written, and
+    // until now nothing but its own unit test called it: the production payment
+    // went straight to `pay` with no `mayPay` guard and no write-ahead intent,
+    // which is precisely the window `task_persistence.h` says the journal
+    // exists to close. `LoadReport::uncertainPayments` is reported by
+    // `meta.status` as `uncertain_payments` and could not be anything but zero,
+    // because nothing ever wrote an intent for a load to find.
+    //
+    // Resolved at CALL time, like the store port above and for the same reason:
+    // `onContextReady` can fire either side of this function, so a `durable_`
+    // read here would be null for a host that hands the directory over a moment
+    // later.
+    if (!ports.task.journal.noteIntent) {
+        // Whether anything is written down at all, which is a different
+        // question from whether the port is wired: the three calls below all
+        // answer for a module that was given no directory, and they answer
+        // vacuously. Without this an unhosted agent would tell a caller whose
+        // payment did not settle to go and read an `uncertain_payments` count
+        // that is structurally zero.
+        ports.task.journal.keepsRecord = [this] {
+            std::lock_guard<std::mutex> lock(durableMutex_);
+            return durable_ != nullptr;
+        };
+        ports.task.journal.mayPay = [this](const std::string &taskId, std::string &why) {
+            std::lock_guard<std::mutex> lock(durableMutex_);
+            // No journal at all: this module was given no directory, writes
+            // nothing down, and `meta.status` reports its durability as null.
+            // There is nothing on record to forbid a payment and pretending
+            // otherwise would stall every priced task in the `lgpd` CLI and in
+            // every unit test.
+            if (!durable_) return true;
+            if (!loadRan_) {
+                // A journal that exists and has not been read. Only reachable
+                // if a host hands over the directory after `start()`, which the
+                // export's contract says it does not — and if it ever does, the
+                // answer to "what has already been paid" is *we have not
+                // looked*, which is not the same as *nothing*.
+                why = "the payment journal at " + durable_->path() +
+                      " has not been recovered from yet, so what was already paid is unknown";
+                return false;
+            }
+            return durable_->mayPay(taskId, why);
+        };
+        ports.task.journal.noteIntent = [this](const std::string &taskId,
+                                               const std::string &payAccount,
+                                               std::uint64_t amount, std::string &err) {
+            std::lock_guard<std::mutex> lock(durableMutex_);
+            if (!durable_) return true;
+            return durable_->notePaymentIntent(taskId, payAccount, amount, err);
+        };
+        ports.task.journal.noteSettled = [this](const std::string &taskId,
+                                                const std::string &settlementTx,
+                                                std::string &err) {
+            std::lock_guard<std::mutex> lock(durableMutex_);
+            if (!durable_) return true;
+            return durable_->notePaymentSettled(taskId, settlementTx, err);
         };
     }
     // `refund` stays unwired, and that is not an oversight. Nothing in this
@@ -1576,6 +1736,26 @@ std::string AgentModuleImpl::durabilityJson() const
         // The number an operator has to act on: money that may or may not have
         // moved, which no restart may decide on its own.
         out["uncertain_payments"] = lastLoad_.uncertainPayments;
+        // And WHICH ones, because a count of unresolved payments is an
+        // instruction to go and look at a chain without saying where. Each entry
+        // carries the account the money was going to and how much, both read out
+        // of the intent that was written before the wallet was called — the task
+        // record itself has neither, since nothing got as far as writing it.
+        // Empty until something is unresolved, and then it is the shortest path
+        // from `uncertain_payments: 1` to a `getAccount` call.
+        const std::vector<logos::agent::RecoveredTask> unresolved =
+            durable_->needingReconciliation();
+        if (!unresolved.empty()) {
+            json list = json::array();
+            for (const auto &task : unresolved) {
+                list.push_back(json{{"task", task.id},
+                                    {"account", task.payAccount},
+                                    {"amount", std::to_string(task.pricePaid)},
+                                    {"skill", task.skill},
+                                    {"agent", task.agent}});
+            }
+            out["needing_reconciliation"] = std::move(list);
+        }
         if (!lastLoad_.error.empty()) {
             out["recovery_error"] = lastLoad_.error;
         }

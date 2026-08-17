@@ -460,6 +460,38 @@ private:
     std::string payWithConfiguredSigner(const std::string &payAccount,
                                         std::uint64_t amount) const;
 
+    /// Submit an above-envelope payment the owner has approved, by running the
+    /// operator's `approved_pay_signer`, and report what came back.
+    ///
+    /// The same delegation as `payWithConfiguredSigner` and deliberately not the
+    /// same command. That one performs the policy program's *autonomous* `spend`
+    /// instruction, which the chain refuses for an amount above the anchored
+    /// per-transaction ceiling — "the spend needs an owner approval: use
+    /// spend_approved" — so handing an approved payment to it would meter the
+    /// payment against the per-period budget, leave the owner's approval marker
+    /// unspent and redeemable, and, for the amounts this path exists for, fail
+    /// on chain while the module reported a settlement. A signer that does not
+    /// know about approvals is therefore *absent* here rather than
+    /// substituted for one that does.
+    ///
+    /// WHAT IS PUT IN FRONT OF THE COMMAND, AND WHAT IS NOT
+    ///
+    /// A JSON document on stdin, through `runConfiguredCommand`, exactly as the
+    /// other three delegates do. Nothing derived from the exchange reaches a
+    /// command line: the recipient is a string the caller chose and the shell
+    /// would read a quote in it as the end of an argument. The document carries
+    /// the agent's own account, the recipient, the amount, the nonce and the
+    /// **approval marker seed**, derived here by `spend_marker.h` exactly as the
+    /// chain derives it, so the signer presents the account the owner actually
+    /// created rather than re-deriving one and hoping the two agree.
+    ///
+    /// A receipt with `submitted:false` and a sentence naming what was missing
+    /// is the answer for an unset command, an agent account this module cannot
+    /// decode, a marker that cannot be derived, and output that is not a
+    /// transaction hash. None of those is reported as a payment.
+    logos::agent::SpendReceipt submitApprovedSpend(
+        const logos::agent::ApprovedSpendRequest &request) const;
+
     /// One decimal field of the agent's ANCHORED envelope, read from the chain
     /// through the operator's `policy_source`, or empty for "not known".
     ///

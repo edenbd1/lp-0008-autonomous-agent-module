@@ -1145,6 +1145,308 @@ int main()
         check(r.value("ok", false) && paid == 25 && !r.contains("outcome"),
               "a price inside the envelope is paid, with no owner round trip");
     }
+
+    std::printf("\nthe write-ahead payment journal, on the path that pays\n");
+    {
+        // WHAT THIS IS ABOUT.
+        //
+        // `task_persistence.h` argues at length that a payment must be written
+        // down BEFORE the wallet is called, because between `pay()` returning a
+        // hash and the record of it being stored there is an interval in which
+        // the money has moved and nothing on disk says so. It then had nowhere
+        // to be called from: `mayPay`, `notePaymentIntent` and
+        // `notePaymentSettled` were referenced by their own unit test and by
+        // nothing else, and `agent.task` called `pay` with no guard and no
+        // intent. These checks are about the ORDER, which is the whole
+        // guarantee — a journal consulted after the money moved is decoration.
+        const json card = goodCard();
+
+        std::vector<std::string> order;
+        int payCalls = 0;
+        std::string intentTask, intentAccount, settledTask, settledTx;
+        std::uint64_t intentAmount = 0;
+
+        TaskStore store;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [&](const std::string &, const std::string &) {
+            order.push_back("send");
+            return true;
+        };
+        port.pay = [&](const std::string &, std::uint64_t) {
+            order.push_back("pay");
+            ++payCalls;
+            return std::string("settle-tx");
+        };
+        port.journal.mayPay = [&](const std::string &, std::string &) {
+            order.push_back("mayPay");
+            return true;
+        };
+        port.journal.noteIntent = [&](const std::string &id, const std::string &account,
+                                      std::uint64_t amount, std::string &) {
+            order.push_back("intent");
+            intentTask = id;
+            intentAccount = account;
+            intentAmount = amount;
+            return true;
+        };
+        port.journal.noteSettled = [&](const std::string &id, const std::string &tx,
+                                       std::string &) {
+            order.push_back("settled");
+            settledTask = id;
+            settledTx = tx;
+            return true;
+        };
+        insideTheEnvelope(port);
+
+        TaskSkill task(port, store);
+        const auto r = task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                        {"skill", "storage.upload"},
+                                        {"card", card},
+                                        {"task_id", "t1"}}
+                                       .dump());
+        check(okOf(r), "a priced task with a journal behind it goes through");
+        // The assertion this whole mechanism reduces to. `intent` BEFORE `pay`:
+        // reversed, the record exists only for payments that already happened,
+        // and the crash it exists to survive is the one where they did not get
+        // that far.
+        const auto at = [&order](const char *what) {
+            for (std::size_t i = 0; i < order.size(); ++i) {
+                if (order[i] == what) return static_cast<int>(i);
+            }
+            return -1;
+        };
+        check(at("intent") >= 0 && at("pay") >= 0 && at("intent") < at("pay"),
+              "the intent to pay is journalled BEFORE the wallet is called");
+        check(at("mayPay") >= 0 && at("mayPay") < at("intent"),
+              "the durable record is asked whether this task may be paid at all, first");
+        check(at("settled") > at("pay"),
+              "and the settlement is recorded after the hash comes back, not before");
+        check(intentTask == "t1" && intentAccount == "Public/" + FakeAgent{}.pay &&
+                  intentAmount == 25,
+              "the intent names the task, the account and the amount that are about to be paid");
+        check(settledTask == "t1" && settledTx == "settle-tx",
+              "and the settlement names the task and the hash the wallet returned");
+    }
+    {
+        // The refusal that saves the money. A durable record that already
+        // carries a settlement for this task — or an intent nobody resolved —
+        // makes `mayPay` say no, and nothing after it may happen: not the
+        // payment, not the request, not the task.
+        const json card = goodCard();
+        TaskStore store;
+        int payCalls = 0, sends = 0, intents = 0;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [&](const std::string &, const std::string &) {
+            ++sends;
+            return true;
+        };
+        port.pay = [&](const std::string &, std::uint64_t) {
+            ++payCalls;
+            return std::string("settle-tx");
+        };
+        port.journal.mayPay = [](const std::string &id, std::string &why) {
+            why = "task " + id + " was already paid: settlement deadbeef is on record";
+            return false;
+        };
+        port.journal.noteIntent = [&](const std::string &, const std::string &, std::uint64_t,
+                                      std::string &) {
+            ++intents;
+            return true;
+        };
+        insideTheEnvelope(port);
+
+        TaskSkill task(port, store);
+        const auto r = task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                        {"skill", "storage.upload"},
+                                        {"card", card},
+                                        {"task_id", "t1"}}
+                                       .dump());
+        check(!okOf(r), "a task the journal refuses to pay for is refused");
+        check(payCalls == 0, "and NOTHING is paid — which is the whole point");
+        check(intents == 0, "no intent is journalled for a payment that will not be made");
+        check(sends == 0,
+              "and no request goes out either: a peer asked to do unpaid work is worse off");
+        check(store.size() == 0, "with no task left behind");
+        check(mentions(errOf(r), "already paid") && mentions(errOf(r), "deadbeef"),
+              "and the refusal passes the record's own words through, naming the settlement");
+    }
+    {
+        // The intent could not be made durable. Paying anyway is exactly the
+        // failure the journal exists to prevent — a crash after it leaves a disk
+        // that says nothing was ever attempted — so the payment does not happen.
+        const json card = goodCard();
+        TaskStore store;
+        int payCalls = 0;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [](const std::string &, const std::string &) { return true; };
+        port.pay = [&](const std::string &, std::uint64_t) {
+            ++payCalls;
+            return std::string("settle-tx");
+        };
+        port.journal.mayPay = [](const std::string &, std::string &) { return true; };
+        port.journal.noteIntent = [](const std::string &, const std::string &, std::uint64_t,
+                                     std::string &err) {
+            err = "the snapshot could not be written to /nowhere/tasks.json.tmp";
+            return false;
+        };
+        insideTheEnvelope(port);
+
+        TaskSkill task(port, store);
+        const auto r = task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                        {"skill", "storage.upload"},
+                                        {"card", card},
+                                        {"task_id", "t1"}}
+                                       .dump());
+        check(!okOf(r) && payCalls == 0,
+              "an intent that could not be written down does NOT go on to pay");
+        check(mentions(errOf(r), "could not be written down first"),
+              "and says that is why, rather than blaming the wallet");
+        TaskStore::Task t;
+        check(store.find("t1", t) && t.state == TaskState::Failed && t.settlementTx.empty(),
+              "the task is failed rather than left open, with no settlement against it");
+    }
+    {
+        // THE ONE THE AGENT MUST NOT DECIDE FOR ITSELF.
+        //
+        // The wallet answered with no hash. That is not evidence that nothing
+        // settled — only that nothing was SEEN to settle, which is also what a
+        // signer that submitted and then died returns. `notePaymentAbandoned` is
+        // the one call that makes `mayPay` say yes again for a task that reached
+        // the wallet, and its own header requires evidence of what was checked
+        // on chain. This process has none, so the intent is left standing and
+        // the answer says the payment is unresolved.
+        const json card = goodCard();
+        TaskStore store;
+        int intents = 0;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [](const std::string &, const std::string &) { return true; };
+        port.pay = [](const std::string &, std::uint64_t) { return std::string(); };
+        port.journal.keepsRecord = [] { return true; };
+        port.journal.mayPay = [](const std::string &, std::string &) { return true; };
+        port.journal.noteIntent = [&](const std::string &, const std::string &, std::uint64_t,
+                                      std::string &) {
+            ++intents;
+            return true;
+        };
+        port.journal.noteSettled = [](const std::string &, const std::string &, std::string &) {
+            return true;
+        };
+        insideTheEnvelope(port);
+
+        TaskSkill task(port, store);
+        const auto r = task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                        {"skill", "storage.upload"},
+                                        {"card", card},
+                                        {"task_id", "t1"}}
+                                       .dump());
+        check(!okOf(r) && intents == 1, "a payment that did not settle leaves its intent standing");
+        check(jsonOf(r).value("outcome", std::string{}) == "payment_unresolved" &&
+                  jsonOf(r).value("reconcile", false),
+              "and is reported as UNRESOLVED, not as a payment that did not happen");
+        check(mentions(errOf(r), "uncertain_payments"),
+              "naming where an operator will see it counted");
+    }
+    {
+        // The same failure in a deployment that writes NOTHING down — a module
+        // nobody gave a persistence directory to, which is every unit test and
+        // the `lgpd` CLI. The journal port answers there too, vacuously, so an
+        // answer keyed on "is the port wired" would send that caller to read an
+        // `uncertain_payments` count that is structurally zero. Keyed on
+        // `keepsRecord`, it does not.
+        const json card = goodCard();
+        TaskStore store;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [](const std::string &, const std::string &) { return true; };
+        port.pay = [](const std::string &, std::uint64_t) { return std::string(); };
+        port.journal.keepsRecord = [] { return false; };
+        port.journal.mayPay = [](const std::string &, std::string &) { return true; };
+        port.journal.noteIntent = [](const std::string &, const std::string &, std::uint64_t,
+                                     std::string &) { return true; };
+        insideTheEnvelope(port);
+
+        TaskSkill task(port, store);
+        const auto r = task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                        {"skill", "storage.upload"},
+                                        {"card", card},
+                                        {"task_id", "t1"}}
+                                       .dump());
+        check(!okOf(r) && mentions(errOf(r), "did not settle"),
+              "a payment that did not settle still fails the task");
+        check(!mentions(errOf(r), "uncertain_payments") &&
+                  !jsonOf(r).value("reconcile", false),
+              "and an agent that writes nothing down does not point at a count it never keeps");
+    }
+    {
+        // The money moved and the record of it did not reach the disk. The
+        // payment is real and the call must not deny it; the settlement is in
+        // the journal's memory, the durable file still says `intended`, and a
+        // restart from here refuses to pay again rather than paying twice.
+        const json card = goodCard();
+        TaskStore store;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [](const std::string &, const std::string &) { return true; };
+        port.pay = [](const std::string &, std::uint64_t) { return std::string("settle-tx"); };
+        port.journal.mayPay = [](const std::string &, std::string &) { return true; };
+        port.journal.noteIntent = [](const std::string &, const std::string &, std::uint64_t,
+                                     std::string &) { return true; };
+        port.journal.noteSettled = [](const std::string &, const std::string &,
+                                      std::string &err) {
+            err = "the settlement settle-tx is recorded in memory but was not written";
+            return false;
+        };
+        insideTheEnvelope(port);
+
+        TaskSkill task(port, store);
+        const auto r = task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                        {"skill", "storage.upload"},
+                                        {"card", card},
+                                        {"task_id", "t1"}}
+                                       .dump());
+        check(okOf(r) && jsonOf(r).value("settlement_tx", std::string{}) == "settle-tx",
+              "a settlement whose record failed is still reported as the settlement it is");
+        check(jsonOf(r).value("settlement_recorded", true) == false &&
+                  !jsonOf(r).value("settlement_record_error", std::string{}).empty(),
+              "with both halves stated: the money moved, and the record of it did not land");
+        TaskStore::Task t;
+        check(store.find("t1", t) && t.settlementTx == "settle-tx",
+              "and the task still carries the hash, so nothing is lost in this process either");
+    }
+    {
+        // A free task has nothing to journal, and a journal that was consulted
+        // for one would be a payment record for a payment nobody makes.
+        json card = goodCard();
+        card["x-logos"]["pricePerTask"] = 0;
+        card["x-logos"].erase("paymentAccount");
+        TaskStore store;
+        int asked = 0, intents = 0;
+        TaskPort port;
+        port.ready = [] { return true; };
+        port.send = [](const std::string &, const std::string &) { return true; };
+        port.journal.mayPay = [&](const std::string &, std::string &) {
+            ++asked;
+            return true;
+        };
+        port.journal.noteIntent = [&](const std::string &, const std::string &, std::uint64_t,
+                                      std::string &) {
+            ++intents;
+            return true;
+        };
+        insideTheEnvelope(port);
+        TaskSkill task(port, store);
+        check(okOf(task.invoke(json{{"agent_address", card["x-logos"]["lezAccount"]},
+                                    {"skill", "storage.upload"},
+                                    {"card", card},
+                                    {"task_id", "t1"}}
+                                   .dump())),
+              "a free task opens");
+        check(asked == 0 && intents == 0, "and nothing about payment is journalled for it");
+    }
     {
         // A free task asks nobody: there is no spend to hold.
         TaskStore store;

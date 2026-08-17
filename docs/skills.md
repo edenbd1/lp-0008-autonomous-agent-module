@@ -355,7 +355,7 @@ the same members produce two different groups.
 | Skill | Parameters | Answers |
 |---|---|---|
 | `wallet.balance` | `account` string — qualified `Public/<b58>` or `Private/<b58>`; defaults to the agent's own | balance, and whether the read was shielded |
-| `wallet.send` | **`recipient`** string — a base58 id, optionally `Public/`-prefixed, or `PrivateKeys/<npk>:<vpk>` to pay a shielded payee at the keys its Agent Card publishes; **`amount`** integer or decimal string (amounts are `u128`; no JSON number holds one) | a receipt whose `submitted` is false unless a transaction really went out |
+| `wallet.send` | **`recipient`** string — a base58 id, optionally `Public/`-prefixed, or `PrivateKeys/<npk>:<vpk>` to pay a shielded payee at the keys its Agent Card publishes; **`amount`** integer or decimal string (amounts are `u128`; no JSON number holds one) | a receipt whose `submitted` is false unless a transaction really went out. Inside the envelope that is `outcome:"autonomous"`; above it, the owner is asked, and an approval is submitted through the policy program's `spend_approved` as `outcome:"approved"` with the transaction — see `approved_pay_signer` below |
 | `wallet.history` | `limit` integer 1–1000 | the agent's own journal — the chain has no history endpoint |
 | `program.query` | **`program_id`** string, **`method`** one of `getTransaction`, `getBlock`, `getAccount`, `getLastBlockId`, `params` array | the sequencer's answer, plus `found`/`included` |
 | `program.call` | **`program_id`** string, **`instruction`** string, `params` object | subject to the spending threshold |
@@ -400,7 +400,7 @@ claim, not a credential: task traffic is unsigned, and
 |---|---|---|
 | `meta.skills` | — | `{"ok":true,"count":N,"skills":[…]}` — every registered skill and its parameter schema, including itself. Reads the same registry `agent.card` publishes, so the catalogue and the card are one answer |
 | `meta.status` | — | balance, storage usage, active tasks, and what the module is bound to |
-| `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks`, `approval_timeout_ms`, `approval_resend_ms`, `delivery`, `agent_account`, `agent_name`, `pay_account`, `card_signer`, `pay_signer`, `policy_source`, `owner_channel_account` — **`value`** string | whether the setting took effect |
+| `meta.configure` | **`key`** — one of `owner_address`, `policy_hash`, `per_tx`, `per_period`, `period_blocks`, `price_per_task`, `discovery_topic`, `approval_timeout_blocks`, `approval_timeout_ms`, `approval_resend_ms`, `delivery`, `storage`, `storage_data_dir`, `agent_account`, `agent_name`, `pay_account`, `card_signer`, `pay_signer`, `approved_pay_signer`, `policy_source`, `owner_channel_account` — **`value`** string | whether the setting took effect |
 
 ### The owner's end of the approval channel
 
@@ -437,14 +437,45 @@ nothing about what the chain accepts. The ceiling is the policy account's data,
 which only the policy program may write. See
 [`security-model.md`](security-model.md).
 
-**The three delegate keys.** `card_signer`, `pay_signer` and `policy_source` are
-each a *command*. The module runs it, hands it its input on stdin, and checks
-the one line it prints before believing any of it — base64url for a signature,
-64 lower-case hex for a settlement, decimal digits for each limit. They exist
-because a plugin Basecamp loads has no crypto library, no wallet and no HTTP
-client, and `SkillPorts` is a struct of `std::function`s, so a host cannot hand
-it any of the three either. `scripts/sign-agent-card.py --sign-input` is the
-first; `scripts/agent-spend.py --settle` and `--envelope` are the other two.
+**The four delegate keys.** `card_signer`, `pay_signer`, `approved_pay_signer`
+and `policy_source` are each a *command*. The module runs it, hands it its input
+on stdin, and checks the one line it prints before believing any of it —
+base64url for a signature, 64 lower-case hex for a settlement, decimal digits for
+each limit. They exist because a plugin Basecamp loads has no crypto library, no
+wallet and no HTTP client, and `SkillPorts` is a struct of `std::function`s, so a
+host cannot hand it any of them either. `scripts/sign-agent-card.py
+--sign-input` is the first; `scripts/agent-spend.py --settle` and `--envelope`
+are `pay_signer` and `policy_source`.
+
+`approved_pay_signer` is the fourth, and it is the one with no script in this
+repository behind it yet. It performs the policy program's **`spend_approved`**
+instruction — the branch an owner approval unlocks — and it is deliberately not
+`pay_signer`, which performs the *autonomous* `spend`. Handing an approved
+payment to the autonomous command would meter it against the per-period budget,
+leave the owner's approval marker unspent and redeemable until its expiry, and,
+for the amounts this path exists for, be refused on chain while the module
+reported a settlement. So a signer that does not understand approvals is absent
+here rather than substituted.
+
+The module runs it with **no arguments** and this document on stdin:
+
+```json
+{"kind":"spend_approved","agent":"<base58>","recipient":"Public/<base58>",
+ "amount":"<decimal>","nonce":"<decimal>","marker_seed":"<64 hex>",
+ "request_id":"spend-<nonce>"}
+```
+
+Everything in it is derived by the module. A caller of `wallet.send` supplies
+only `recipient` and `amount`: the nonce is minted per spend, the request id
+comes from the nonce, and `marker_seed` is derived by `approvalMarkerSeed` in
+`module/src/spend_marker.h` exactly as the chain derives it — so the signer
+presents the approval account the owner actually created rather than one it
+re-derived and hoped matched. The command must print the settlement transaction
+hash and nothing else; 64 lower-case hex or it is not a settlement, and
+`wallet.send` answers `{"submitted":false,"outcome":"approved_not_submitted"}`
+with the reason. It is submitted **once**: the marker is single-use, so a retry
+would be either a transaction the chain refuses or a duplicate of a payment
+already in flight, and the only honest retry is a fresh approval from the owner.
 
 `policy_source` is what makes `agent.task` able to pay unattended: it is the
 agent's own **anchored** policy account, read off the chain on every priced task.
@@ -455,12 +486,17 @@ the payment is held for the owner rather than made. It is deliberately not
 operator can type is worth nothing, which is the argument
 `crates/agent-policy-core` opens with.
 
-Neither `pay_signer` nor `policy_source` is a way around the anchored policy.
-`agent-spend.py --settle` performs the policy program's `spend` instruction —
-the same call `scripts/a2a-task.sh` makes — so the chain applies the same limits
-to a module's payment as to that script's, and there is no path in it that
-reaches `authenticated_transfer` without going through the policy account first.
-What the delegate does add is that whoever can run the command can spend up to
+None of `pay_signer`, `approved_pay_signer` or `policy_source` is a way around
+the anchored policy. `agent-spend.py --settle` performs the policy program's
+`spend` instruction — the same call `scripts/a2a-task.sh` makes — so the chain
+applies the same limits to a module's payment as to that script's, and there is
+no path in it that reaches `authenticated_transfer` without going through the
+policy account first. `approved_pay_signer` reaches the same program by its
+other door, and that door needs an approval account only the owner's own
+`approve_spend` signature can create: an agent that runs the command without one
+has nothing to present and the chain refuses it.
+
+What the delegates do add is that whoever can run the command can spend up to
 the envelope; that is already true of `card_signer`, which is a signing oracle
 for the same key, and it is the premise the anchored policy exists to bound.
 `./scripts/delivery-in-plugin.sh signers` is the check, and it costs nothing.
@@ -482,7 +518,7 @@ demonstration, and it is external, separately compiled, and self-checking.
 
 | Category | Skill | State |
 |---|---|---|
-| Blockchain | `wallet.send` | **on chain** — `spend`, enforced by the anchored envelope |
+| Blockchain | `wallet.send` | **on chain** — `spend` inside the envelope, `spend_approved` above it once the owner answers, both enforced by the anchored policy account |
 | Blockchain | `program.call`, `program.deploy` | **on chain** — same path, same threshold — when a host wires `ProgramPort`. Inside a *loaded* plugin they still refuse, and unlike storage this one is not port plumbing: see the last paragraphs of this section |
 | Blockchain | `wallet.balance`, `program.query` | reads over JSON-RPC, and reachable from `agent-console` — §5 has the recorded answers. Both need a sequencer connection, which a *loaded* plugin has no port for: see the last paragraphs of this section |
 | Blockchain | `wallet.history` | **answers in a loaded plugin**, from the module's own submission journal — the port is wired to the task store, where every settled task carries its `settlementTx`. It reports each row as `unverified` and the list as `confirmedAgainstChain:false`, because confirming a hash needs a sequencer and this plugin links no HTTP client |

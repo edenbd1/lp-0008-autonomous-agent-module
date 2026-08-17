@@ -1319,6 +1319,30 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
 
     if (taskId.empty()) taskId = randomId();
     if (contextId.empty()) contextId = randomId();
+
+    // THE DURABLE RECORD, ASKED BEFORE THE REQUEST GOES OUT.
+    //
+    // Asked here as well as beside the wallet call below, and the two are not
+    // redundant. This one is about not opening a task and not putting a request
+    // on the wire for a payment that is already forbidden — a peer told to do
+    // work the agent will refuse to pay for is worse off than one never asked.
+    // The one below is about the money, which is why it is the one that stands
+    // immediately before `port_.pay`.
+    //
+    // Only for a priced task: a free task has nothing to journal and nothing to
+    // pay twice.
+    if (price > 0 && port_.journal.mayPay) {
+        std::string why;
+        if (!port_.journal.mayPay(taskId, why)) {
+            return fail("task " + taskId + " was not opened and nothing was paid: " + why,
+                        json{{"submitted", false},
+                             {"paid", false},
+                             {"task_id", taskId},
+                             {"price", price},
+                             {"pay_account", payAccount},
+                             {"outcome", "payment_refused_by_journal"}});
+        }
+    }
     // The topic is built before the task is opened, so an id that cannot be
     // named on the wire does not leave a task behind that nothing can address.
     const std::string topic = taskTopic(agentAddress, taskId);
@@ -1348,6 +1372,8 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
     }
 
     std::string settlementTx;
+    // Set when the settlement was made and the durable record of it was not.
+    std::string settlementNote;
     if (price > 0) {
         if (!port_.pay) {
             std::string ignored;
@@ -1355,28 +1381,131 @@ std::string TaskSkill::invoke(const std::string &paramsJson)
             return fail("the task costs " + std::to_string(price) +
                         " LEZ and no payment path is configured");
         }
+        // ---- the write-ahead record, before the wallet ---------------------
+        //
+        // `mayPay` again, immediately before the money: the send above can take
+        // as long as the transport takes, and the check that guards a payment
+        // belongs next to the payment. Then the intent, which is made durable
+        // by the time it returns true — this is the write that turns "the
+        // process died somewhere around the wallet call" from an unanswerable
+        // question into a task recovery refuses to pay again.
+        //
+        // Note what the intent write ALSO does, and is relied on for: it
+        // snapshots the store, so the task opened a few lines above is on disk
+        // before the money moves. Without it the first thing written about this
+        // task was the checkpoint after `invoke` returned — after the payment —
+        // so a crash in between left a paid task that no restart had heard of,
+        // and a caller retrying the same id opened a fresh task and paid again.
+        if (port_.journal.noteIntent) {
+            std::string why;
+            if (port_.journal.mayPay && !port_.journal.mayPay(taskId, why)) {
+                std::string ignored;
+                tasks_.advance(taskId, TaskState::Failed, "the payment was refused: " + why,
+                               ignored);
+                return fail("the request was delivered and nothing was paid: " + why,
+                            json{{"paid", false},
+                                 {"task_id", taskId},
+                                 {"price", price},
+                                 {"pay_account", payAccount},
+                                 {"outcome", "payment_refused_by_journal"}});
+            }
+            std::string journalError;
+            if (!port_.journal.noteIntent(taskId, payAccount, price, journalError)) {
+                // Nothing is paid on top of a record that did not land. The
+                // alternative — pay anyway and hope the settlement writes — is
+                // exactly the double payment, because a crash after it leaves
+                // the disk saying nothing was ever attempted.
+                std::string ignored;
+                tasks_.advance(taskId, TaskState::Failed,
+                               "the payment intent could not be recorded", ignored);
+                return fail("the request was delivered and the payment of " +
+                                std::to_string(price) +
+                                " LEZ was NOT made, because the intent to make it could not be "
+                                "written down first: " +
+                                journalError,
+                            json{{"paid", false},
+                                 {"task_id", taskId},
+                                 {"price", price},
+                                 {"pay_account", payAccount},
+                                 {"outcome", "payment_not_journalled"}});
+            }
+        }
+
         settlementTx = port_.pay(payAccount, price);
         if (settlementTx.empty()) {
             // The request is out and the money is not. Reported as a failure
             // rather than retried silently: a second attempt would risk paying
             // twice for one task.
+            //
+            // AND THE INTENT IS LEFT STANDING, DELIBERATELY. An empty hash is
+            // not evidence that nothing settled — only that nothing was seen to
+            // settle, which is also what a signer that submitted and then died
+            // returns. `TaskPersistence::notePaymentAbandoned` is the one call
+            // that makes `mayPay` say yes again for a task that reached the
+            // wallet, and its own header says why the agent must not make it
+            // about itself: it requires evidence of what was checked on chain,
+            // and this process has none. So the entry stays `Intended`, the
+            // next recovery counts it in `uncertain_payments`, and a human
+            // reconciles it. Refusing to pay a task that was never paid costs a
+            // stalled task; paying one that was costs the money.
             std::string ignored;
             tasks_.advance(taskId, TaskState::Failed, "the payment did not settle", ignored);
-            return fail("the request was delivered but the payment of " +
-                        std::to_string(price) + " LEZ did not settle");
+            // Not "is a journal port wired" — is anything actually WRITTEN
+            // DOWN. A module with no persistence directory has both: the port
+            // is wired and answers vacuously, so this would otherwise tell an
+            // unhosted agent's caller to go and look at an
+            // `uncertain_payments` count that will always be zero.
+            const bool journalled = port_.journal.keepsRecord && port_.journal.keepsRecord();
+            return fail(
+                "the request was delivered but the payment of " + std::to_string(price) +
+                    " LEZ did not settle" +
+                    (journalled ? ". Whether it moved is now UNRESOLVED: an intent for it is on "
+                                  "record and no settlement followed, so this task is counted in "
+                                  "meta.status's uncertain_payments until somebody checks " +
+                                      payAccount + " on chain"
+                                : ""),
+                journalled ? json{{"paid", false},
+                                  {"task_id", taskId},
+                                  {"price", price},
+                                  {"pay_account", payAccount},
+                                  {"outcome", "payment_unresolved"},
+                                  {"reconcile", true}}
+                           : json{{"paid", false}, {"task_id", taskId}});
+        }
+        if (port_.journal.noteSettled) {
+            // The settlement, on top of the intent. A failure here is NOT a
+            // failed payment — the money moved and the hash is in hand — so it
+            // does not fail the call: it is reported beside the answer, and the
+            // module's own checkpoint after `invoke` retries the write. What it
+            // must never do is lose the settlement, and it does not: the
+            // journal keeps it in memory, so the next successful save carries
+            // it, and until then the durable file still says `Intended`, which
+            // refuses a second payment rather than inviting one.
+            std::string journalError;
+            if (!port_.journal.noteSettled(taskId, settlementTx, journalError)) {
+                settlementNote = journalError;
+            }
         }
         if (!tasks_.recordPayment(taskId, price, payAccount, settlementTx, err)) return fail(err);
     }
 
     // Deliberately still `submitted`. The peer has been asked; nothing has been
     // seen of it starting. `working` arrives as a status update or not at all.
-    return done(json{{"task_id", taskId},
-                     {"context_id", contextId},
-                     {"state", taskStateName(TaskState::Submitted)},
-                     {"skill", skill},
-                     {"topic", topic},
-                     {"price", price},
-                     {"settlement_tx", settlementTx}});
+    json out{{"task_id", taskId},
+             {"context_id", contextId},
+             {"state", taskStateName(TaskState::Submitted)},
+             {"skill", skill},
+             {"topic", topic},
+             {"price", price},
+             {"settlement_tx", settlementTx}};
+    if (!settlementNote.empty()) {
+        // The payment happened. Saying so and saying that its record did not
+        // reach the disk are both true, and a caller told only the first would
+        // never know to look.
+        out["settlement_recorded"] = false;
+        out["settlement_record_error"] = settlementNote;
+    }
+    return done(out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,8 +2046,8 @@ std::string ConfigureSkill::parameterSchema() const
            R"("per_tx","per_period","period_blocks","price_per_task","discovery_topic",)"
            R"("approval_timeout_blocks","approval_timeout_ms","approval_resend_ms",)"
            R"("delivery","storage","storage_data_dir","agent_account","agent_name",)"
-           R"("pay_account","card_signer","pay_signer","policy_source",)"
-           R"("owner_channel_account"]},)"
+           R"("pay_account","card_signer","pay_signer","approved_pay_signer",)"
+           R"("policy_source","owner_channel_account"]},)"
            R"("value":{"type":"string"}}})";
 }
 
@@ -1966,7 +2095,8 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
         }
     } else if (key == "owner_address" || key == "discovery_topic" ||
                key == "agent_account" || key == "agent_name" || key == "pay_account" ||
-               key == "card_signer" || key == "pay_signer" || key == "policy_source" ||
+               key == "card_signer" || key == "pay_signer" ||
+               key == "approved_pay_signer" || key == "policy_source" ||
                key == "storage_data_dir" || key == "owner_channel_account") {
         if (value.empty()) return fail("'" + key + "' cannot be empty");
     } else if (key == "policy_hash") {
@@ -1986,8 +2116,8 @@ std::string ConfigureSkill::invoke(const std::string &paramsJson)
                     "per_tx, per_period, period_blocks, price_per_task, discovery_topic, "
                     "approval_timeout_blocks, approval_timeout_ms, approval_resend_ms, "
                     "delivery, storage, storage_data_dir, agent_account, agent_name, "
-                    "pay_account, card_signer, pay_signer, policy_source, "
-                    "owner_channel_account");
+                    "pay_account, card_signer, pay_signer, approved_pay_signer, "
+                    "policy_source, owner_channel_account");
     }
 
     if (!port_.set || !port_.set(key, value)) {

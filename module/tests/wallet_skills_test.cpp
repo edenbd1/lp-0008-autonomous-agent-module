@@ -594,9 +594,173 @@ int main()
         check(strOf(r, "outcome") == "approved" && parsed(r).value("approved", false),
               "and an approval is reported as one");
         check(spends == 0 && notSubmitted(r),
-              "and it is STILL not submitted: the approved-spend path is not wired here");
+              "and it is STILL not submitted where no submitter for it is wired");
         check(mentions(errOf(r), "spend_approved"),
               "and the reply names the path that would have to carry it");
+    }
+
+    std::printf("\nwallet.send — the spend the owner approved, submitted\n");
+    {
+        // THE STEP THAT USED TO BE MISSING.
+        //
+        // Both halves of the exchange were real — the agent asks, the owner
+        // answers — and the payment stopped between them: an approval was
+        // reported and nothing was ever submitted for it, because
+        // `spend_approved` is a different instruction from `spend` and nothing
+        // here could reach it. `WalletPort::spendApproved` is that instruction.
+        int spends = 0, approvedSubmissions = 0;
+        SpendRequest seen;
+        ApprovedSpendRequest seenApproved;
+        WalletPort port = willingPort(spends, seen, "0");
+        port.spendApproved = [&](const ApprovedSpendRequest &req) {
+            ++approvedSubmissions;
+            seenApproved = req;
+            SpendReceipt receipt;
+            receipt.submitted = true;
+            receipt.txHash = kTx3;
+            return receipt;
+        };
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{4242}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &id) {
+            return id == "spend-4242" ? std::string("approved") : std::string{};
+        };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{10000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+
+        check(okOf(r) && parsed(r).value("submitted", false),
+              "an approved above-threshold spend is SUBMITTED, not merely acknowledged");
+        check(strOf(r, "tx") == kTx3,
+              "and the reply carries the transaction that carried it");
+        check(strOf(r, "outcome") == "approved" && parsed(r).value("approved", false),
+              "reported as the approved spend it is");
+        check(approvedSubmissions == 1,
+              "the approved-spend path is used exactly once — the marker is single-use, so a "
+              "retry is either refused by the chain or a duplicate of a payment in flight");
+        check(spends == 0,
+              "and the AUTONOMOUS instruction is not touched: the chain refuses it above the "
+              "per-transaction ceiling, so putting the payment through it would report a "
+              "settlement the chain had rejected");
+        check(seenApproved.recipient == "Public/" + kBob && seenApproved.amount == "500",
+              "the submission carries the terms the owner was asked about");
+        check(seenApproved.nonce == 4242,
+              "and the nonce it was approved under, which is what binds the approval to this "
+              "one payment rather than to every identical later one");
+        check(seenApproved.requestId == "spend-4242",
+              "and the correlation id the exchange ran under");
+    }
+    {
+        // A submitter that refused. The owner said yes and the chain did not
+        // take it — an approval marker already spent, an expired one, a
+        // sequencer that could not be reached. Reported as what it is, and never
+        // as a payment.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+        port.spendApproved = [](const ApprovedSpendRequest &) {
+            SpendReceipt receipt;
+            receipt.error = "the approval marker for this payment has already been spent";
+            return receipt;
+        };
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{4243}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &) { return std::string("approved"); };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{10000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(!okOf(r) && notSubmitted(r), "a refused approved spend is not reported as submitted");
+        check(strOf(r, "outcome") == "approved_not_submitted",
+              "and the outcome separates it from an owner who never answered");
+        check(mentions(errOf(r), "already been spent"),
+              "passing the submitter's own reason through rather than rewording it");
+        check(spends == 0, "with no fallback to the autonomous instruction");
+    }
+    {
+        // A success flag with no transaction hash. This repository has produced
+        // confirmed, on-chain proofs that a policy PERMITTED an amount while
+        // moving nothing; here it would be one an owner personally authorised.
+        int spends = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+        port.spendApproved = [](const ApprovedSpendRequest &) {
+            SpendReceipt receipt;
+            receipt.submitted = true;
+            receipt.txHash = "ok";
+            return receipt;
+        };
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{4244}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &) { return std::string("approved"); };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{10000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto r = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(!okOf(r) && notSubmitted(r),
+              "an approved spend that reports success without a hash is not a settlement");
+        check(mentions(errOf(r), "without a transaction hash"), "and says exactly that");
+    }
+    {
+        // The submitter exists and the owner said no. Wiring the approved path
+        // must not make a denial reach it — that would be a payment nobody
+        // approved, submitted through the instruction that exists for approvals.
+        int spends = 0, approvedSubmissions = 0;
+        SpendRequest seen;
+        WalletPort port = willingPort(spends, seen, "0");
+        port.spendApproved = [&approvedSubmissions](const ApprovedSpendRequest &) {
+            ++approvedSubmissions;
+            SpendReceipt receipt;
+            receipt.submitted = true;
+            receipt.txHash = kTx3;
+            return receipt;
+        };
+
+        std::int64_t clock = 0;
+        OwnerApprovalPort owner;
+        owner.nextNonce = [] { return std::uint64_t{4245}; };
+        owner.requestApproval = [](const std::string &) { return true; };
+        owner.pollDecision = [](const std::string &) { return std::string("denied"); };
+        owner.nowMs = [&clock] { return clock; };
+        owner.idle = [&clock] { clock += 100; };
+        owner.timeoutMs = [] { return std::int64_t{10000}; };
+        owner.resendIntervalMs = [] { return std::int64_t{250}; };
+
+        WalletSendSkill s(port, owner, envelopeOf("100", "500"));
+        const auto denied = s.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(strOf(denied, "outcome") == "denied" && approvedSubmissions == 0,
+              "a denial does not reach the approved-spend path");
+
+        // And an owner who never answers. The prize's clause is that such a
+        // spend "is not executed"; a wired submitter must not weaken it.
+        OwnerApprovalPort silent = owner;
+        silent.nextNonce = [] { return std::uint64_t{4246}; };
+        silent.pollDecision = [](const std::string &) { return std::string{}; };
+        silent.timeoutMs = [] { return std::int64_t{1000}; };
+        WalletSendSkill quiet(port, silent, envelopeOf("100", "500"));
+        const auto unanswered = quiet.invoke(R"({"recipient":")" + kBob + R"(","amount":500})");
+        check(strOf(unanswered, "outcome") == "owner_unreachable" && approvedSubmissions == 0,
+              "and neither does an owner who never answers");
+        check(spends == 0, "nor does either fall back to the autonomous instruction");
     }
     {
         // A denial. The owner was reached and said no, which is not the same

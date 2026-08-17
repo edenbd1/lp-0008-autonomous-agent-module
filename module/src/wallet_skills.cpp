@@ -617,19 +617,64 @@ std::string WalletSendSkill::invoke(const std::string &paramsJson)
         if (verdict == "approved") {
             // An approval unlocks the policy program's `spend_approved` path,
             // which needs an approval account only the owner's own signature can
-            // create. This module does not wire that path — `WalletPort::spend`
-            // is the autonomous one, and putting an above-envelope amount
-            // through it would build a transaction the chain refuses while
-            // reporting it as an approved spend. So: say the approval arrived,
-            // hand back the terms it is bound to, and submit nothing.
-            // docs/limitations.md records why no owner on testnet can create
-            // that account today.
+            // create. `WalletPort::spend` is the autonomous instruction and the
+            // chain refuses it for this amount, so putting the payment through
+            // it would report a settlement the chain had rejected.
             e["outcome"] = "approved";
             e["approved"] = true;
-            return fail("the owner approved this spend; submitting it goes through the policy "
-                        "program's spend_approved path, which this module does not wire, so "
-                        "nothing was submitted",
-                        e);
+
+            if (!port_.spendApproved) {
+                // The state every deployment was in before `spendApproved`
+                // existed, and the honest answer for one that still has no way
+                // to submit: the approval arrived, the terms it binds are handed
+                // back, and nothing was sent.
+                return fail("the owner approved this spend; submitting it goes through the "
+                            "policy program's spend_approved path, and no submitter for it is "
+                            "wired here, so nothing was submitted",
+                            e);
+            }
+
+            // ONE ATTEMPT, AND NEVER A SECOND.
+            //
+            // The approval marker is single-use: `spend_approved` sets its
+            // `spent` byte as it consumes it. So a retry of these exact terms
+            // is either a transaction the chain refuses — the marker is gone —
+            // or, if the first attempt never landed, a duplicate submission of
+            // a payment that may already be in flight. Neither is this
+            // function's to decide, and the alternative a retry loop would
+            // need is a fresh nonce, which is a fresh approval, which is the
+            // owner's to give and not the agent's to mint. What comes back is
+            // reported exactly as it comes back.
+            ApprovedSpendRequest approved;
+            approved.recipient = qualified;
+            approved.amount = amount;
+            approved.nonce = nonce;
+            approved.requestId = requestId;
+            const SpendReceipt receipt = port_.spendApproved(approved);
+
+            if (!receipt.submitted) {
+                e["outcome"] = "approved_not_submitted";
+                return fail(receipt.error.empty()
+                                ? "the owner approved this spend and the approved-spend path "
+                                  "refused it, without saying why"
+                                : "the owner approved this spend and it was not submitted: " +
+                                      receipt.error,
+                            e);
+            }
+            // The same standard the autonomous path is held to, and for the
+            // same reason: earlier work in this repository produced confirmed,
+            // on-chain proofs that a policy *permitted* an amount while moving
+            // nothing. A success flag with no transaction hash is not a payment,
+            // and here it would be one an owner had personally authorised.
+            if (!isTxHash(receipt.txHash)) {
+                e["outcome"] = "approved_not_submitted";
+                return fail("the approved-spend path reported success without a transaction "
+                            "hash, so nothing here can be shown to have settled",
+                            e);
+            }
+            e["submitted"] = true;
+            e["tx"] = receipt.txHash;
+            return done(e);
         }
 
         // Terminal, not a fallback. An above-threshold spend that fails to reach

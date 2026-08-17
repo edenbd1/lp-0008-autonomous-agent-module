@@ -82,6 +82,39 @@ struct SpendRequest {
     std::string spentThisPeriod;
 };
 
+/// One spend the owner has approved, named the way the policy program's
+/// `spend_approved` instruction names it.
+///
+/// Four fields and no fifth, because these are exactly what the approval is
+/// bound to. The owner's `approve_spend` creates a marker account at a PDA
+/// seeded by `SHA-256(agent ‖ recipient ‖ amount ‖ nonce)` — see
+/// `module/src/spend_marker.h` and `crates/agent-policy-core` — so the agent
+/// cannot present terms other than the ones it asked about: a different amount
+/// or a different recipient derives a different account, and no such account
+/// exists. The agent's own id is not here because it is not the caller's to
+/// choose; whatever submits this supplies it, and supplying it from the request
+/// would let a caller ask for an approval belonging to another agent.
+///
+/// **The marker is single-use.** `spend_approved` sets its `spent` byte as it
+/// consumes it, so this request cannot be replayed — which is also why nothing
+/// here retries it. A second attempt at the same terms would need a second
+/// nonce, and a second nonce is a second approval, which only the owner can
+/// give.
+struct ApprovedSpendRequest {
+    /// Qualified account id, e.g. `Public/<base58>` — the same string the owner
+    /// was asked about, not a re-derivation of it.
+    std::string recipient;
+    /// Base units, in decimal, as approved.
+    std::string amount;
+    /// The nonce this approval was minted under. Half of what binds an approval
+    /// to one payment: without it, "send 100 to Bob" approved once authorises
+    /// the same transfer forever.
+    std::uint64_t nonce = 0;
+    /// The correlation id the exchange ran under, for the operator's logs. It
+    /// is not part of the on-chain derivation.
+    std::string requestId;
+};
+
 /// A display mirror of the anchored envelope: a cache of an on-chain fact, never
 /// the source of it.
 ///
@@ -120,6 +153,25 @@ struct WalletPort {
     /// the indirection: there is no path from `wallet.send` to a transfer that
     /// does not go through here.
     std::function<SpendReceipt(const SpendRequest &)> spend;
+    /// **The other half of the same program, and the one an approval unlocks.**
+    ///
+    /// `spend` is the autonomous instruction; the chain refuses it outright for
+    /// an amount above the anchored per-transaction ceiling — "the spend needs
+    /// an owner approval: use spend_approved" — so an approved above-envelope
+    /// payment cannot be put through it, and putting it through anyway would
+    /// report a settlement the chain had rejected. This is the instruction that
+    /// carries one, and it is reached only after the owner has answered
+    /// `approved` for these exact terms.
+    ///
+    /// Unwired means this deployment has no way to submit an approved spend,
+    /// and `wallet.send` then reports the approval and submits nothing — which
+    /// is what it did for every deployment before this field existed. It is
+    /// deliberately separate from `spend` rather than a flag on it: a
+    /// submitter that does not know about approvals must not be handed an
+    /// approved payment and quietly run the autonomous instruction with it,
+    /// which would meter it against the per-period budget and leave the
+    /// owner's marker unspent and redeemable.
+    std::function<SpendReceipt(const ApprovedSpendRequest &)> spendApproved;
     /// How much the agent has already moved this period, in decimal. An absent
     /// function, or an empty answer, means *unknown* — which is not zero, and
     /// sends the spend to the owner rather than through the autonomous path.

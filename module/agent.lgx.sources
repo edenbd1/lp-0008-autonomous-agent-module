@@ -29,10 +29,10 @@
     "module/generated_code/agent_qt_glue.h": "11664cec5414469460c15c26cf543b71c7b925ed6aaf9d66c7f5e2471f20e946",
     "module/metadata.json": "5d186c839cf51ea04762bef5cffa3672b2b2edc196869f14a6ba431e388f39ed",
     "module/src/agent_module_interface.h": "1d4af2d2046992c01a0a303401be917070274a90ffe576a7b481343848549f1f",
-    "module/src/agent_module_plugin.cpp": "01230bc915300325741ee9b96f554fdc22ec22a522abead876772dfedcf5870c",
-    "module/src/agent_module_plugin.h": "646644b697dc453d2e161e7cecdfd3ba059a831314aa0b7704ff91dab95bb8c2",
-    "module/src/agent_skills.cpp": "375ea45408f197034f2dc962d1478de555751c19d868a8b60944bc84fbb89a52",
-    "module/src/agent_skills.h": "d2cc5d784f57603269ac69bccb904f8e1f0115f505398e52b2d19e106ba3820f",
+    "module/src/agent_module_plugin.cpp": "55a9b4efad4eb898c200bff7b1c25711a7e30eb531980a137ad40f6f7e49f381",
+    "module/src/agent_module_plugin.h": "0d970859f4e47806c3c5ed46660fe762755bde539b413793e9e80807efb4eb87",
+    "module/src/agent_skills.cpp": "303a6e684426bc1d6e619405bc21304ede56e7ef3721bf92affe8f11525a1ebf",
+    "module/src/agent_skills.h": "8338d3274718f794294a51600d04c09c4713402f7de4dca2c933cc2657d522cb",
     "module/src/delivery_runtime.cpp": "912925371b22ef7afb7e3e4531f82b806821bcb04ef426d8851f3eb5017d6296",
     "module/src/delivery_runtime.h": "5cd0c108bdf342f2a260cd6043b22dc1f5ae3d9bc981537878aa7e5a53227892",
     "module/src/inference.cpp": "ecb0d3048ee7c26688f31af1621db7da2bf52437547e16920ea323c82a34c3fa",
@@ -49,47 +49,47 @@
     "module/src/spend_marker.h": "bb8814c2060ff609b965691bc6a36dc5b26f24ef85fb4ca6624e0708a96ef5ab",
     "module/src/storage_skills.cpp": "7a8c12fe82fcf14952b7021f2e90172a4487c3c31e4f0da241583ae6b750239f",
     "module/src/storage_skills.h": "8eea474093bd2cb504e45dc84dfd424e56a1cac12ce5524caab065e952fd5a87",
-    "module/src/task_persistence.cpp": "666fac67ff5b49f5ada0123e4e2fde991c59bbcf345365479d4e40793086b7bb",
+    "module/src/task_persistence.cpp": "5977099e9e151e41bee1c2b4c6e5a7ddcc4f03688a51c47d096a65e81a2bb065",
     "module/src/task_persistence.h": "9b8d2bf2a7af021274a929e4ccedefaf61cadaca8b30dda757abd12690c5d81d",
-    "module/src/wallet_skills.cpp": "882ad5e54ef681c377f49e0b378c9f205e81ba90422e67a3ac406e6333f5568e",
-    "module/src/wallet_skills.h": "4228f80c025671e35bbf916828140dda8bba6977b59706c6fdc3415eef2761b6"
+    "module/src/wallet_skills.cpp": "c4734e3ba034e4a1bdc2627fc4ab9ee87052b80104b60afb5874c738ae642f0e",
+    "module/src/wallet_skills.h": "56dfa382dd6074ea2a8dc0c849457f59cf4fd7c44e76273490805b02f4e2d478"
   },
   "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
   "package": "module/agent.lgx",
-  "package_root_hash": "1dd4a8b67d80d7348ca5682db3acdd3209a7627cda74407256a66614a519a37e",
+  "package_root_hash": "ff4e250b8acbd0fb9869bdd2e322784f9eb6dc9f0edd3db3244a5ff08f496318",
   "variants": {
     "darwin-arm64": {
       "built_on": null,
-      "bytes": 4551936,
+      "bytes": 4638128,
       "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
       "delivery": null,
       "format": "Mach-O arm64",
       "main": "agent_plugin.dylib",
       "qt": "6.9",
       "qt_reported": "6.9.2",
-      "sha256": "1fc69f424e41ad1268e26730c098740cce6cec1ea1fda4aa1ff383cca8ed3b26"
+      "sha256": "e411d3f4f0d2aae5a550e28afe6b59c3443d63243d5c742f7692df5a2c085345"
     },
     "linux-amd64": {
       "built_on": null,
-      "bytes": 7099608,
+      "bytes": 7238064,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
       "format": "ELF x86-64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "c8a5fad5289853b687f1a2576785c2e673a68a25ecc1b1028410371027e33421"
+      "sha256": "41469df784427d635bb4d77db336b060981dbb150f0a47c0ed8ceb6cc3df80fa"
     },
     "linux-arm64": {
       "built_on": null,
-      "bytes": 7163120,
+      "bytes": 7353784,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
       "format": "ELF aarch64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "ddf777d2925646b939cab773dc621078f522abe388443cbf79c1da1ef0346c49"
+      "sha256": "a23eaa9ae2c13d71e342828476dec5114899bbd22246138e9c3f4f0e7dab6aed"
     }
   }
 }

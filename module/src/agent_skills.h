@@ -290,6 +290,60 @@ struct DiscoveryPort {
     std::function<std::vector<std::string>(const std::string &topic)> fetch;
 };
 
+/// **The write-ahead payment journal, as the paying path reaches it.**
+///
+/// `task_persistence.h` argues the case for this at length and then had nowhere
+/// to be called from: `TaskPersistence::mayPay`, `notePaymentIntent` and
+/// `notePaymentSettled` were referenced by their own unit test and by nothing
+/// else, so `LoadReport::uncertainPayments` — surfaced through `meta.status` as
+/// `uncertain_payments` — could not be anything but zero. This port is the
+/// missing half. The failure it exists to prevent is one payment sent twice
+/// because the process died between the wallet returning and the record of it
+/// being written: at that instant the money has moved and nothing on disk says
+/// so, and a snapshot cannot close that window because the fact to be recorded
+/// does not exist yet when the snapshot is taken.
+///
+/// The order is the whole guarantee, and it is not negotiable:
+/// @ref mayPay, then @ref noteIntent, and only then the wallet. A caller that
+/// pays after `noteIntent` returned false has thrown away the only record that
+/// would stop the payment being repeated.
+///
+/// **Unwired is not "no journal is needed"; it is "this deployment keeps no
+/// durable record", which is what a module nobody gave a persistence directory
+/// to is.** Left empty, every call below is skipped and the path behaves
+/// exactly as it did before this port existed — which is right for a unit test
+/// and for the `lgpd` CLI, and is reported honestly by `meta.status`, whose
+/// `durability` is `null` for exactly those deployments.
+struct PaymentJournalPort {
+    /// **Whether this deployment writes payments down at all.**
+    ///
+    /// Absent or false means it does not: the calls below still answer — a
+    /// module with no persistence directory has nothing to forbid and nothing
+    /// to record, so they succeed vacuously — and no answer may claim that an
+    /// intent is "on record" or that anything will be "counted in
+    /// uncertain_payments", because neither is true. It exists so that the one
+    /// sentence a caller reads after a payment that did not settle is a true
+    /// one in both deployments.
+    std::function<bool()> keepsRecord;
+    /// Whether the durable record permits paying `taskId` at all. False with
+    /// `why` set for a settlement already on record, an intent left unresolved
+    /// by a crash, a task recovered terminal, or a snapshot that could not be
+    /// read — an unreadable record is not an absent one.
+    std::function<bool(const std::string &taskId, std::string &why)> mayPay;
+    /// Journal that this payment is about to be attempted, and make it durable
+    /// **before** the wallet is called. False means it is not durable, and a
+    /// caller that then pays anyway has defeated the whole mechanism.
+    std::function<bool(const std::string &taskId, const std::string &payAccount,
+                       std::uint64_t amount, std::string &err)>
+        noteIntent;
+    /// Record the settlement once the wallet has returned a transaction hash.
+    /// False means the money moved and the record of it did not reach the disk;
+    /// the intent is still there, so recovery refuses to pay again.
+    std::function<bool(const std::string &taskId, const std::string &settlementTx,
+                       std::string &err)>
+        noteSettled;
+};
+
 /// What the task skills need from the transport and the wallet.
 struct TaskPort {
     /// Delivery's readiness, the same one the messaging skills refuse on:
@@ -367,6 +421,11 @@ struct TaskPort {
     /// owner was not reached — and such a payment is not made, the task is not
     /// opened, and nothing is sent.
     std::function<bool(const std::string &requestJson)> requestApproval;
+
+    /// The durable record of what this agent has already begun paying for.
+    /// Consulted before every wallet call and written before it; see
+    /// @ref PaymentJournalPort.
+    PaymentJournalPort journal;
 };
 
 /// What `meta.status` reports on.

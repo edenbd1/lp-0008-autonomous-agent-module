@@ -581,9 +581,16 @@ LoadReport TaskPersistence::load()
             r.payment = it->second.state;
             if (it->second.state == PaymentRecord::Settled) {
                 r.settlementTx = it->second.settlementTx;
-                r.pricePaid = r.pricePaid != 0 ? r.pricePaid : it->second.amount;
-                r.payAccount = r.payAccount.empty() ? it->second.payAccount : r.payAccount;
             }
+            // The terms, from whichever record has them. For an *unresolved*
+            // entry the task itself carries neither — `TaskStore::recordPayment`
+            // runs after the wallet returns and this one never got there — so
+            // without this the report that tells an operator to go and look at
+            // the chain would not say which account or how much. The journal
+            // wrote both down before the wallet was called, which is the whole
+            // point of writing it down first.
+            r.pricePaid = r.pricePaid != 0 ? r.pricePaid : it->second.amount;
+            r.payAccount = r.payAccount.empty() ? it->second.payAccount : r.payAccount;
         }
     }
 

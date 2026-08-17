@@ -354,19 +354,120 @@ wallet.send above threshold: {"attempts":8,"delivered":8,"outcome":"owner_unreac
 with eight `emitEvent: "ownerApprovalRequested"` lines in the runtime's log
 between the call and the answer.
 
-The step after a *successful* approval is the one that used to be missing. An
-approved above-threshold spend is submitted through the policy program's
-`spend_approved`, which requires an approval account that only the owner's own
-`approve_spend` signature can create — and for the three shipped agents that
-transaction is still impossible, because their owners anchored while unclaimed
-and can never sign again. So the module continues not to submit on approval: it
-reports `{"outcome":"approved","submitted":false}` and names `spend_approved` as
-the path that would have to carry it. That is a refusal to claim a payment that
-did not happen, not a bug in the wait.
+The step after a *successful* approval is the one that used to be missing, and it
+is missing no longer. An approved above-threshold spend is submitted through the
+policy program's `spend_approved`, which requires an approval account that only
+the owner's own `approve_spend` signature can create. The module reaches that
+instruction through `WalletPort::spendApproved`, wired by
+`AgentModuleImpl::submitApprovedSpend` to a command an operator names under
+`approved_pay_signer` — the same delegation `card_signer`, `pay_signer` and
+`policy_source` use, because a 4 MB Qt plugin links no wallet and a host cannot
+hand a `std::function` across the plugin boundary.
 
-In one line: **the agent's side of the approval exchange works and is tested; the
-chain's side works too, and is demonstrated above — but only for a policy whose
+**What a caller supplies, and what the module supplies for it.** `wallet.send`
+takes `recipient` and `amount` and nothing else; the nonce is minted by the
+module, the correlation id is derived from the nonce, and the approval marker
+seed is derived here by `approvalMarkerSeed` exactly as the chain derives it.
+The operator supplies one setting, `approved_pay_signer`, naming a command. The
+module runs it with **no arguments** and a JSON document on stdin —
+`{"kind":"spend_approved","agent","recipient","amount","nonce","marker_seed",
+"request_id"}` — and reads one line back.
+
+**What it refuses.** Anything that is not 64 lower-case hex characters is not a
+settlement and is reported as `{"submitted":false,"outcome":
+"approved_not_submitted"}` with the reason: an unset `approved_pay_signer`, an
+unset `agent_account` (the marker's address derives from it), a marker that
+cannot be derived from the terms, a signer that printed a diagnostic, and a
+receipt claiming success with no hash. `pay_signer` is deliberately **not**
+accepted as a substitute: that command performs the *autonomous* `spend`
+instruction, which the chain refuses above the anchored per-transaction ceiling
+— and for a spend held for the owner because the *period total* was unknown
+rather than because the amount was too large, it would succeed, meter the
+payment against the per-period budget, and leave the owner's approval marker
+unspent and redeemable until its expiry block. A submitter that does not know
+about approvals is therefore absent here, never substituted.
+
+**One attempt, and never a second.** The marker is single-use — `spend_approved`
+sets its `spent` byte as it consumes it — so a retry of the same terms is either
+a transaction the chain refuses or a duplicate of a payment already in flight.
+Neither is the module's to choose, and the alternative a retry loop would need is
+a fresh nonce, which is a fresh approval, which is the owner's to give. So the
+submission happens once and whatever comes back is reported as it comes back.
+The residual risk is stated rather than designed around: if the signer submits
+and then dies before printing the hash, the module reports `submitted:false` for
+a payment that may have settled. `wallet.send` has no task id to journal against,
+so the task-payment journal below does not cover it; what covers it is that the
+marker is spent, so the *next* attempt at those terms cannot move money again.
+
+For the three **shipped** agents the chain half remains impossible, and for the
+reason above: their owners anchored while unclaimed and can never sign
+`approve_spend` again. The demonstration in the table above ran against a fourth
+agent provisioned for it.
+
+In one line: **the agent's side of the approval exchange works and is tested;
+the chain's side works too, and is demonstrated above; and the module now
+submits on approval instead of stopping at it — but only for a policy whose
 owner was claimed before it anchored, which the shipped three were not.**
+
+## The double-payment journal is called by the code that pays
+
+Recorded here because for several releases it was not, and because the shape of
+the miss is the one this file exists for: every part worked and the assembly did
+not exist.
+
+`module/src/task_persistence.h` opens with three things a restart must not do,
+the first being "it must not pay twice", and describes the mechanism precisely —
+`notePaymentIntent` made durable *before* the wallet is called, `mayPay`
+refusing afterwards until a human reconciles. `TaskPersistence` implemented all
+of it and 122 assertions covered it. **Nothing in the module called any of it.**
+`agent.task` went straight to `TaskPort::pay` with no guard and no write-ahead
+record, so `LoadReport::uncertainPayments` — which `meta.status` reports as
+`durability.uncertain_payments` — could not be anything but zero, and the number
+an operator was told to act on was a number nothing could produce.
+
+It is wired now, through `TaskPort::journal`:
+
+1. `mayPay` before the request goes out, so a peer is not asked to do work this
+   agent already knows it will refuse to pay for;
+2. `mayPay` again immediately before the wallet call, then `notePaymentIntent`,
+   which does not return true until the record is on the medium. If it returns
+   false the payment does **not** happen and the task fails, saying so;
+3. `notePaymentSettled` once a hash comes back. A failure there does not fail the
+   call — the money moved — it answers `settlement_recorded:false` beside the
+   settlement and lets the module's own checkpoint retry the write.
+
+The intent write does one more thing it is relied on for: it snapshots the task
+store, so the task is on disk before the money moves. Before it, the first thing
+ever written about a priced task was the checkpoint *after* `invoke` returned —
+after the payment — so a process killed in between left a paid task no restart
+had heard of, and a caller retrying the same id opened a fresh task and paid
+again. `module/tests/restart_kill_test.cpp` kills a process inside `pay` with
+SIGKILL and asks the restarted agent for that same task: the wallet is not
+called a second time, and `meta.status` reports `uncertain_payments: 1`.
+
+**What is deliberately not wired, and why.** `notePaymentAbandoned` still has no
+production caller. It is the one call that makes `mayPay` say yes again for a
+task that once reached the wallet, and its own header says why the agent must not
+make it about itself: it requires evidence of what was checked on chain, and "the
+transaction hash came back empty" is not evidence that nothing settled — only
+that nothing was seen to. A signer that submitted and then died returns exactly
+the same empty string. This process links no sequencer client and has no way to
+look, so an empty hash leaves the intent standing and the answer says
+`{"outcome":"payment_unresolved","reconcile":true}`.
+
+The consequence, stated plainly: **a payment that does not settle leaves a
+permanent `uncertain_payments` count that this module cannot clear.** The task
+itself is closed — it goes to `failed`, which is terminal, so nothing will buy it
+again — but the journal entry stays `intended` across every subsequent restart,
+because clearing it honestly requires a human who has looked at the chain. There
+is no way to supply that evidence through the module today: a reconciliation
+entry point would have to be a registered skill or a module method, and both of
+those are surfaces this change did not open. Until one exists, reconciliation is
+an operator reading `durability.needing_reconciliation` out of `meta.status`,
+checking the named account on chain, and — if the payment did not settle —
+editing or removing the snapshot file with the node stopped. That is a worse
+answer than a wired call and a better one than an agent that decides for itself
+that its own money never moved.
 
 Three things that used to be in this file are gone from it, because they were
 fixed rather than reworded: `spend` moved no balance at all, a second
