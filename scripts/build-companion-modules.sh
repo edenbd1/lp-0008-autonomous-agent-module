@@ -176,7 +176,15 @@ pin_locked_pkg() {
   if git -C "$_dir.locked" fetch -q --depth 1 --recurse-submodules \
         "$_url" "$_rev" 2>/dev/null \
      && git -C "$_dir.locked" checkout -q FETCH_HEAD 2>/dev/null; then
-    :
+    # Fetching submodules is not checking them out. `--recurse-submodules` on
+    # the fetch brings the objects down; the working tree stays empty until
+    # this runs, and an empty working tree is invisible until something looks
+    # for a file in it. What looked was `make liblogosdelivery`, which re-runs
+    # upstream's rebuild-nat-libs target and died on
+    # `nat_traversal/vendor/miniupnp/miniupnpc: No such file or directory` —
+    # the exact package this function's own comment predicted, missed because
+    # the comment was in the slow path and the bug was in the fast one.
+    git -C "$_dir.locked" submodule update -q --init --recursive 2>/dev/null || true
   else
     # Not every server allows asking for a bare SHA. Fall back to the whole
     # history rather than fail — slower is not wrong.

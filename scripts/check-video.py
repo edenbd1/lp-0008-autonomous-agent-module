@@ -28,9 +28,13 @@ through OCR, and asserts on the text:
              not worse. Requiring the exact host was a proxy for the criterion
              rather than the criterion. Do not "tighten" it back -- it was a
              false negative, on the film that matters most.
-  FORBIDDEN  localhost, 127.0.0.1, 0.0.0.0, "localnet", and RISC0_DEV_MODE=1.
+  FORBIDDEN  localhost, 127.0.0.1, 0.0.0.0, "localnet", and dev_mode=1.
              Any one of them means the film is showing something other than
              the public testnet with real proofs.
+
+  REQUIRED   RISC0_DEV_MODE=0 on screen in at least one film, because the
+             criterion asks the recording to "confirm RISC0_DEV_MODE=0 was
+             active" — which the absence of =1 does not establish.
 
 The host is READ OUT OF `scripts/demo.sh` rather than written here, so this
 cannot go on passing against an endpoint the demo stopped using.
@@ -62,8 +66,28 @@ FORBIDDEN = [
     ("localhost", "a loopback host: this is a local chain, not the testnet"),
     ("0.0.0.0", "a wildcard bind address, which only a local node listens on"),
     ("localnet", "the word localnet, which the criterion rules out by name"),
-    ("RISC0_DEV_MODE=1", "dev mode: the proofs on screen are fakes"),
+    # NOT "RISC0_DEV_MODE=1". Tesseract reads the 0 in RISC0 as @ -- the real
+    # output comes back as `RISC@_DEV_MODE=0` -- so a needle containing RISC0
+    # matches nothing, ever, on any film. That is a rule that cannot fire
+    # dressed as a rule that keeps passing. Match the half that survives OCR.
+    ("dev_mode=1", "dev mode: the proofs on screen are fakes"),
 ]
+
+# The criterion asks the recording to "confirm RISC0_DEV_MODE=0 was active", so
+# that is a positive requirement, not merely the absence of =1. Required across
+# the set rather than of every film: a film that proves nothing cannot show it,
+# and demanding it everywhere would push someone to cut the section that can.
+REQUIRE_DEV_MODE_0 = os.environ.get("VIDEO_REQUIRE_DEV_MODE", "1") == "1"
+
+
+def normalise(text):
+    """Undo the OCR confusions that would silently disarm the checks above.
+
+    Tesseract renders 0 as @ or O in this terminal font often enough that
+    `dev_mode=0` comes back as `dev_mode=@`. Narrow on purpose: only digits
+    immediately after `dev_mode=` are touched, so nothing else is rewritten.
+    """
+    return re.sub(r"(?i)(dev_mode=)[@oO]", r"\g<1>0", text)
 
 FRAMES = int(os.environ.get("VIDEO_FRAMES", "24"))
 MAX_SILENCE = float(os.environ.get("VIDEO_MAX_SILENCE", "90"))
@@ -124,12 +148,12 @@ def check(path, host):
     print("\n%s" % os.path.basename(path))
     if not os.path.exists(path):
         print("  --    no such file")
-        return False
+        return False, False
 
     dur = probe(path, "-show_entries", "format=duration", "-of", "csv=p=0")
     if not dur:
         print("  --    ffprobe cannot read this as a video")
-        return False
+        return False, False
     dur = float(dur)
     size = os.path.getsize(path) / 1e6
     vid = probe(path, "-select_streams", "v:0", "-show_entries",
@@ -177,7 +201,8 @@ def check(path, host):
     if not texts:
         print("  --    no frame could be read; the OCR pass did nothing, which "
               "is not a pass")
-        return False
+        return False, False
+    texts = [(t, normalise(txt)) for t, txt in texts]
     blob = "\n".join(t for _, t in texts).lower()
 
     domain = re.sub(r"^https?://", "", host).split("/")[0]
@@ -201,7 +226,13 @@ def check(path, host):
     if ok:
         print("  ok    none of %d forbidden string(s) appears in any frame"
               % len(FORBIDDEN))
-    return ok
+
+    shows_real_proving = "dev_mode=0" in blob
+    if shows_real_proving:
+        print("  ok    RISC0_DEV_MODE=0 is on screen: the proving is real")
+    else:
+        print("  --    RISC0_DEV_MODE=0 is not on screen in this film")
+    return ok, shows_real_proving
 
 
 def main(argv):
@@ -214,14 +245,29 @@ def main(argv):
     print("the public sequencer, as scripts/demo.sh defaults to it: %s" % host)
     print("sampling %d frames per film" % FRAMES)
     results = [check(p, host) for p in argv[1:]]
+    passed = [r for r, _ in results]
+    proving = [p for _, p in results]
     print()
-    if all(results):
-        print("%d film(s) checked: each shows the public sequencer and none "
-              "shows a local one." % len(results))
-        return 0
-    print("%d of %d film(s) would not survive a reviewer."
-          % (sum(1 for r in results if not r), len(results)))
-    return 1
+
+    failed = sum(1 for r in passed if not r)
+    if failed:
+        print("%d of %d film(s) would not survive a reviewer."
+              % (failed, len(results)))
+        return 1
+
+    # Across the set, not per film: see REQUIRE_DEV_MODE_0.
+    if REQUIRE_DEV_MODE_0 and not any(proving):
+        print("%d film(s) check out, but NOT ONE shows RISC0_DEV_MODE=0.\n"
+              "The criterion asks the recording to confirm it was active, and\n"
+              "no film here does. Set VIDEO_REQUIRE_DEV_MODE=0 only if you have\n"
+              "decided that on purpose." % len(results))
+        return 1
+
+    print("%d film(s) checked: each shows the public testnet, none shows a "
+          "local one," % len(results))
+    print("and %d of them show RISC0_DEV_MODE=0 on screen."
+          % sum(1 for p in proving if p))
+    return 0
 
 
 if __name__ == "__main__":
