@@ -244,6 +244,23 @@ jobs:
       # against the chain, and attributes every settlement to the program that
       # owns the ledger it charged, so a row orphaned by a redeploy is labelled
       # rather than counted.
+      # ...and the program on chain is the one this repository's SOURCE says.
+      #
+      # The step below proves the committed binary is what the chain runs. It
+      # says nothing about whether that binary was built from the code next to
+      # it, and `crates/agent-policy-core` — whose tests are the evidence that
+      # the spending limit holds — compiles INTO that binary. Editing it and
+      # pushing used to leave every gate green while the deployed program no
+      # longer matched the code a reviewer reads to decide whether the limit
+      # holds. Three other binary artefacts here carry a provenance record; the
+      # one deployed on a public chain did not.
+      #
+      # This cannot rebuild the guest — that needs the risc0 docker toolchain —
+      # so it compares recorded content hashes and catches a source that moved
+      # after the build, which is the failure that happens silently.
+      - name: The deployed program's sources have not moved under it
+        run: ./scripts/write-program-record.py --check
+
       - name: The committed program is the program on chain
         run: |
           # `pipefail`: see the check-docs step. This is the step most likely to

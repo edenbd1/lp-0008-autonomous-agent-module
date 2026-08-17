@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Written by scripts/write-program-record.py; checked by the same",
+    "script with --check. It records the sources the deployed guest",
+    "program was built from, so that editing one without rebuilding",
+    "the binary is caught rather than silent.",
+    "",
+    "It does NOT prove the binary was produced by these sources: that",
+    "needs the risc0 docker toolchain and a reproducible rebuild, which",
+    "is a local operation. It proves the sources have not moved since",
+    "the record was written."
+  ],
+  "binary": "artifacts/programs/agent_verifier.bin",
+  "binary_bytes": 440876,
+  "binary_sha256": "898f0e58b0e4594a15788af122f9466c1efb9d4c8e20ded8732434f217594445",
+  "built_from": {
+    "crates/agent-policy-core/Cargo.toml": "f26c0ddc4df22c3c7cadb7d416feadff82a5dda85586105f0d487ce0b5d5c57c",
+    "crates/agent-policy-core/src/lib.rs": "557b443b591733a0e131745ffa78f8139389d12fcdeb88c72b9eb876d81be57c",
+    "crates/agent-verifier-spel/methods/guest/Cargo.lock": "b986fe3564704002acfff62ed480cbd265eb11bdb3e0ef1b4188413492ac6d80",
+    "crates/agent-verifier-spel/methods/guest/Cargo.toml": "ff0da0367eb58a5672d9a7e9e5d12238592eab861dd62519316a2cea2cc3befd",
+    "crates/agent-verifier-spel/methods/guest/src/bin/agent_verifier.rs": "83743dbffef04a242d75fc082428857c7c36d181c4c18f0ebed4282532a60d43"
+  },
+  "deploy_transaction": "697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf",
+  "deploy_transaction_note": "SHA256(u32_le(len) || bytecode) \u2014 a LEZ deploy hash is content addressed, so this is derivable from the bytes and is checked against the chain by scripts/verify-deployment.sh"
+}
