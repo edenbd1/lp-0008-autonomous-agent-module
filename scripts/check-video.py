@@ -79,6 +79,22 @@ FORBIDDEN = [
 # and demanding it everywhere would push someone to cut the section that can.
 REQUIRE_DEV_MODE_0 = os.environ.get("VIDEO_REQUIRE_DEV_MODE", "1") == "1"
 
+# "Must be a narrated walkthrough ... covering >=3 illustrative use cases."
+#
+# Nothing checked this, and it is the requirement most likely to be missed,
+# because it is satisfied by CONTENT rather than by any property of the file.
+# Measured on the two films this repository first published: film 1 ran the
+# notary and the event alerter, film 2 ran the marketplace. Three between them
+# and never three in either -- so each file on its own failed a requirement the
+# pair met, and the criterion asks for "A recorded video demo", singular. A
+# reviewer opening one link would have counted one or two.
+#
+# Counted by section title rather than by the command line: `rule "..."` output
+# stays on screen for as long as its section runs, and the command that started
+# it scrolls away in seconds. Sampling caught demo.sh and missed everything
+# else when it looked for command lines.
+MIN_USE_CASES = int(os.environ.get("VIDEO_MIN_USE_CASES", "3"))
+
 
 def normalise(text):
     """Undo the OCR confusions that would silently disarm the checks above.
@@ -142,6 +158,44 @@ def ocr_frames(path, duration, workdir):
         texts.append((t, out.stdout))
         os.unlink(png)
     return texts
+
+
+def use_cases_shown(texts):
+    """Which scripts/use-cases/*.sh actually RAN on screen.
+
+    Every section title in those scripts is printed by lib.sh's `rule`, so the
+    titles are a fingerprint: find them in the OCR, look up which file declares
+    each one, and the set of files is the set of use cases demonstrated. A title
+    the OCR mangles simply does not match, which costs a false negative and
+    never a false positive -- the safe direction for a gate that gates a claim.
+    """
+    ucdir = os.path.join(ROOT, "scripts", "use-cases")
+    titles = {}
+    for name in sorted(os.listdir(ucdir)) if os.path.isdir(ucdir) else []:
+        if not name.endswith(".sh") or name == "lib.sh":
+            continue
+        try:
+            with open(os.path.join(ucdir, name), encoding="utf-8") as fh:
+                body = fh.read()
+        except OSError:
+            continue
+        for title in re.findall(r'rule "([^"]+)"', body):
+            titles.setdefault(title, set()).add(name)
+
+    seen = set()
+    for _, txt in texts:
+        for line in txt.splitlines():
+            m = re.match(r"\s*==+\s*(.+?)\s*$", line)
+            if not m:
+                continue
+            head = m.group(1)
+            for title, files in titles.items():
+                # OCR appends stray characters at line ends often enough that
+                # equality would throw away good matches; a prefix of a
+                # 30-character title is not something noise invents.
+                if head.startswith(title) or title.startswith(head) and len(head) > 20:
+                    seen |= files
+    return seen
 
 
 def check(path, host):
@@ -232,6 +286,18 @@ def check(path, host):
         print("  ok    RISC0_DEV_MODE=0 is on screen: the proving is real")
     else:
         print("  --    RISC0_DEV_MODE=0 is not on screen in this film")
+
+    cases = use_cases_shown(texts)
+    if len(cases) >= MIN_USE_CASES:
+        print("  ok    %d illustrative use case(s) run on screen: %s"
+              % (len(cases), ", ".join(sorted(cases))))
+    else:
+        print("  --    only %d illustrative use case(s) run on screen (%s); the\n"
+              "        requirement is >=%d in ONE narrated walkthrough. Two films\n"
+              "        that reach it between them do not: the criterion says 'A\n"
+              "        recorded video demo', and a reviewer opens one link."
+              % (len(cases), ", ".join(sorted(cases)) or "none", MIN_USE_CASES))
+        ok = False
     return ok, shows_real_proving
 
 
