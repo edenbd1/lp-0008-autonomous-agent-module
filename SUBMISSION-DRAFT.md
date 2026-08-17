@@ -1,6 +1,18 @@
 # Solution: LP-0008 — Autonomous AI Module with Wallet, Storage, and Messaging
 
-> ## ⚠️ DRAFT — NOT READY FOR SUBMISSION
+> ## This is the working document, not the submission
+>
+> **The submission is [`solutions/LP-0008.md`](solutions/LP-0008.md)** — that is
+> the file the pull request adds to the prize repository, and it is the one to
+> read. This document is where the argument was worked out first. It is kept,
+> and kept in CI, because its evidence sections are the ones
+> `scripts/submission-evidence.py` generates from the chain and re-checks on
+> every push, so it is the file that catches a figure going stale.
+>
+> It said **DRAFT — NOT READY FOR SUBMISSION** at the top until 2026-08-17,
+> which was true when written and stopped being true without anybody moving it
+> — the same failure this banner goes on to describe about pinned commit
+> hashes, one level up.
 >
 > **This document does not pin a commit hash, and the reason is worth stating.**
 > The repository is public and **actively changing** — a security redeploy, a CI
