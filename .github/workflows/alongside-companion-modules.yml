@@ -268,7 +268,15 @@ jobs:
             build-companions/src
             build-companions/logos-delivery
             build-companions/build
-            ~/.nimble
+          # `~/.nimble` USED TO BE HERE and had to go. This step runs after the
+          # Nim install above, so restoring a cached `~/.nimble` overwrote the
+          # toolchain that step had just put there — and nothing noticed, because
+          # the only Delivery build was itself restored from this same cache and
+          # so never needed a compiler. Adding a second build at another revision
+          # is what made it visible: `[1/6]` came out of the cache and `[1b/6]`
+          # died on `no nim on PATH`, one line apart. Caching a toolchain and
+          # restoring it over a fresh install of the same toolchain saves a
+          # minute and costs a build.
           key: companions-${{ runner.os }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
           restore-keys: companions-${{ runner.os }}-
 
