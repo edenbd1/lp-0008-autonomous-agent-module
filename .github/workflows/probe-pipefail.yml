@@ -1,0 +1,18 @@
+name: probe pipefail
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          echo "bytes: $(wc -c < solutions/LP-0008.md)"
+          C=$(cat solutions/LP-0008.md)
+          miss=0
+          for s in "## Summary" "## Repository" "## Approach" "## Success Criteria Checklist" \
+                   "## FURPS Self-Assessment" "### Functionality" "### Usability" "### Reliability" \
+                   "### Performance" "### Supportability" "## Terms & Conditions"; do
+            if ! echo "$C" | grep -qF "$s"; then echo "REPORTED MISSING: $s"; miss=$((miss+1)); fi
+          done
+          echo "sections reported missing: $miss"
