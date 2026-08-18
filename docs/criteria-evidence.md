@@ -740,3 +740,210 @@ AppImage, on the same release page, that one command unpacks with no installer, 
 root and no display. A wrongly-blamed host is how unbuilt work stops being
 anyone's job, and the cost of leaving one standing here was measurable: twice, it
 was a criterion.
+
+## The settlements, in full
+
+#### The settlements
+
+Every figure in this table is decoded out of the settlement transaction itself.
+`getAccount` is deliberately **not** used for the balances: it reports current
+state, this chain has no historical-state RPC, and the payee's balance has since
+moved both up and down. A LEZ transaction commits to its own post-state, and the
+hash proves the bytes are that transaction, so the balance below is the balance
+*at* the settlement rather than a number cached in a file.
+
+| # | settlement | block | on the wire | skill | price | payee balance after | policy `window` / `spent` after |
+|---|---|---|---|---|---|---|---|
+| 1 | [`4e3a3454…a490ddb1`](https://explorer.testnet.lez.logos.co/transaction/4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1) | 8740 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `Coxz1Cmf…` at 8,000 / 25 |
+| 2 | [`7cad4fbd…7168f019`](https://explorer.testnet.lez.logos.co/transaction/7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019) | 8747 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `Coxz1Cmf…` at 8,000 / 50 |
+| 3 | [`e691f593…26631047`](https://explorer.testnet.lez.logos.co/transaction/e691f593cf7c393d0eee21054a05bb1584abc78d81308efd2cbf60d326631047) | 8892 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `7HH46tXh…` at 8,000 / 25 |
+| 4 | [`aef14146…8bcb70b8`](https://explorer.testnet.lez.logos.co/transaction/aef1414608761c70545a8eb9f20a0301e14c0d316a6318ab0e38bc5b8bcb70b8) | 8901 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `7HH46tXh…` at 8,000 / 50 |
+| 5 | [`16df5055…a1ff9dde`](https://explorer.testnet.lez.logos.co/transaction/16df5055d55a6c240c5e6774202c0500fa12e59fe502f6338a36b20ea1ff9dde) | 8939 | 271,471 bytes | `storage.upload` | 5 LEZ | 100 | `7HH46tXh…` at 8,000 / 55 |
+| 6 | [`ffafd2b0…721bb2da`](https://explorer.testnet.lez.logos.co/transaction/ffafd2b0f4ff9c1ca411e8da2dba06052c25790fc5c83e7351fbdee4721bb2da) | 8964 | 271,471 bytes | `storage.upload` | 5 LEZ | 105 | `7HH46tXh…` at 8,000 / 60 |
+| 7 | [`e2c59e8a…c61ef3be`](https://explorer.testnet.lez.logos.co/transaction/e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be) | 9373 | 271,471 bytes | `storage.upload` | 1 LEZ | 1 | `6FscNXjN…` at 9,000 / 1 |
+| 8 | [`23046b54…ce6ca3fc`](https://explorer.testnet.lez.logos.co/transaction/23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc) | 9389 | 271,471 bytes | `storage.upload` | 1 LEZ | 2 | `6FscNXjN…` at 9,000 / 2 |
+| 9 | [`31b185e2…19942531`](https://explorer.testnet.lez.logos.co/transaction/31b185e279738ca793382e90065ad15a9f63fd992820172c2419fdc519942531) | 9456 | 271,471 bytes | `storage.upload` | 1 LEZ | 3 | `6FscNXjN…` at 9,000 / 3 |
+| 10 | [`ed8c3514…374b8cb3`](https://explorer.testnet.lez.logos.co/transaction/ed8c351412409c81723ea7b90e2d9cdcb0841a33234894bfff8269af374b8cb3) | 9477 | 271,471 bytes | `storage.upload` | 1 LEZ | 4 | `6FscNXjN…` at 9,000 / 4 |
+| 11 | [`52ef56ad…4ed873e6`](https://explorer.testnet.lez.logos.co/transaction/52ef56ad06c149e3725655108a86f7947b501cfe5504667b03ec07234ed873e6) | 9938 | 271,471 bytes | `storage.upload` | 1 LEZ | 106 | `7HH46tXh…` at 9,000 / 2 |
+| 12 | [`071d25d7…1412057a`](https://explorer.testnet.lez.logos.co/transaction/071d25d7193fd3c3b6380c4e28b5de1ec117fc056b013c53e2f110171412057a) | 10081 | 271,471 bytes | `storage.upload` | 1 LEZ | 107 | `7HH46tXh…` at 10,000 / 1 |
+| 13 | [`54f85182…e2f47115`](https://explorer.testnet.lez.logos.co/transaction/54f851825f171cf62f6b4723f7133687f3d9dff7e138417374cc7960e2f47115) | 10102 | 271,471 bytes | `storage.upload` | 1 LEZ | 108 | `7HH46tXh…` at 10,000 / 2 |
+
+**2 of the 13 settlements above predate the program this repository ships.**
+Settlements 1 and 2 charged an envelope, `Coxz1Cmf…`, owned by a different
+ProgramId; the generator says so per row, in its own words, rather than leaving a
+reader to notice. They are kept because they are on chain and a reviewer will
+find them, but the criterion they support is only supported by the **11 made
+under the current deployment**.
+
+Two further settlements pay a **shielded** payee and are recorded in
+`artifacts/shielded-settlement.tsv`, checked against the chain by
+`./scripts/verify-deployment.sh`: the messaging agent paying the storage agent at
+its shielded keys under the shipped `spend` instruction
+([`5942d6cd…53a03d61`](https://explorer.testnet.lez.logos.co/transaction/5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61),
+block 9360), and the storage agent then **spending** what it received
+([`e82a81f6…e39f9308`](https://explorer.testnet.lez.logos.co/transaction/e82a81f6076d3fd2e846e77223435658a31c9c9eabcbbf6b2fefa3f1e39f9308),
+block 9379), which is what makes it received rather than merely committed. The
+first of those is also why settlement 11 above reads `spent 2` rather than
+`spent 1`: it is the messaging agent's first charge against period 9,000, and it
+is not in the public table because its payee is not a public account.
+
+What the chain cannot show, stated rather than implied: the payer is a shielded
+account, so only the credit side of each settlement is publicly readable.
+`getAccount` answers with a fully-populated default account — zero balance, zero
+nonce, zero owner — for a shielded address exactly as it does for one that has
+never existed, so **it is not an existence check** and no debit is quoted here.
+The debit is constrained anyway: LEZ rule 8 requires total balance to be
+preserved across every program in a transaction, so a transaction that credited
+25 LEZ debited 25 LEZ.
+
+**One caution about the links above.** The block explorer indexes roughly an hour
+and three quarters behind the sequencer, so a settlement that landed recently
+reads "not found" at its link while `getTransaction` already returns it. That is
+an indexing lag, not a missing transaction. Ask the RPC directly if a link is
+empty — and note that the control is what makes the answer mean anything:
+
+```bash
+q() { curl -s -X POST https://testnet.lez.logos.co \
+        -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"; }
+
+q 54f851825f171cf62f6b4723f7133687f3d9dff7e138417374cc7960e2f47115
+                # => {"result":[<bytes>,<block>]}   present
+q dededededededededededededededededededededededededededededededede
+                # => {"result":null}                absent — as it must be
+```
+
+## Approach: what was tried, and why Logos
+
+### What was tried and did not work
+
+The prize asks for this explicitly, and it is the part of this repository with
+the most to say. Every item below is a design that shipped and was replaced, not
+a hypothetical that was reasoned away.
+
+**Folding the limits into the address.** The original design — and the one this
+project recommended at length — put the limits in the *address*:
+`PDA(SHA256(owner ‖ agent ‖ per_tx ‖ per_period ‖ period_blocks))`, so that
+raising a limit named a different, never-initialised account. It shipped in three
+deployments and it does not work. Three successive fixes each added one more
+comparison and each time the attack simply moved; the version that mattered
+needed no missing comparison at all. An attacker holding a compromised agent's
+key does not have to impersonate an owner or borrow a policy — **it is** the
+owner: it anchors a *fresh* policy naming the compromised agent and itself, with
+`per_tx = per_period = u128::MAX`, and every check passes, because every check is
+satisfied. Folding the limits into the address is what made that available: every
+`(owner, agent, limits)` triple had an account of its own, all uninitialised, so
+"anchor a new policy" was always on the table. One address per agent removes the
+choice. `crates/agent-verifier-adversarial` executes the attack against the
+deployed binary and asserts the halt code it now stops at, and `demo.sh` replays
+it against both programs on the public chain — the superseded one accepted it
+([`eedb3caf…0d52e0a7`](https://explorer.testnet.lez.logos.co/transaction/eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7),
+block 8869, and the stranger still owns that agent's only policy, for good), and
+the identical call to the program deployed today was submitted and is in no
+block.
+
+**Anchoring in one signature.** Even with one address per agent, the deployment
+before the current one declared only the policy account and a signer it recorded
+as the owner; the agent's own account was never declared, never read and never
+asked to sign, and `agent_id` was a free `[u8; 32]` argument the body discarded.
+So anchoring a policy over somebody else's agent needed **no key at all** — only
+the agent's public id, which this repository publishes in `artifacts/agents.tsv`
+and inside every signed Agent Card. The fix is the two-signature anchor: the agent
+signs `claim_agent` to name the account that may bind it, and only that account's
+signature is accepted by `create_policy`. `docs/security-model.md` §2 is the
+long form.
+
+**A caller-supplied period total.** `spend` used to take `spent_this_period` as an
+argument, which both callers passed as `0`, so the per-period ceiling was advisory
+and an agent that always passed zero had a per-transaction limit and no period
+limit at all. It now takes `window_start` instead, and does not trust it: the
+window must begin on a multiple of `period_blocks`, and the transaction is pinned
+to `[window_start, window_start + period_blocks)` by its own block validity range,
+so a caller cannot reset its budget by naming a different period.
+
+**An approval that never expired.** An approval account used to be valid in every
+block forever, which made it a bearer instrument redeemable the day the agent's
+key was stolen. The owner now names the block it dies at, and `spend_approved`
+pins the transaction to `[0, expiry)` — an expired approval is not refused, it is
+a transaction no block will include.
+
+**"A shielded agent cannot be paid at its shielded account."** This was written up
+as an upstream limitation for most of this submission's life. It was wrong. The
+`KeyNotFoundError` behind it was a lookup in the *payer's own* key chain, reached
+because `spel` built `AccountIdentity::PrivateOwned` for every `Private/`
+argument; `spel` is vendored at `vendor/spel` and built here, and now builds
+`PrivateForeign { npk, vpk, identifier }` when a recipient is given by keys.
+`docs/limitations.md` carries the retraction in full, and the settlement that
+closes it is `5942d6cd…` in block 9360.
+
+**"A loaded module cannot have a Delivery node."** A host cannot *pass* a
+`std::function` across a plugin boundary — true — which was read as meaning a
+module cannot *have* one. It can: the module links `liblogosdelivery` and builds
+its ports on the far side of the boundary, and nothing crosses it but
+`meta.configure("delivery","on")`. The same mistake was made about payment:
+`TaskPort::pay` was unwired with a note saying a settlement needs a wallet and a
+sequencer "and this module has neither". The module does not need to *have* a
+wallet, it needs to *reach* one.
+
+**Tests that passed while the shipped module did nothing.** `TaskPersistence` had
+121 green assertions and **no construction site in the plugin**, so the shipped
+module persisted nothing while its tests were green. `meta.skills` was described
+in three C++ doc comments as existing while `invoke("meta.skills")` returned *no
+skill named 'meta.skills' is registered*. Both are why every criterion below is
+asserted against the **packaged artefact** — `module/agent.lgx` loaded through
+`QPluginLoader` or through Basecamp's own `liblogos_core` — rather than against a
+rebuild or against the source.
+
+**An expectation that went stale where nothing compared it.**
+`module/tests/skills_test.cpp` spells out every built-in skill by name, on
+purpose, so that removing one from registration turns the suite red *with the
+name* rather than with a count. Three skills joined the registry and that list did
+not follow, and CI went red — correctly, and expensively: the step runs under
+`set -euo pipefail`, so the ten steps after it did not run either. The list is
+current again, and it no longer depends on being remembered: `check-docs.py` now
+derives the registry from `installBuiltinSkills` and compares all three harness
+tables against it, reporting the missing name in seconds rather than in a
+compile.
+
+**Two build traps that cost days and are worth naming.** A plugin built against a
+Qt whose minor version exceeds the host's makes `logos_core_load_module` return
+*success* and join the loaded set; its `logos_host` is then gone and every call
+spends twenty seconds timing out. And the plugin referenced
+`operator<<(QDataStream&, const LogosResult&)` **without defining it in every
+build this repository has ever shipped** — `logos-module-builder` does not compile
+`logos_types.cpp`, Mach-O binds lazily and never faulted, and on ELF the module
+loads, joins the runtime, hands out a client and then dies on the first call
+across the transport, looking exactly like the Qt mismatch. Porting to Linux found
+it; nothing else would have. Both are recorded in `docs/basecamp.md`.
+
+### Why Logos, specifically
+
+The payer is a **shielded** account. What a task settlement reveals on a
+centralised rail — who paid, for what, how often — is exactly the metadata that
+makes an agent marketplace legible to whoever runs it. Here the settlement is a
+privacy-preserving transaction signed by the agent's own private account, and the
+payee can be shielded too. A payee is named one of two ways and its Agent Card
+carries both: by its **public** `paymentAccount`, where the payer stays hidden and
+the credit is checkable by anyone with `getAccount` — which is also what makes the
+amount, the payee and the timing public — or by `x-logos.shieldedPaymentKeys`, an
+`npk`/`vpk` pair that gives nothing away, where both ends are hidden and nobody
+but the payee can read the amount. Settlement `5942d6cd…` in block 9360 is the
+second form. No centralised payment rail offers the second option at all, and the
+first one it offers only to itself.
+
+**A2A leaves two things open on purpose — payment and encrypted transport — and
+Logos supplies both natively.** LEZ is the payment layer A2A omits; Logos
+Messaging is the transport binding that replaces A2A's HTTP, so two agents
+discover each other and negotiate a task with no server in the middle that could
+refuse either of them. The relays used in the live runs are third-party public
+ones, which is what "no intermediary server" has to mean.
+
+And the property that matters most is the one a centralised stack cannot express
+at all: **on a centralised alternative the spending ceiling would be a row in
+someone's database rather than an address in a state machine**, and "the agent
+cannot exceed its limit" would be a promise instead of a rejection. Here it is
+`Program error 6005`, returned by a state machine, with no transaction built.
+Logos Delivery gives the owner channel the same property — the owner reaches the
+agent because both hold keys, not because a broker is willing to route between
+them — and it is why an owner's app on a laptop can answer an agent running
+unattended on a remote node with nothing configured in between.
