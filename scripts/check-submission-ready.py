@@ -43,7 +43,11 @@ SUBMISSION = "solutions/LP-0008.md"
 # rejected a working video for its hostname and accepted a dead one for its
 # hostname.
 VIDEO_RE = re.compile(
-    r"https?://[^\s)>\"]+?"
+    # `*?` and not `+?`: there are ZERO characters between "https://" and
+    # "youtu.be/", so requiring at least one made this pattern blind to exactly
+    # the host it names first. It found the release asset and not the primary
+    # link, which is the failure mode of a check that reports green.
+    r"https?://[^\s)>\"]*?"
     r"(?:youtu\.be/[\w?=&/-]+"
     r"|youtube\.com/watch[\w?=&/-]+"
     r"|vimeo\.com/[\w?=&/-]+"
