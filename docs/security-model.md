@@ -376,6 +376,40 @@ address the honest owner needs. Both accounts require a signature only the
 agent's holder can produce, and the second one additionally requires a signature
 only the agent's chosen owner can produce.
 
+### The module shells out, and what keeps that from being a hole
+
+`AgentModuleImpl::runConfiguredCommand`
+(`module/src/agent_module_plugin.cpp`) runs an external program through `popen`,
+and four settings name what it runs: `card_signer`, `pay_signer`,
+`approved_pay_signer` and `policy_source`. Those settings are interpolated into
+a shell. `meta.configure` can write all four. Stated plainly because anybody
+auditing this will find the `popen` and should not have to reconstruct why it is
+safe.
+
+**What is not interpolated is the input.** The signing input contains the
+peer-visible Agent Card, which carries every registered skill's name, and a
+payment instruction carries a recipient that came out of a stranger's card. Both
+are attacker-influenced, and both go in on **stdin**, through a file whose name
+comes from `mkstemp` — not on the command line. A predictable name in a
+world-writable directory would let anybody swap what gets signed, so there is no
+predictable name, and the file is unlinked on every path out.
+
+**What keeps the settings themselves safe is that nothing on the network can
+reach them.** `meta.configure` is a skill, and skills are only reachable through
+`AgentModuleImpl::invoke()`, which is callable only by a process that has loaded
+this module — the Logos app, `logos_host`, or the CLI. Messages arriving over
+Logos Messaging do not reach it: `module/src/owner_channel.cpp` never calls
+`invoke`, and an inbound A2A task request is not dispatched to the skill it names
+(see [`limitations.md`](limitations.md)). So the party who can set `card_signer`
+to arbitrary shell is the party who can already run arbitrary code in that
+process, because they are running it.
+
+That is a trust boundary and not a proof of absence. If inbound A2A dispatch is
+ever added — it is the obvious next feature — then `meta.configure` becomes
+reachable by whoever can send this agent a task, and these four settings turn
+into remote code execution with the agent's key on the other end. **The dispatch
+step and an allow-list for these keys have to land in the same change.**
+
 ### The period ledger, on the chain, right now
 
 The per-period ceiling is the claim this document got wrong for four
