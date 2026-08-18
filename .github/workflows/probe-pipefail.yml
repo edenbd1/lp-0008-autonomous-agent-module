@@ -4,16 +4,19 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - run: |
           set -euo pipefail
-          for kb in 8 12 16 20 24 28 32 36; do
-            f=$(mktemp)
-            { echo "## Summary"; head -c $((kb*1024)) /dev/zero | tr '\0' 'x' | fold -w 100; } > "$f"
-            C=$(cat "$f")
-            fails=0
-            for i in $(seq 1 100); do
-              echo "$C" | grep -qF "## Summary" || fails=$((fails+1))
+          echo "bytes: $(wc -c < solutions/LP-0008.md)"
+          C=$(cat solutions/LP-0008.md)
+          SECTIONS=("## Summary" "## Repository" "## Approach" "## Success Criteria Checklist"
+                    "## FURPS Self-Assessment" "### Functionality" "### Usability" "### Reliability"
+                    "### Performance" "### Supportability" "## Terms & Conditions")
+          fails=0; checks=0
+          for i in $(seq 1 30); do
+            for s in "${SECTIONS[@]}"; do
+              checks=$((checks+1))
+              echo "$C" | grep -qF "$s" || { fails=$((fails+1)); echo "MISS: $s"; }
             done
-            printf 'size %6d octets -> %3d échec(s) sur 100\n' "$(wc -c < "$f")" "$fails"
-            rm -f "$f"
           done
+          echo "RESULT: $fails failure(s) across $checks checks"
