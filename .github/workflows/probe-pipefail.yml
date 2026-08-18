@@ -1,0 +1,27 @@
+name: probe pipefail
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Does echo | grep -qF lose under pipefail on a large file
+        run: |
+          set -euo pipefail
+          echo "bytes: $(wc -c < solutions/LP-0008.md)"
+          bash --version | head -1
+          grep --version | head -1
+          C=$(cat solutions/LP-0008.md)
+          for s in "## Summary" "## Repository" "## Terms & Conditions"; do
+            if ! echo "$C" | grep -qF "$s"; then
+              echo "REPORTED MISSING: $s"
+            else
+              echo "found:            $s"
+            fi
+          done
+          echo "--- size threshold ---"
+          for kb in 32 64 128; do
+            f=$(mktemp); { echo "## Summary"; head -c $((kb*1024)) /dev/zero | tr '\0' 'x' | fold -w 100; } > "$f"
+            B=$(cat "$f")
+            if ! echo "$B" | grep -qF "## Summary"; then echo "${kb}KB -> MISSING"; else echo "${kb}KB -> found"; fi
+          done
