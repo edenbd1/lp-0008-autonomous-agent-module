@@ -947,3 +947,117 @@ Logos Delivery gives the owner channel the same property — the owner reaches t
 agent because both hold keys, not because a broker is willing to route between
 them — and it is why an owner's app on a laptop can answer an agent running
 unattended on a remote node with nothing configured in between.
+
+## The program and the three agents, at length
+
+#### The program on chain
+
+`artifacts/programs/agent_verifier.bin` is 440,876 bytes. Deployment on LEZ is
+content-addressed, so the deploy transaction is `SHA256(u32_le(len) ‖ bytecode)`
+of exactly those bytes:
+
+| | |
+|---|---|
+| deploy transaction | [`697746f5…cb5370bf`](https://explorer.testnet.lez.logos.co/transaction/697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf) |
+| block | 8839 |
+| on the wire | 440,881 bytes — the binary plus a five-byte frame |
+| bytes found in block | 8839, and in neither 8838 nor 8840 |
+| shipped ImageID, read off the on-chain `storage` anchor | `778a9341a00de46c4c056ac63a66f63156b068e61cce7f155a2b495e670c4661` |
+| its ProgramId | `1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647` |
+
+The deploy transaction is *derived* from the committed bytes rather than quoted,
+it resolves, and it contains those bytes — so the file in this repository is the
+program that was deployed. The anchor transactions name the ImageID they called,
+and `getAccount` reports that same ProgramId as the `program_owner` of every
+policy account below. **The binary in this repository is the program enforcing
+these envelopes on chain.**
+
+The address derivation is the security argument, so it is read out of the shipped
+`idl/agent_verifier.idl.json` by the generator rather than described:
+
+| instruction | policy account address |
+|---|---|
+| `approve_spend`, `create_policy`, `update_policy` | `PDA(program, "agent-policy/v1", agent_id (arg))` |
+| `spend`, `spend_approved` | `PDA(program, "agent-policy/v1", agent (account))` |
+
+Where the seed is `(account)` it comes from the pre-state the state machine built
+and there is no argument to lie about; where it is `(arg)` it is caller-supplied,
+which is why `create_policy` is `#[account(init, …)]` and the first anchor for an
+agent is the only one. A PDA is scoped to the program that owns it, which is why
+every one of these addresses moved when the ImageID last did.
+
+The control, run on every generation: `getTransaction` on
+`dededededededededededededededededededededededededededededededede`, a hash
+nobody has submitted, returns `null`.
+
+#### The three agents, and what anchored them
+
+`artifacts/anchored.tsv` records every `(program, anchor)` pair this repository
+has ever written, keyed on the program, which is why a redeploy shows up in it
+rather than overwriting it. Under the program deployed above there are 6:
+
+| what | agent | transaction | block |
+|---|---|---|---|
+| `claim_agent` | `9Xpkkvos…` | [`88f9ec5c…dc292dd0`](https://explorer.testnet.lez.logos.co/transaction/88f9ec5c377dceeb5005336ecf358d778a30dc39d2ea49b1c166332cdc292dd0) | 8859 |
+| `create_policy` | `9Xpkkvos…` | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4) | 8868 |
+| `claim_agent` | `GpRdooEW…` | [`78ce43c9…adaa126c`](https://explorer.testnet.lez.logos.co/transaction/78ce43c977bcf9956d3c8f42836e65b2fc8159a18e04836214756cd0adaa126c) | 8875 |
+| `create_policy` | `GpRdooEW…` | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918) | 8876 |
+| `claim_agent` | `A7UBoMbS…` | [`0dd4e49e…e52921a2`](https://explorer.testnet.lez.logos.co/transaction/0dd4e49eeecac1366baf7a81a93639cadd8b6e013984979d99ebf63ae52921a2) | 8883 |
+| `create_policy` | `A7UBoMbS…` | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda) | 8884 |
+
+Each was confirmed present in the block named and absent from both neighbours.
+A further 3 rows in that manifest belong to a superseded program, `a780003b…`
+(itself deployed in block 8720). Those transactions are still on chain and still
+resolve, but the policy accounts they created were derived from a different
+ImageID and no longer exist under the current one. They are evidence of what was
+redeployed, not of what is enforceable today.
+
+The ledger's *running total* — `window_start` and `spent` — is deliberately not
+quoted here. Those two fields move every time an agent spends, so a number
+written into this document would be current only until the next settlement, and
+`--check` would then fail on ordinary agent activity with nothing in the
+repository changed. The limits are safe to state because they are anchored. The
+running total appears per settlement below, taken from each transaction's own
+committed post-state, where it is immutable.
+
+## Approach: the spending limit, at length
+
+### The spending limit is an account, not an `if`
+
+A spending limit enforced inside the agent is enforced by whoever controls the
+agent's process — which, for an agent deployed on a remote node with its own key,
+is not necessarily the owner. So the limit is moved out of the process entirely.
+
+`create_policy` initialises exactly one account per agent, at
+`PDA(program, "agent-policy/v1", agent_id)`. It is `#[account(init, …)]`, and
+`init` refuses an account that is not in its default state, so the first anchor
+for an agent is the only anchor for that agent. The owner, both limits, the
+period and the running total live in that account's data, which LEZ rule 6
+permits only this program to write. `spend` derives the same address from the
+*paying* account's id, taken from the pre-state the state machine built rather
+than from the instruction the agent serialised, so there is no `agent_id`
+argument to lie about, and it reads the limits off the account rather than from
+the call.
+
+The consequence is checkable from outside with two RPC calls, and the control is
+what makes it mean anything: run against an anchored agent, `getAccount` on the
+PDA comes back owned by the policy program's own ProgramId; run against an id
+nobody anchored, the PDA resolves fine and comes back with a `program_owner` of
+all zeros — never initialised, so `init` would still accept it.
+`./scripts/use-cases/03-spending-threshold.sh` derives both and prints them side
+by side — and it checks the anchored record's owner field against
+`artifacts/agents.tsv` as well. `./scripts/verify-deployment.sh` reads every
+anchored policy account back off the chain for all three agents and fails unless
+each one is owned rather than default, holds a 97-byte v1 record, and carries the
+per-transaction limit, per-period limit and period length the manifest claims.
+
+`spend` moves no balance itself, and cannot. LEZ rule 5
+(`UnauthorizedBalanceDecrease`) refuses any post-state that decreases the balance
+of an account the executing program does not own, and an agent's account is owned
+by LEZ's **authenticated transfer** program. So the policy program checks the
+anchored envelope and then **chains a call** into the transfer program, which does
+own the accounts; the privacy circuit proves both programs and the composition.
+`artifacts/programs/authenticated_transfer.bin` is a byte-identical copy of the
+chain's own program — not deployed by this repository — committed because the
+circuit looks the callee up by ImageID. `demo.sh` checks its ImageID against
+`getProgramIds` rather than asserting it.
