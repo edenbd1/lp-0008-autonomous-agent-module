@@ -191,12 +191,18 @@ one.
 **What is not delivered** is stated in the checklist and in
 [`docs/limitations.md`](docs/limitations.md), and it is substantial: the owner
 that anchored while unclaimed can never approve an above-threshold spend afterwards; the
-**storage** skills have never been run against a live node, because nothing has
-put a Logos Storage node inside the module's own process; nothing **dispatches**
+**storage** skills now run against a live node from inside the module's own
+process — it `dlopen`s `libstorage` and opens one on
+`meta.configure("storage","on")` — and what they lack is a committed transcript
+and a CI job rather than a node; nothing **dispatches**
 an inbound request to the skill it names, so a serving agent is this module plus
 a host that reads the request, decides, and publishes the states the work moves
-through; no model has ever been run against the inference port; and there is no
-video.
+through; and no model has ever been run against the inference port.
+
+Two clauses have left that sentence since it was written, and both are recorded
+rather than deleted: it ended "and there is no video" until one was published on
+2026-08-17, and it said the storage skills had never reached a node until the
+module gained a `StorageRuntime` of its own.
 
 Two clauses have left that sentence, and both are recorded rather than quietly
 dropped. The first was "no agent has yet *served* another agent's task through to
