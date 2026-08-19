@@ -672,6 +672,42 @@ fn main() -> Result<()> {
             instruction: spend(10_000, 8000),
             expect: Expect::Custom(6005),
         },
+        // The three refusals `delegated_transfer` raises, which nothing exercised
+        // until now. They are not the enforcement — the transfer program does its
+        // own checked_sub/checked_add — they are there so a caller gets a code
+        // instead of a panic inside a program it did not write, and that sentence
+        // was an assertion nothing executed. Each is the accepted spend above with
+        // exactly one account field changed.
+        Case {
+            what: "the paying account is held by no program, so it cannot pay at all",
+            accounts: vec![
+                agents_policy(&anchored),
+                with_id(account(Account::default().program_owner, 10_000, vec![]), true, agent),
+                payee(),
+            ],
+            instruction: spend(200, 8000),
+            expect: Expect::Custom(6010),
+        },
+        Case {
+            what: "the spend is inside the envelope and larger than the balance",
+            accounts: vec![
+                agents_policy(&anchored),
+                with_id(account(HOLDER_PROGRAM, 5, vec![]), true, agent),
+                payee(),
+            ],
+            instruction: spend(100, 8000),
+            expect: Expect::Custom(6008),
+        },
+        Case {
+            what: "the recipient is one payment short of overflowing u128",
+            accounts: vec![
+                agents_policy(&anchored),
+                payer(agent),
+                with_id(account(HOLDER_PROGRAM, u128::MAX, vec![]), false, recipient),
+            ],
+            instruction: spend(100, 8000),
+            expect: Expect::Custom(6009),
+        },
         Case {
             what: "a different agent presents this agent's policy account",
             accounts: vec![agents_policy(&anchored), payer(other_agent), payee()],
@@ -818,6 +854,22 @@ fn main() -> Result<()> {
             ],
             instruction: spend_approved(900, 7),
             expect: Expect::Custom(6016),
+        },
+        // The last declared refusal nothing executed. security-model.md lists it
+        // among the things a key-holder cannot do — "point an approved payment at
+        // a different recipient (6011)" — which was a claim about a branch no case
+        // reached. The approval and its marker are unchanged; only the account in
+        // the recipient position differs from the id the approval commits to.
+        Case {
+            what: "an approved payment pointed at a recipient the approval does not name",
+            accounts: vec![
+                agents_policy(&anchored),
+                granted(false),
+                payer(agent),
+                with_id(account(HOLDER_PROGRAM, 0, vec![]), false, other_agent),
+            ],
+            instruction: spend_approved(900, 7),
+            expect: Expect::Custom(6011),
         },
         Case {
             what: "a different agent presents an approval granted for this one",

@@ -803,11 +803,19 @@ nothing but `python3`:
 
 ```sh
 ./scripts/check-package-fresh.py
-#   ok    all 31 build inputs hash exactly as they did when the package was made
-#   ok    every one of the 750 source literals of >= 8 bytes is in the darwin-arm64 binary
-#   ok    every one of the 750 source literals of >= 8 bytes is in the linux-amd64 binary
-#   ok    every one of the 750 source literals of >= 8 bytes is in the linux-arm64 binary
+#   ok    all N build inputs hash exactly as they did when the package was made
+#   ok    every one of the M source literals of >= 8 bytes is in the darwin-arm64 binary
+#   ok    every one of the M source literals of >= 8 bytes is in the linux-amd64 binary
+#   ok    every one of the M source literals of >= 8 bytes is in the linux-arm64 binary
 ```
+
+**`N` and `M` are printed by the run, not written here.** They were, and the
+literal count went stale the moment a source file grew a string: this page said
+750 while the checker counted 807. A count typed into a document is the one thing
+in it that nothing checks, which is the rule
+[`docs/criteria-evidence.md`](docs/criteria-evidence.md) states and this page was
+breaking. What matters is `every one of` and the three variants, not the size of
+the set.
 
 All three variants, and that matters more than it looks: the Linux plugins are
 built from the same translation units as the macOS one, so "the delivery code

@@ -786,7 +786,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
     no chain access.
   - **Neither Linux variant carries a Logos Delivery library**, because upstream
     publishes none for Linux and never has. Both carry the code path — asserted,
-    not claimed: `check-package-fresh.py` finds all 750 source literals in all
+    not claimed: `check-package-fresh.py` finds every source literal in all
     three binaries — and no library beside them, so the transport cannot come up
     there. That is outside this criterion and inside the messaging one, and it
     is stated here so the variants are not read as identical.
@@ -1582,7 +1582,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   with build and install commands in [`docs/basecamp.md`](docs/basecamp.md) and
   [`app/README.md`](app/README.md). The package is provably the source committed
   beside it: `./scripts/check-package-fresh.py` (exit 0) reports `31 build
-  input(s) recorded and unchanged` and `every one of the 750 source literals of
+  input(s) recorded and unchanged` and `every one of the source literals of
   >= 8 bytes is in the darwin-arm64 binary` — a check that
   exists because the shipped `.lgx` was once two commits stale and produced cards
   the repository's own verifier refused.

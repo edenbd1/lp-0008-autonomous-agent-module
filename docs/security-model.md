@@ -488,6 +488,9 @@ that refuses everything would pass it.
 | …the same spend in the next period | **accepted**, `Halted(0)` |
 | `spend` naming a period that is not a multiple of `period_blocks` | refused, `6014` |
 | `spend` naming a period older than the ledger's | refused, `6015` |
+| `spend` from an agent account no program owns | refused, `6010` |
+| `spend` inside the envelope and larger than the agent's balance | refused, `6008` |
+| `spend` into a recipient one payment short of overflowing `u128` | refused, `6009` |
 | `approve_spend` signed by the agent rather than the owner | refused, `6012` |
 | …signed by the agent's own public pay account | refused, `6012` |
 | …signed by the owner the record names | **accepted**, `Halted(0)` |
@@ -497,6 +500,7 @@ that refuses everything would pass it.
 | `spend_approved` on a real, unexpired approval | **accepted**, `Halted(0)` |
 | `spend_approved` presenting an approval already stamped | refused, `6018` |
 | `spend_approved` on an approval in the previous deployment's shape (empty data) | refused, `6016` |
+| `spend_approved` pointed at a recipient the approval does not name | refused, `6011` |
 | `spend_approved` by a different agent than the approval names | refused, `PdaMismatch` |
 
 After the table the suite runs the whole attack in sequence, three times, once
@@ -504,6 +508,17 @@ per shape an earlier program accepted: the stranger's anchor is refused, **the
 honest owner then anchors successfully** — which is the "losing the race is not
 permanent" half — the agent's whole-balance spend is refused 6005 against that
 policy, and the attacker's self-signed approval for 9,999,999 is refused 6012.
+
+**Every code this program declares is now in that table.** Four of them were not
+until this pass, and the gap is worth naming rather than quietly closing: 6008,
+6009 and 6010 are the three refusals `delegated_transfer` raises — the guard the
+guest's own comment says exists "so that an agent that cannot afford a task gets
+error code 6008 instead of a guest panic inside a program it did not write" — and
+6011 is the one this document lists in §7 among the things a key-holder cannot
+do, "point an approved payment at a different recipient". All four were
+assertions about branches no case reached. They are executed now, each as the
+accepted call above it with exactly one account field changed: 19 declared codes,
+19 exercised against the deployed binary.
 
 One trap for anyone integrating against these numbers: the codes declared in the
 guest as `6002…6022` reach a caller **offset by 6000**, because
