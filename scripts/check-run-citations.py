@@ -42,6 +42,25 @@ DOCS = ["README.md", "SUBMISSION-DRAFT.md", "solutions/LP-0008.md"] + [
     if f.endswith(".md")
 ]
 RUN_RE = re.compile(r"actions/runs/(\d+)")
+
+# A cited run that is not green, and is not SAID to be not green.
+#
+# docs/criteria-evidence.md linked run 32031221051 as the evidence that the
+# alongside workflow runs on Linux, tabled three of its steps as success, and
+# added that a fourth "passes too". That run is red: step 19 is where it failed,
+# and the paragraph below the claim said the step was red until a later commit.
+# A reviewer clicking the link saw a cross under a sentence saying it was green.
+#
+# So: every cited run must be `success`, unless the document citing it says
+# plainly that it is not. The words below are what "says plainly" means, matched
+# against the lines around the citation — they are the phrasings this repository
+# already uses when it cites a failure on purpose, which it does twice for the
+# two runs killed at the 340-minute cap.
+FAILURE_IS_THE_POINT = (
+    "is not a pass", "killed at the", "ran past its", "cancelled rather than",
+    "at the cap", "is red", "that run is red", "did not finish",
+)
+CONTEXT_LINES = 6
 # GitHub run ids are 11 digits today. Anchored on word boundaries so block
 # heights, byte counts and hashes cannot be mistaken for one.
 BARE_RE = re.compile(r"\b(\d{11})\b")
@@ -151,6 +170,34 @@ def main():
                 "fetch problem, not necessarily an orphaned commit; cited at %s"
                 % (run_id, sha[:7], ", ".join(sites)))
             continue
+        # Green, or said not to be. Checked before the ancestry question,
+        # because a red run a reader clicks is a worse citation than one on a
+        # commit they cannot check out.
+        concl = info.get("conclusion", "")
+        if concl != "success":
+            excused = False
+            for site in sites:
+                doc = site.split(":")[0]
+                path = os.path.join(ROOT, doc)
+                if not os.path.exists(path):
+                    continue
+                with open(path, encoding="utf-8") as fh:
+                    lines = fh.read().splitlines()
+                for i, line in enumerate(lines):
+                    if run_id in line:
+                        window = " ".join(
+                            lines[max(0, i - CONTEXT_LINES):i + CONTEXT_LINES + 1]
+                        ).lower()
+                        if any(w in window for w in FAILURE_IS_THE_POINT):
+                            excused = True
+            if not excused:
+                failures.append(
+                    "run %s concluded %r and is cited at %s as evidence, with "
+                    "nothing near the citation saying it is not a pass. A reader "
+                    "clicks that link and sees a cross under a sentence claiming "
+                    "it is green — cite the run that is, or say what this one is"
+                    % (run_id, concl, ", ".join(sites)))
+
         anc = sh("git", "merge-base", "--is-ancestor", sha, "HEAD")
         if anc.returncode != 0:
             failures.append(
