@@ -180,13 +180,25 @@ is rejected before the nonce is ever compared. That mechanism, its file:line, an
 the transactions that close it are in
 [the section below](#closed-an-owner-can-approve-a-spend-and-the-approved-spend-executes).
 
-`update_policy` is still the one instruction with no landed transaction on the
-public testnet, and now for a stated reason rather than a supposed one: it is
-exercised against the deployed binary in `crates/agent-verifier-adversarial`
-(accepted for the owner the record names, refused 6012 for a stranger and for the
-agent itself), and running it on chain needs an owner that was claimed *before* it
-anchored. The three owners in `artifacts/agents.tsv` were not, and that is now
-irreversible for them.
+`update_policy` **now has a landed transaction on the public testnet**, which
+closes the last instruction that did not. It was the last one for the reason
+stated here rather than a supposed one — running it needs an owner that was
+claimed *before* it anchored, and the three owners in `artifacts/agents.tsv` were
+not, which is irreversible for them. What it did not need was a new agent: the
+owner provisioned for the approval demonstration below, `HCV2Y4Vf…`, is claimed,
+sits at nonce 3 with a balance of 0, and a claimed account signs indefinitely.
+
+    fa9651a70e79f9d5af051411a18d7fd2aa8e3e8a917101640aa34e0ff65ace52
+
+Signed by that owner, against policy account `DaFSZy2u…V4kJ`. Read back off the
+chain, the record moved `per_tx` from 1 to 5 and left everything else exactly as
+it was — `per_period` 10, `period_blocks` 1000, and the running total carried
+through untouched, which is the property the instruction promises: raising a
+ceiling is not forgiveness for what was already spent under the old one.
+
+It is also still exercised against the deployed binary in
+`crates/agent-verifier-adversarial` — accepted for the owner the record names,
+refused 6012 for a stranger and for the agent itself.
 
 ## CLOSED: an owner can approve a spend, and the approved spend executes
 
