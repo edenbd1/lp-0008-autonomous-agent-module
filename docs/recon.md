@@ -6,16 +6,23 @@ the integration to somebody who was not watching.
 
 ## What the four moving parts actually are
 
-| Prize wording | Real component | Language | Last touched |
+| Prize wording | Real component | Language | Last touched, read 2026-08-19 |
 |---|---|---|---|
-| Logos Core module | `logos-co/logos-module-loader-qt` | C++ | 2026-08-11 |
-| Logos Storage | `logos-co/logos-storage-module` | C++ | 2026-08-13 |
-| Logos Messaging | `logos-co/logos-delivery-module` (wraps `liblogosdelivery`) | C++ | 2026-08-08 |
-| Headless deploy | `logos-co/logos-logoscore-cli` | C++ | 2026-08-12 |
+| Logos Core module | `logos-co/logos-module-loader-qt` | C++ | 2026-08-17 |
+| Logos Storage | `logos-co/logos-storage-module` | C++ | 2026-08-19 |
+| Logos Messaging | `logos-co/logos-delivery-module` (wraps `liblogosdelivery`) | C++ | 2026-08-14 |
+| Headless deploy | `logos-co/logos-logoscore-cli` | C++ | 2026-08-19 |
 
-All four are alive — every one updated within a week of 2026-08-14. That matters:
-the API can move under us, so anything we pin needs a recorded revision, the way
-`vendor/spel` is pinned here.
+All four are alive — two of them moved on the day this column was last read. That
+is the point rather than a curiosity: the API can move under us, so anything we
+pin needs a recorded revision, the way `vendor/spel` is pinned here. **Do not
+trust this column; it is a snapshot and it has already gone stale once.** Ask:
+
+```sh
+for r in logos-module-loader-qt logos-storage-module logos-delivery-module logos-logoscore-cli; do
+  gh api repos/logos-co/$r --jq '.name + "  " + .pushed_at'
+done
+```
 
 ## The module contract
 

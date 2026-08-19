@@ -1222,6 +1222,80 @@ for _doc in DOCS:
 print("checked %d claim(s) about how many jobs ci.yml runs against the %d it defines"
       % (_n_jobs, len(_JOBS)))
 
+# ---------------------------------------------------------------------------
+# Claims this repository has RETRACTED, still asserted somewhere else
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS.
+#
+# docs/limitations.md is where a claim goes to be withdrawn. Nothing made the
+# withdrawal reach the other fourteen documents, and it did not: on 2026-08-19 a
+# sweep found the same four retracted claims still stated as live fact in seven
+# places.
+#
+#   * "the owner can never approve a spend after anchoring a policy" --
+#     retracted when the whole path ran on chain (approve_spend in block 10776,
+#     spend_approved in 10786). Still asserted, as a property of the CHAIN
+#     rather than of three specific owners, in security-model.md, use-cases.md,
+#     a2a-binding.md twice, and basecamp.md.
+#   * "spel builds every transaction against nonce 0" -- retracted with the
+#     file:line that disproves it. Still asserted in README.md and DEPLOYMENT.md.
+#   * error code 6013, and the policy_hash address derivation -- both retired
+#     with the design that needed them. Still given as reproduction steps in
+#     benchmarks/cu-budget.md.
+#
+# Every one of those is worse than an ordinary stale sentence, because the
+# repository had already done the work of finding out it was false and then
+# published the false version anyway, next to the retraction.
+#
+# The register below is deliberately small and hand-written. A generic "find
+# contradictions" check is not buildable; a list of the specific sentences this
+# project has already paid to learn are wrong is. Add a row whenever
+# limitations.md retracts something.
+#
+# Each row: (name, regex that matches the RETRACTED phrasing, files allowed to
+# contain it -- the retraction sites, which must quote it in order to withdraw
+# it).
+RETRACTED = [
+    ("the owner can never approve after anchoring",
+     r"(?i)owner (?:can never|cannot|is,? by construction,? unable to) approve"
+     r"|can never approve a spend|no working approval path",
+     {"docs/limitations.md", "scripts/check-docs.py"}),
+    ("spel builds against nonce 0",
+     r"(?i)(?:builds (?:every|each) transaction against nonce 0"
+     r"|hardcodes nonce 0)",
+     {"docs/limitations.md", "docs/DEPLOYMENT.md", "scripts/check-docs.py"}),
+    ("error code 6013 is live",
+     r"halts? with 6013|refused,? 6013|returns 6013",
+     {"docs/limitations.md", "scripts/check-docs.py"}),
+    ("policy_hash is the policy account's seed",
+     r"PdaSeed::new\(policy_hash\)|PDA\(SHA256\(owner",
+     {"docs/limitations.md", "docs/criteria-evidence.md", "SUBMISSION-DRAFT.md",
+      "scripts/check-docs.py"}),
+]
+
+_n_retr = 0
+for _name, _pat, _allowed in RETRACTED:
+    _rx = re.compile(_pat)
+    _n_retr += 1
+    for _doc in DOCS:
+        if _doc in _allowed:
+            continue
+        _rp = os.path.join(ROOT, _doc)
+        if not os.path.exists(_rp):
+            continue
+        _rtext = open(_rp, encoding="utf-8").read()
+        for _i, _line in enumerate(_rtext.splitlines(), 1):
+            if _rx.search(_line):
+                failures.append(
+                    "%s:%d states a claim this repository has RETRACTED (%s). "
+                    "docs/limitations.md withdrew it; restating it elsewhere "
+                    "publishes the version we already know is false: %s"
+                    % (_doc, _i, _name, _line.strip()[:110]))
+
+print("checked %d retracted claim(s) against every document that could restate one"
+      % _n_retr)
+
 print("checked %d catalogue entr(ies), %d variant claim(s) against %d packaged "
       "variant(s), %d settlement(s) against the ledger, %d truncated hash(es), "
       "%d test file(s) against the workflows"

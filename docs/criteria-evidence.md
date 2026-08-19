@@ -91,7 +91,7 @@ evidence and the command that re-derives it; what does not work is in
 - [x] **MET — The agent has its own shielded LEZ account and can send and receive
   tokens independently of the owner's wallet.**
   *Send*: `./scripts/verify-deployment.sh` (exit 0, run for this document)
-  re-decodes 11 settlements under the shipped program from the chain's own copy,
+  re-decodes 12 settlements under the shipped program from the chain's own copy,
   each a privacy-preserving transaction signed by the agent's own shielded
   account, not the owner's. *Receive*, at that same shielded account: `5942d6cd…`
   in block 9360, the messaging agent paying the storage agent **at its shielded
@@ -182,7 +182,7 @@ evidence and the command that re-derives it; what does not work is in
   autonomously.**
   Read the verbs: the above-threshold branch is asked to **hold**, the
   below-threshold branch to **execute**.
-  *Below threshold, executed autonomously, on the public testnet:* the 11
+  *Below threshold, executed autonomously, on the public testnet:* the 12
   settlements under the shipped program, each a `spend` inside the paying agent's
   anchored per-transaction limit, submitted with no owner in the loop, with the
   per-period total accumulating on chain in the table above.
@@ -199,14 +199,15 @@ evidence and the command that re-derives it; what does not work is in
   first run and only the first).
   **What is bounded, and why it does not empty this box.** An *approved*
   above-threshold spend still returns `{"outcome":"approved","submitted":false}`.
-  The constraint measured on chain is one program transaction per public signer;
-  `approve_spend` requires the owner as signer and the policy commits the owner's
-  identity, so the approval must come from the account that anchored the policy —
-  which has already spent its one transaction on `create_policy`. **The owner who
-  anchored a policy is, by construction, unable to approve anything under it.**
-  That is a real and serious limitation, written up in full in
-  `docs/limitations.md` with two untried ways out, and it is deliberately not
-  hidden. It is **not** a clause of this criterion: the sentence does not say "and
+  The constraint measured on chain applies to an **unclaimed** public signer:
+  `approve_spend` requires the owner as signer, and an owner whose account was
+  still `Account::default()` when it anchored is filtered out of every later
+  post-state. The three owners this repository ships were in exactly that state,
+  so for them the approved path is closed and stays closed. **It is not a
+  property of the chain.** An owner claimed before it anchors signs indefinitely,
+  and the whole path has run on the public testnet — `approve_spend` in block
+  10776, `spend_approved` in block 10786, the payee 4 to 6. Both halves are in
+  `docs/limitations.md`, and neither is hidden. It is **not** a clause of this criterion: the sentence does not say "and
   executes above-threshold transactions after approval", and the safety property
   it does state — nothing above the threshold is ever executed without the owner —
   holds in every run recorded here, on chain and off. The module names
@@ -439,7 +440,7 @@ evidence and the command that re-derives it; what does not work is in
   It is falsifiable, and the negative control is its own CI step: a one-line
   substitution puts the module back in the state where it constructs no snapshot —
   the diff is checked, not assumed — and the recovery suite then goes red. That
-  control exists because `TaskPersistence` once had 121 green assertions and no
+  control exists because `TaskPersistence` once had 122 green assertions and no
   construction site in the plugin, so the tests passed and the shipped module
   persisted nothing. The wiring is now asserted in the real runtime as well:
   `./scripts/logos-core-headless.sh` reads back `meta.status.durability` with the
@@ -698,10 +699,13 @@ evidence and the command that re-derives it; what does not work is in
   and serves a login page to everyone else is the failure mode here; it is not
   this one.
 
-  What was filmed, and how it was checked. `scripts/check-video.py` samples
-  frames, runs them through OCR and asserts on the terminal text rather than on
-  duration and file size, because duration and file size came back green on two
-  takes that were then discarded. Sixteen frames per film:
+  **What the two superseded halves were, kept because the merge is the reason
+  the published film is one file.** The table below describes films 1 and 2,
+  which were removed from the release; it is history, not the artefact a reviewer
+  opens. `scripts/check-video.py` samples frames, runs them through OCR and
+  asserts on the terminal text rather than on duration and file size, because
+  duration and file size came back green on two takes that were then discarded.
+  Sixteen frames per film:
 
   | | film 1 | film 2 |
   |---|---|---|
@@ -719,8 +723,14 @@ evidence and the command that re-derives it; what does not work is in
   no owner signature anywhere in it. That transaction is in block 10102 and is
   the one this document cites elsewhere.
 
-  **The box stays unchecked** because publication is the requirement and
-  publication has not happened. It is not a claim about the films.
+  **This paragraph used to end "the box stays unchecked, because publication is
+  the requirement and publication has not happened".** That was true when it was
+  written and stopped being true on 2026-08-17, when the merged film was
+  published — while the box four hundred lines above it had already been ticked.
+  So this document carried a checked box and a sentence denying it, in the same
+  entry, which is the exact shape it exists to catch. The box is MET, the film is
+  at <https://youtu.be/5HF0xv6GX64>, and the sentence is kept as the record of
+  the contradiction rather than quietly deleted.
 
 ### There is no unchecked box, and the one there was is closed
 
@@ -770,13 +780,20 @@ hash proves the bytes are that transaction, so the balance below is the balance
 | 11 | [`52ef56ad…4ed873e6`](https://explorer.testnet.lez.logos.co/transaction/52ef56ad06c149e3725655108a86f7947b501cfe5504667b03ec07234ed873e6) | 9938 | 271,471 bytes | `storage.upload` | 1 LEZ | 106 | `7HH46tXh…` at 9,000 / 2 |
 | 12 | [`071d25d7…1412057a`](https://explorer.testnet.lez.logos.co/transaction/071d25d7193fd3c3b6380c4e28b5de1ec117fc056b013c53e2f110171412057a) | 10081 | 271,471 bytes | `storage.upload` | 1 LEZ | 107 | `7HH46tXh…` at 10,000 / 1 |
 | 13 | [`54f85182…e2f47115`](https://explorer.testnet.lez.logos.co/transaction/54f851825f171cf62f6b4723f7133687f3d9dff7e138417374cc7960e2f47115) | 10102 | 271,471 bytes | `storage.upload` | 1 LEZ | 108 | `7HH46tXh…` at 10,000 / 2 |
+| 14 | [`c8ff670b…80dc3028`](https://explorer.testnet.lez.logos.co/transaction/c8ff670bd7e45a02eeb0d5b25427149d6eb0c70741bf52032bf5317780dc3028) | 10639 | 271,471 bytes | `storage.upload` | 1 LEZ | 109 | `2RK4dPwz…` at 10,000 / 1 |
 
-**2 of the 13 settlements above predate the program this repository ships.**
+**2 of the 14 settlements above predate the program this repository ships.**
 Settlements 1 and 2 charged an envelope, `Coxz1Cmf…`, owned by a different
 ProgramId; the generator says so per row, in its own words, rather than leaving a
 reader to notice. They are kept because they are on chain and a reviewer will
-find them, but the criterion they support is only supported by the **11 made
-under the current deployment**.
+find them, but the criterion they support is only supported by the **12 made
+under the current deployment** — 13 with the shielded settlement below, which is
+under the same program and is recorded in the other manifest.
+
+This table and this sentence are **copied from `./scripts/submission-evidence.py`**
+rather than maintained. They had drifted by one row: settlement 14 landed and the
+counts under the table went on saying eleven. The count gate below is what stops
+that happening again.
 
 Two further settlements pay a **shielded** payee and are recorded in
 `artifacts/shielded-settlement.tsv`, checked against the chain by
@@ -889,7 +906,7 @@ sequencer "and this module has neither". The module does not need to *have* a
 wallet, it needs to *reach* one.
 
 **Tests that passed while the shipped module did nothing.** `TaskPersistence` had
-121 green assertions and **no construction site in the plugin**, so the shipped
+122 green assertions and **no construction site in the plugin**, so the shipped
 module persisted nothing while its tests were green. `meta.skills` was described
 in three C++ doc comments as existing while `invoke("meta.skills")` returned *no
 skill named 'meta.skills' is registered*. Both are why every criterion below is

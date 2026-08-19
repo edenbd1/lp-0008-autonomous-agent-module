@@ -163,11 +163,18 @@ deployments ago — `9KdQSJ2t…VXicNe` became `A7UBoMbS…c39JtMu`, for the sam
 reason. The messaging agent has kept its identity throughout.
 
 Every anchor has its **own** signer, and each of those was made by
-`wallet account new public` and had never signed anything. `spel` builds each
-transaction against nonce 0 while the sequencer checks the nonce for exact
-equality, so a signer's second program transaction is built stale, submitted,
-given a hash, and then silently dropped. Nothing reports it — which is why this
-is written down rather than discovered again.
+`wallet account new public` and had never signed anything. The reason is that a
+signer still carrying the *default* program owner is filtered out of a program's
+post-state by the SPEL macro on its second transaction, and the state machine
+then rejects the whole thing as `DeclaredAccountMissingFromOutput`: submitted,
+given a hash, and silently dropped, with nothing reporting it.
+
+**This paragraph used to blame `spel` for building every transaction against
+nonce 0, and that was wrong.** `spel` fetches each signer's nonce
+(`vendor/spel/spel-cli/src/tx.rs:629`) and exits rather than guessing; a public
+account on this testnet has reached nonce 33. The dropped transactions were real
+and the cause was not the one named. The full retraction, and the way out — claim
+the owner *before* it anchors — are in [`limitations.md`](limitations.md).
 
 The three signers for the anchors recorded here were made by hand, and their ids
 were written into `scripts/deploy-agents.sh` as literals. That is no longer how

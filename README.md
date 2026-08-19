@@ -47,13 +47,18 @@ cd lp-0008-autonomous-agent-module
 ./scripts/demo.sh
 ```
 
-**`--depth 1` on purpose, and it is worth the four characters.** Measured just
-now, on this machine, against this repository: `--depth 1` takes **9 seconds and
-52 MB**, a full clone takes **57 seconds and 222 MB**. The difference is
-history, not content — `module/agent.lgx` is an 18 MB packaged plugin and
-thirty-five versions of it have been committed as it was rebuilt. Nothing below
-needs any of them. Drop the flag if you want the history; the working tree is
-identical either way.
+**`--depth 1` on purpose, and it is worth the four characters.** Measured
+against this repository: `--depth 1` fetches **51 MB**, a full clone **222 MB**.
+The difference is history, not content — `module/agent.lgx` is an 18 MB packaged
+plugin and **twenty** versions of it have been committed as it was rebuilt.
+Nothing below needs any of them. Drop the flag if you want the history; the
+working tree is identical either way.
+
+The two sizes are properties of the repository and reproduce. The wall-clock
+times are not, and this paragraph used to give them as though they were: it said
+nine seconds and fifty-seven, and the same two clones on a faster link now take
+four and thirty. Time a clone on your own link if you want the number; the ratio
+is the point.
 
 A Rust toolchain, `python3` and `curl`. No funded account, no keys, no local
 sequencer, no Logos install, and nothing to configure. The script exports
@@ -335,10 +340,13 @@ refuses the run if not. That is not tidiness, and it is the single thing most
 likely to waste your afternoon if you skip it. Three independent constraints
 stack up:
 
-- **`spel` builds every transaction against nonce 0**, while the sequencer
-  checks the nonce for exact equality. A signer's *second* program transaction
-  is therefore built with a stale nonce, submitted, given a transaction hash,
-  and then silently dropped. Nothing reports it.
+- **A signer that still carries the default program owner anchors exactly
+  once**, and its second program transaction is submitted, given a transaction
+  hash, and then silently dropped. Nothing reports it. (This list used to blame
+  `spel` for building against nonce 0. It does not — it fetches each signer's
+  nonce and exits rather than guessing — and the retraction is in
+  [`docs/limitations.md`](docs/limitations.md). The observation was real; the
+  cause was the post-state filter below.)
 - **A signer that still carries the default program owner anchors exactly
   once.** On its second anchor the SPEL macro drops its post-state to dodge
   LEZ's rule 7, and the state machine then rejects the transaction as
@@ -1200,7 +1208,7 @@ distinguishable from outside. A module nobody gave a directory to reports
 `"durability": null` rather than implying it is durable.
 
 This is the part that was missing rather than the file format, which existed and
-was tested: `TaskPersistence` had 121 green assertions and no construction site
+was tested: `TaskPersistence` had 122 green assertions and no construction site
 in the plugin, so the shipped module persisted nothing. Measured before the fix
 — task opened, `meta.status` `{"total":1}`, persistence directory empty, module
 rebuilt, `{"total":0}`, no error anywhere.

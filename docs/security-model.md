@@ -570,10 +570,13 @@ holds the agent process decides differently. Only §2 through §6 survive that, 
   An attacker who takes the key first designates itself and is then the owner —
   but such an attacker already holds the balance directly (§7), so this residual
   costs nothing that was not already lost.
-- **Above-threshold payments are the exception.** Every recorded settlement so
-  far has been inside the envelope, so the approved path is exercised by
-  execution against the deployed binary (§8), not yet by a landed
-  above-threshold payment on the public testnet.
+- **Above-threshold payments are the exception.** Almost every recorded
+  settlement is inside the envelope, so the approved path is exercised mainly by
+  execution against the deployed binary (§8). It has also landed once on the
+  public testnet — `approve_spend` in block 10776, `spend_approved` in block
+  10786 — against an agent whose owner was claimed before it anchored. For the
+  three agents this repository ships that path stays closed, because their owners
+  anchored while unclaimed; [`limitations.md`](limitations.md) carries both.
 
 Known failures and retractions are kept in [`limitations.md`](limitations.md),
 which is the document to read next.

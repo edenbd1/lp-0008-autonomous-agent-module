@@ -583,13 +583,14 @@ so there is nothing to submit and nothing to cost anything.
 
 The **approval** side. `spend_approved` takes a fourth account — an approval PDA
 seeded by the exact payment (policy, recipient, amount, nonce) and owned by this
-program, which only the owner can create with `approve_spend`. That path is
-implemented and is not demonstrated on the public testnet, because an owner
-account that has anchored a policy has already spent its one program transaction
-and cannot sign a second. The reason is written up in
-[`docs/limitations.md`](limitations.md), "The owner can never approve a spend
-after anchoring a policy". What is demonstrated here is the half that works:
-below the line the agent acts alone, above it the chain will not let it.
+program, which only the owner can create with `approve_spend`. That path is implemented **and has now run on the public testnet** — a fourth
+agent, provisioned for it, whose owner was claimed *before* it anchored:
+`approve_spend` in block 10776 and `spend_approved` in block 10786, with the
+payee going 4 to 6 and the marker stamped single-use. What this script does not
+show it against is the three agents it reads from `artifacts/agents.tsv`: their
+owners anchored while still unclaimed, which is irreversible for them. The
+account of both halves is in [`docs/limitations.md`](limitations.md), under
+"CLOSED: an owner can approve a spend, and the approved spend executes".
 
 ---
 

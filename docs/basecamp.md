@@ -421,9 +421,13 @@ know" as "no limit" pays a task nobody configured it for.
 refund would have to be signed by the payee, whose key this agent does not hold.
 And an above-envelope *task* price is refused immediately with
 `owner_unreachable` rather than put to the owner — `wallet.send` has that path
-and `agent.task` does not, because on this chain the owner who anchored a policy
-cannot approve under it (one program transaction per public signer), so wiring
-it would add a two-minute wait that can never succeed.
+and `agent.task` does not. The reason is specific to the agents in this
+repository rather than to the chain: their owners anchored while still
+*unclaimed*, so they can never sign `approve_spend` again and for these agents
+the wait could not succeed. An owner claimed before it anchors signs
+indefinitely, and the approved path has run end to end on the public testnet —
+`approve_spend` in block 10776, `spend_approved` in block 10786. Wiring
+`agent.task` to it is open work, not an impossibility.
 
 **6. And the OWNER is a loaded module too**
 (`module/tests/plugin_delivery_test.cpp`, `owner` mode; run it with

@@ -97,10 +97,10 @@ What makes each number safe to print
     only explorer links are.
 
   * Nothing may be left blank. `render` refuses to emit "TBD", "TODO", a
-    placeholder or an empty table cell — that pattern is quoted verbatim in the
-    closing comments on rejected submissions to this programme. A fact that
-    cannot be fetched is written out as a sentence saying it could not be
-    fetched, and why.
+    placeholder or an empty table cell. A placeholder in a submitted document is
+    read as a fact nobody had, and it is indistinguishable from one nobody
+    looked for. A fact that cannot be fetched is written out as a sentence
+    saying it could not be fetched, and why.
 
   * Links point at the block explorer, because reviewers check the explorer and
     not the RPC. The explorer indexes behind the sequencer, which the generated
@@ -1023,11 +1023,12 @@ def render(chain, root):
 
 
 def guard(sections):
-    """Refuse to emit the thing that gets submissions closed.
+    """Refuse to emit a placeholder where a fetched fact belongs.
 
-    Not a style rule. Closing comments on rejected submissions to this programme
-    quote the placeholder back verbatim. A fact that could not be fetched is
-    written as a sentence saying so; it is never a blank cell.
+    Not a style rule. A "TBD" in a generated evidence table is a claim that
+    something was measured, sitting where the measurement should be; a reader
+    cannot tell it from a value that was never sought. A fact that could not be
+    fetched is written as a sentence saying so; it is never a blank cell.
     """
     for name, body in sections.items():
         m = FORBIDDEN.search(body)

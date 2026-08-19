@@ -1218,11 +1218,15 @@ and reports them as **not effective** for exactly this reason
 agent asks the owner about and changes nothing about what the chain will let it
 spend.
 
-A task priced above the envelope needs owner approval, and
-[`docs/limitations.md`](limitations.md) records why that path does not currently
-work: the owner who anchored a policy is, by construction, unable to approve
-anything under it. Below-threshold autonomous settlement is unaffected, and is
-what the testnet evidence covers.
+A task priced above the envelope needs owner approval. That path **works and
+has run on the public testnet** — `approve_spend` in block 10776 and
+`spend_approved` in block 10786, the payee going 4 to 6 — against an agent whose
+owner was *claimed before it anchored*. What is unreachable is narrower and is
+the shipped three: their owners anchored while still unclaimed, so they can never
+sign again, which is irreversible for them and an ordering requirement for anyone
+anchoring a new one. [`docs/limitations.md`](limitations.md) carries both halves.
+Below-threshold autonomous settlement is unaffected, and is what the bulk of the
+testnet evidence covers.
 
 ---
 
@@ -1433,8 +1437,11 @@ From [`docs/limitations.md`](limitations.md), the ones a payment path inherits:
 - `getAccount` cannot see a private balance (§6.2). With a public payee that
   makes half a payment publicly checkable; with a shielded payee it makes none of
   it checkable by anyone but the payee.
-- The owner can never approve a spend after anchoring a policy, so an
-  above-threshold task price has no working approval path (§6.7).
+- An owner that anchored a policy while its account was still *unclaimed*
+  cannot sign `approve_spend` afterwards, which is true of the three agents this
+  repository ships and is not a property of the chain: an owner claimed before it
+  anchors signs indefinitely, and the approved path has run end to end on the
+  public testnet (§6.7).
 - Deployment is content-addressed and superseded programs remain on testnet;
   a policy account is a PDA of the program, so rebuilding the guest orphans every
   anchor made under the old one.

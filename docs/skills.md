@@ -843,10 +843,13 @@ against a running node — see "Storage" below.
 
 ## Why the on-chain half came first
 
-Every closed LP-0008 submission fell on evidence rather than on features — no
-visible testnet activity, a video showing localnet, e2e that never ran. Skills
-that cannot be checked from outside the repository do not answer that. A spend
-that the chain refused above the threshold does.
+A skill that cannot be checked from outside this repository is a claim about our
+own source code. What answers a reader who was not watching is a transaction they
+can fetch themselves: a settlement in a block, and a spend the chain refused
+above the threshold. So the on-chain half was built first and everything else was
+built into it — which is also why the expensive, slow evidence (the testnet
+anchors, the video against the public network, the standalone-sequencer e2e) is
+the part that exists rather than the part that was planned.
 
 ## Running a Delivery node, without Nix
 

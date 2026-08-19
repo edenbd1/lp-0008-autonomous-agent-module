@@ -403,13 +403,21 @@ let total: u64 = session.segments.iter().map(|s| 1u64 << s.po2).sum();
 The accounts have to be the ones the instruction expects or the guest refuses
 before doing the work, and a cycle count for a refusal is not a cycle count for
 the operation — every row in the table above exits `Halted(0)`. For `spend`: the
-policy account is
-`AccountId::for_public_pda(&program_id, &PdaSeed::new(policy_hash))` with its
-`program_owner` set to the program itself, the agent account is
-`is_authorized: true`, owned by the transfer program, and its **account id must
-equal the `agent_id` the policy commits to** or the run halts with 6013; the
-recipient is whatever the payment names. `window_start` must be a multiple of
-`period_blocks`, or 6014.
+policy account is the PDA of the **paying** account,
+`PDA(program, ["agent-policy/v1", agent])`, with its `program_owner` set to the
+program itself; the agent account is `is_authorized: true` and owned by the
+transfer program; the recipient is whatever the payment names. `window_start`
+must be a multiple of `period_blocks`, or 6014.
+
+This paragraph carried the superseded design until now, and both halves of it
+were wrong in the same direction: it seeded the policy account from a
+`policy_hash`, which no longer exists — the limits moved out of the address into
+the account's data — and it named **6013** as the halt for a mismatched agent id.
+There is no such comparison any more, because `spend` takes no `agent_id` at all;
+6013 is retired rather than reused, which the guest itself records at
+`crates/agent-verifier-spel/methods/guest/src/bin/agent_verifier.rs:248`. Anyone
+following the old text would have built an address the program never reads and
+waited for a code it can no longer return.
 
 The two `spend` rows use the same anchored policy — `per_tx` 200, `per_period`
 1000, `period_blocks` 1000 — and spend 200 at `window_start` 8000. They differ

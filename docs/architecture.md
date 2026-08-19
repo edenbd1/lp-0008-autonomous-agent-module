@@ -364,7 +364,7 @@ recovery decision is the load-bearing one — a snapshot that cannot be read
 **refuses the start**, because coming up with an empty task list on top of an
 unreadable one is how a paid task gets paid twice.
 
-Before that connection existed, all 121 assertions in `task_persistence_test`
+Before that connection existed, all 122 assertions in `task_persistence_test`
 passed against a class the plugin never constructed. `meta.status` now carries a
 `durability` block naming the file, the recovery outcome and the count of
 payments the restart could not resolve, so "this agent writes nothing down" and

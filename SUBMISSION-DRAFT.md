@@ -190,7 +190,7 @@ one.
 
 **What is not delivered** is stated in the checklist and in
 [`docs/limitations.md`](docs/limitations.md), and it is substantial: the owner
-can never approve an above-threshold spend after anchoring a policy; the
+that anchored while unclaimed can never approve an above-threshold spend afterwards; the
 **storage** skills have never been run against a live node, because nothing has
 put a Logos Storage node inside the module's own process; nothing **dispatches**
 an inbound request to the skill it names, so a serving agent is this module plus
@@ -604,9 +604,9 @@ one of them — `meta.skills` — was documented in three headers before it exis
 
 - [x] **MET — The agent has its own shielded LEZ account and can send and
   receive tokens independently of the owner's wallet.**
-  *Send*: `./scripts/verify-deployment.sh` (exit 0) re-decodes **11 settlements
+  *Send*: `./scripts/verify-deployment.sh` (exit 0) re-decodes **12 settlements
   under the shipped program** from the chain's own copy — its own closing line,
-  `11 settlement(s) under the shipped program (need 2)` — each a
+  `12 settlement(s) under the shipped program (need 2)` — each a
   privacy-preserving transaction signed by the agent's own shielded account, not
   the owner's. The count is the script's, re-run for this pass and not recalled:
   it read 4 here and 9 in the spending-threshold entry below at two different
@@ -957,7 +957,7 @@ one of them — `meta.skills` — was documented in three headers before it exis
   waits for approval before submitting."
 
   **Below threshold, executed autonomously, on the public testnet.**
-  `./scripts/verify-deployment.sh` (exit 0) re-decodes **11 settlements under the
+  `./scripts/verify-deployment.sh` (exit 0) re-decodes **12 settlements under the
   shipped program** from the chain's own copy, each one a `spend` inside the
   paying agent's anchored per-transaction limit, submitted by the agent with no
   owner in the loop. The generated settlement table above prints them with the
@@ -1655,7 +1655,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   back with the peer, skill and state they were opened with, a truncated snapshot
   **refusing** the start rather than coming up empty, and a transport failure
   leaving the task in place rather than taking it with it.
-  `module/tests/task_persistence_test.cpp` (exit 0, 121 assertions) covers the
+  `module/tests/task_persistence_test.cpp` (exit 0, 122 assertions) covers the
   file format, including every way a snapshot can be unreadable.
 
   It is falsifiable, and the negative control is a CI step that was reproduced
@@ -1749,7 +1749,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
 ### Supportability
 
 - [x] **MET — The agent module is deployed and tested on LEZ devnet/testnet.**
-  Program, three anchored policies and eleven settlements under the shipped
+  Program, three anchored policies and thirteen settlements under the shipped
   program, all live on the public testnet, each
   re-verified for this document with a null-returning control:
   `./scripts/verify-deployment.sh` (exit 0),
@@ -2087,7 +2087,7 @@ the module's. This paragraph previously called the whole path "the part that has
 actually run", which read as one flow and was four; it is one flow now, and the
 seam that is left is named.
 
-The limits are not incidental. The **owner cannot approve an above-threshold
+The limits are not incidental. The **owner that anchored while unclaimed cannot approve an above-threshold
 spend** after anchoring a policy, which removes half of the spending-threshold
 design and is the most serious open defect here. Two others have just closed and
 are described as closed rather than as achievements: `spend` used not to bind the
@@ -2095,7 +2095,7 @@ policy to the account presenting it — a funded account could present any ancho
 policy, including one anchored for a different agent with a larger envelope — and
 the per-period ceiling used to be advisory, checked against a number the caller
 passed in. Both are fixed, redeployed and re-anchored, and the refusals are
-asserted against the *deployed binary* rather than a rebuild, and eleven settlements
+asserted against the *deployed binary* rather than a rebuild, and twelve settlements
 have since landed under the fixed program with the period total written on chain.
 **Storage skills have never touched a live node** from inside the module — the
 file-vault use case drives a real Logos Storage node through a purpose-built C
@@ -2149,7 +2149,7 @@ back with the peer, skill and state they were opened with; a truncated snapshot
 **refuses** the start rather than coming up empty, because a corrupt file loading
 as an empty task list is how a paid task gets paid twice; and CI puts the module
 back in the state where it constructs no snapshot and requires the suite to go
-red. That control exists because `TaskPersistence` once had 121 green assertions
+red. That control exists because `TaskPersistence` once had 122 green assertions
 and no construction site in the plugin — the tests passed and the shipped module
 persisted nothing.
 
@@ -2288,7 +2288,8 @@ failed rather than blaming the wrong one.
 
 Read [`docs/limitations.md`](docs/limitations.md) before the rest. It is written to
 say what does not work before anyone has to discover it. The defect that most
-affects a reader's reading of this submission is that the owner cannot approve
+affects a reader's reading of this submission is that an owner that anchored
+while unclaimed cannot approve
 a spend after anchoring a policy. It also carries the retraction of a limitation
 this submission claimed for most of its life — that a shielded agent could not be
 paid at its shielded account — which turned out to be a missing flag in a tool
