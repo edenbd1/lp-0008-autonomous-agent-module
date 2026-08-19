@@ -870,9 +870,25 @@ which travels with the binary because this is redistribution.
 
 On Linux the directory is `~/.local/share/Logos/LogosBasecamp/modules` and the
 variant is `linux-amd64` or `linux-arm64` — `agent_plugin.so`, not the dylib,
-and the two are not interchangeable. `LOGOS_USER_DIR`
-overrides the base outright, which is the clean way to try this without touching
-an existing install. `./scripts/logos-core-headless.sh` does all of this for you
+and the two are not interchangeable.
+
+**Two different variables, and picking the wrong one installs into your real
+Basecamp.** `LOGOS_MODULES_DIR` is what
+[`scripts/logos-core-headless.sh`](scripts/logos-core-headless.sh) reads, and it
+is the one to set if you want the script to install somewhere harmless.
+`LOGOS_USER_DIR` is read by **Basecamp itself** and is what §8a uses to run two
+app instances side by side; no script here consults it. This paragraph used to
+offer `LOGOS_USER_DIR` as "the clean way to try this without touching an existing
+install" one sentence before naming the script, which reads as though the script
+honours it. It does not, and following the sentence installs the module into
+`~/Library/Application Support/Logos/LogosBasecamp/modules` exactly as if nothing
+had been set.
+
+```sh
+LOGOS_MODULES_DIR=/tmp/lp8-modules ./scripts/logos-core-headless.sh storage
+```
+
+`./scripts/logos-core-headless.sh` does all of this for you
 and picks the variant for the machine it is on; doing it by hand is for a
 reviewer who wants to see the tile in the app.
 
