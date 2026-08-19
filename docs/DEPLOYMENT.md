@@ -586,7 +586,16 @@ it was.
 This was produced by scanning every block from 8000 to the chain head for the
 accounts' raw 32-byte ids and hashing each block's transactions, then confirming
 every hash with `getTransaction`; all of them resolve, and no other block in
-that range touches these accounts. The three accounts' first transactions are
+that range touches these accounts.
+
+**The scan has to be re-run, and this section has already been caught out by not
+re-running it.** A sweep of blocks 9478–14304 on 2026-08-19 found six blocks
+touching these accounts and **two of them were missing from the tables below** —
+the funding at 10765 and the approved payment at 10786, both from the
+owner-approval demonstration. A ledger that promises to account for *everything*
+is falsified by one absent row, and this one was falsified by two. The command is
+in this repository's history; the honest form of the promise is that it holds as
+far as block 14304, checked on that date. The three accounts' first transactions are
 their own initialisations, so nothing precedes the table.
 
 ### storage, `5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ`
@@ -614,11 +623,13 @@ their own initialisations, so nothing precedes the table.
 | 10081 | `071d25d7…1412057a` | settlement, **live** program, 1 LEZ | 107 |
 | 10102 | `54f85182…e2f47115` | settlement, **live** program, 1 LEZ — the one filmed for the video | 108 |
 | 10639 | `c8ff670b…80dc3028` | settlement, **live** program, 1 LEZ — paid by the **blockchain** agent, the first settlement under a payer other than `messaging`. Off-camera rehearsal of the film-2 scene command after the payer became selectable | 109 |
+| 10765 | `c33f9a56…22685ec1` | spends **3** into shielded notes — funding the fourth agent provisioned for the owner-approval demonstration, the one whose owner was claimed *before* it anchored | 106 |
 
-Six of these were signed by the account itself — the initialisation, the 55
-spend, the `create_policy`, the two transfers and the 10 that re-funded the
-storage agent — which is exactly the nonce `getAccount` reports for it. The rest
-are credits, which do not move a nonce.
+Seven of these were signed by the account itself — the initialisation, the 55
+spend, the `create_policy`, the two transfers, the 10 that re-funded the storage
+agent and the 3 that funded the approval demonstration's agent — which is exactly
+the nonce `getAccount` reports for it. The rest are credits, which do not move a
+nonce.
 
 ### messaging, `Dxh7ZLHFmhKdNVE69XWayqLrquMk9iLfFVpmiJdfpEwD`
 
@@ -643,6 +654,7 @@ are credits, which do not move a nonce.
 | 9389 | `23046b54…ce6ca3fc` | settlement, **live** program, 1 LEZ | 2 |
 | 9456 | `31b185e2…19942531` | settlement, **live** program, 1 LEZ | 3 |
 | 9477 | `ed8c3514…374b8cb3` | settlement, **live** program, 1 LEZ | 4 |
+| 10786 | [`c243eaed…68169597`](https://explorer.testnet.lez.logos.co/transaction/c243eaedfcbba87dc11d5ad28aad4f8424916d087adf8c811747169668169597) | **`spend_approved`** — the above-threshold payment, 2 LEZ, released by an owner approval this account did not sign. The demonstration in [`limitations.md`](limitations.md) | 6 |
 
 **This account has now been paid, and this section used to say it never had
 been.** It read "nothing else, ever … balance 0, nonce 1", on the reasoning that
@@ -650,10 +662,15 @@ the blockchain agent is the client in every settlement and so only ever pays.
 That stopped being true when the storage agent started buying from it: the four
 rows above are `./scripts/delivery-in-plugin.sh settle` runs, in which a **loaded
 module** discovers this agent's card, opens a task and pays the advertised 1 LEZ
-into this account. `getAccount` reports balance 4, nonce 1 — the nonce is still 1
-because every one of the four is a credit, and a credit does not move a nonce.
+into this account. `getAccount` reports balance **6**, nonce 1 — the nonce is still 1
+because every one of the five is a credit, and a credit does not move a nonce.
 So "Paid at" in the agents table now means "has been paid at" for all three
 agents.
+
+**The fifth is not a settlement**, and it is the reason this account is worth
+re-reading: it is `spend_approved`, the branch an owner approval unlocks, paying
+2 LEZ over a ceiling of 1. It is the only above-threshold payment on this chain
+made by anything in this repository.
 
 ### What the ledger says about the evidence
 
