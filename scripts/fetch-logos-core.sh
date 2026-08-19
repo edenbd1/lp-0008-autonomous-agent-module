@@ -30,6 +30,12 @@
 # of them.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Every other script here guards this line, and this one did not, because the
+# guard was written for `cd "$ROOT"` and this script never cds. The hazard is the
+# same and the consequence is worse: `$ROOT` is interpolated into a path, so a
+# failed subshell leaves it empty and DEST becomes `/_external/logos-core` — the
+# filesystem root — which is where 278 MB would then be unpacked.
+[ -n "$ROOT" ] || { echo "cannot resolve the repository root from $0" >&2; exit 1; }
 
 DEST="${1:-$ROOT/_external/logos-core}"
 VERSION="${BASECAMP_VERSION:-0.2.2}"
