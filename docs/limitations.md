@@ -1427,9 +1427,17 @@ invoked. The shim is not decoration: with the same `PATH` and
   publishes. Not measured here: this repository is cloned, not downloaded as a
   zip, in every procedure it documents.
 
-## The standalone-sequencer e2e cannot go green while this repository is private
+## CLOSED: the standalone-sequencer e2e is green in CI
 
-Not a flaky job, not an unlucky draw, and not something a longer timeout fixes.
+**It is green.** [Run `32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786)
+— success, 3 h 03, `RISC0_DEV_MODE: 0`, on a commit this branch contains. The
+lifecycle ends with a payment inside the envelope moving a recipient 0 → 50 read
+back from the chain, and a payment above the ceiling refused with
+`Program error 6005` leaving that balance untouched.
+
+This section is kept because what blocked it for five runs was not a flaky job,
+not an unlucky draw, and not something a longer timeout fixes — and because the
+diagnosis took a day to reach.
 GitHub's own documentation gives the standard `ubuntu-latest` runner as **4 CPU
 and 16 GB for public repositories and 2 CPU and 8 GB for private ones**, and
 every run of this job matches that split exactly:
@@ -1448,20 +1456,14 @@ Three proofs at that rate exceed five hours before the build steps are counted,
 and 340 minutes is not a budget anyone chose — it is the ceiling for a
 GitHub-hosted job.
 
-So there is nothing to tune. Re-dispatching does not help either, because the
-runner class is not drawn at random: it follows the repository's visibility, and
-this repository is private. Five consecutive small runners is not a coincidence,
-it is the documented allocation.
+There was nothing to tune, and re-dispatching did not help, because the runner
+class is not drawn at random: it follows the repository's **visibility**. Five
+consecutive small runners was not a coincidence, it was the documented
+allocation, and the repository was private at the time. It is public now, the
+job draws the four-core machine, and it passes.
 
-**The unlock is the same click three criteria already need.** "Full documentation
-and a clean **public** repository are delivered" is one criterion; "**Public
-repository** with the Logos Core module…" is the first submission requirement;
-and this job is the third. Making the repository public satisfies the first two
-directly and makes the third achievable, because the same workflow then runs on
-the four-core machine it was measured on.
-
-Until then the job refuses a runner it cannot finish on — a red in forty
-seconds, naming the reason, rather than five hours and forty minutes spent
+The guard stays: the job still refuses a runner it cannot finish on — a red in
+forty seconds naming the reason, rather than five hours and forty minutes
 arriving at the same place. `E2E_ALLOW_SMALL_RUNNER=1` spends them anyway.
 
 **And the lifecycle itself is not in question, which is worth separating from
