@@ -264,10 +264,23 @@ jobs:
       # same trap.
       - uses: actions/cache@v4
         with:
+          # `_external/logos-delivery` is the DRIVERS' revision of the library.
+          # It was not cached, so the second Nim build ran from scratch on every
+          # run — the thirty-odd minutes docs/limitations.md called "a cache path
+          # away from not being". Unlike `~/.nimble`, which was REMOVED from this
+          # list, a build tree is not a toolchain: restoring one over a fresh
+          # install is what broke bc1de5b, and a build tree has no fresh install
+          # to overwrite.
+          #
+          # These comments sit above the key on purpose: `path: |` is a literal
+          # block, so a `#` inside it is not a comment — it is a path. The first
+          # version of this change put them inside and turned every word into a
+          # directory to cache.
           path: |
             build-companions/src
             build-companions/logos-delivery
             build-companions/build
+            _external/logos-delivery
           # `~/.nimble` USED TO BE HERE and had to go. This step runs after the
           # Nim install above, so restoring a cached `~/.nimble` overwrote the
           # toolchain that step had just put there — and nothing noticed, because

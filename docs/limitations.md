@@ -1637,10 +1637,16 @@ four-module load, both negative controls, and the file-vault use case — a real
 Storage node returning a CID, a real Delivery node carrying it, and the bytes
 coming back and decrypting.
 
-One caveat that costs time rather than correctness: `actions/cache` covers
-`build-companions/logos-delivery` and not `_external/logos-delivery`, so the
-second build is from scratch on every run. That is thirty-odd minutes a run,
-and it is a cache path away from not being.
+One caveat that used to cost time rather than correctness: `actions/cache`
+covered `build-companions/logos-delivery` and not `_external/logos-delivery`, so
+the second build ran from scratch every time — thirty-odd minutes a run. The path
+is in the list now.
+
+The reason it was worth being careful about rather than obvious: `~/.nimble` was
+*removed* from that same list in the commit before, because the cache step runs
+after the Nim install and was restoring a stale toolchain over a fresh one. A
+build tree and a toolchain are not the same kind of thing to cache, and the
+difference is that a build tree has no fresh install to overwrite.
 
 ## One command, and what it needs before it will run
 
