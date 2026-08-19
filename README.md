@@ -1399,13 +1399,20 @@ is the fix, and running it is cheaper than reading for it.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+Dual-licensed under [MIT](LICENSE) or [Apache-2.0](LICENSE-APACHE), at your
 option — as `Cargo.toml` also declares (`license = "MIT OR Apache-2.0"`).
 
-The root [`LICENSE`](LICENSE) is now the **verbatim MIT text** rather than a
-pointer to the other two files, and the reason is worth a sentence. GitHub's
-licence detector matches file contents against known texts; a file that merely
-*describes* a dual grant matches nothing, so the repository sidebar read
-**"Other"** — which is what a reviewer sees before they read a word of this. The
-grant has not changed: Apache-2.0 remains available under
-[`LICENSE-APACHE`](LICENSE-APACHE), at your option, and every crate declares both.
+**Two files, one per licence, and there used to be three.** The root
+[`LICENSE`](LICENSE) once *described* the dual grant instead of carrying a
+licence text; GitHub's detector matches file contents against known texts, so it
+matched nothing and the sidebar read **"Other"** — which is what a reviewer sees
+before reading a word of this. Replacing it with the verbatim MIT text fixed
+that and left `LICENSE-MIT` beside it holding the identical bytes, so the
+repository then advertised **"MIT license" twice** in its own header. One of the
+two is gone; the grant has not changed, and Apache-2.0 remains available under
+[`LICENSE-APACHE`](LICENSE-APACHE) at your option.
+
+`module/third-party/liblogosdelivery/` keeps its own `LICENSE-MIT` and
+`LICENSE-APACHE`. Those are upstream's files, travelling with a binary this
+package redistributes, and they are a condition of redistributing it rather than
+a copy of ours.
