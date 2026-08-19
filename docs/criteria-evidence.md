@@ -53,10 +53,11 @@ evidence and the command that re-derives it; what does not work is in
   files only under `lib/` and `generated_code/`. Both halves were watched failing.
 
   **And it now runs in CI, on Linux, from the published sources.** In
-  [run `32031221051`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32031221051)
-  on `e3e3101`, on a bare `ubuntu-latest` runner that starts with none of this
-  installed, all six builds succeed — the Delivery library from source, the Go
-  wallet SDK, and the three companion modules — and then:
+  [run `32040423074`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32040423074)
+  on `d2ac806` — **the whole workflow green** — on a bare `ubuntu-latest` runner
+  that starts with none of this installed, all six builds succeed — the Delivery
+  library from source, the Go wallet SDK, and the three companion modules — and
+  then:
 
   | step | |
   |---|---|
@@ -73,6 +74,15 @@ evidence and the command that re-derives it; what does not work is in
   `zDvZRwzm9Ni32iyvoy868YVrBHFz8vo3oZirrCKhFMMn9aXuinfQ`, published on
   `/lp0008/1/owner-vault/proto` through a real Delivery node, fetched back by
   content address alone and decrypted with the owner's key.
+
+  **This entry used to cite run `32031221051`, and that run is red.** Steps 16, 17
+  and 18 really did succeed in it — checked step by step — but step 19 failed
+  there, which is what made the run fail, and the sentence above said step 19
+  "passes too" in "the same job" while the paragraph below it said the step was
+  red until a later commit. A reviewer clicking the link saw a cross. The link is
+  now the run where all four steps are green, and the two are one commit apart:
+  `32031221051` on `e3e3101` has 16/17/18 success and 19 failure, `32040423074`
+  on `d2ac806` has all four success.
 
   That step was red until `d2ac806` and the reason is worth keeping: the
   companion module and this repository's own driver need **different revisions
