@@ -1065,7 +1065,7 @@ drives the file-vault use case end to end: a file encrypted, stored on a real
 Storage node under CID `zDvZRwzm9Ni32iyvoy868YVrBHFz8vo3oZirrCKhFMMn9aXuinfQ`,
 published on `/lp0008/1/owner-vault/proto`, fetched back by content address
 alone and decrypted. So "the Delivery node runs are local, not CI" — which this
-heading said until today — is no longer true.
+heading said until 2026-08-17 — is no longer true.
 
 **`scripts/exercise-nodes.sh` is still a local command**, and that is a
 different statement. It drives both node libraries directly rather than through

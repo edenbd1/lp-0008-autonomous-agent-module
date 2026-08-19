@@ -339,7 +339,7 @@ Real output:
   ledger 7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp
   OK   it still reads 50 for period 8000: the sum of every price charged to it
   Public/5Sa13NyN… holds 95 LEZ right now, by getAccount
-       current state, not a settlement figure — this account has been spent from since
+       current state, not a settlement figure — this account keeps moving in both directions
        the payer is a shielded account, so only the credit side is publicly readable
 ```
 
