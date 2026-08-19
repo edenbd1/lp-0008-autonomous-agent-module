@@ -1,0 +1,22 @@
+{
+  "name": "agent_ui",
+  "display_name": "LP-0008 Agent",
+  "version": "0.1.0",
+  "type": "ui",
+  "category": "agent",
+  "author": "edenbd1",
+  "description": "Owner console for the LP-0008 autonomous agent: bind it, start it, read its Agent Card, invoke a skill, and answer the spends it asks the owner to approve",
+  "main": "agent_ui",
+  "view": "",
+  "dependencies": ["agent"],
+  "build": {
+    "type": "cmake",
+    "files": [
+      "src/plugin.h",
+      "src/plugin.cpp",
+      "src/agent_console.h",
+      "src/agent_console.cpp",
+      "src/metadata.json"
+    ]
+  }
+}

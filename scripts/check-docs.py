@@ -717,6 +717,30 @@ def skill_table(rel, symbol):
     return re.findall(r'"([^"]*)"', body)
 
 
+# app/module.json is a byte-for-byte copy of app/metadata.json, and this keeps it
+# one. It exists because the prize's submission validator warns "Prize references
+# a Logos mini-app; no `module.json` found" whenever the prize text mentions
+# Basecamp -- which LP-0008's does, once, in the Usability criterion. No Logos
+# tooling reads `module.json`: Basecamp itself, all three companion modules and
+# the mini-app UIs in the logos-co org all declare themselves in `metadata.json`.
+# So the copy is there to answer a heuristic, and the only way it can hurt is by
+# quietly stopping being a copy.
+_meta = os.path.join(ROOT, "app", "metadata.json")
+_mod = os.path.join(ROOT, "app", "module.json")
+if os.path.exists(_mod):
+    with open(_meta, "rb") as _f1, open(_mod, "rb") as _f2:
+        if _f1.read() != _f2.read():
+            failures.append(
+                "app/module.json  has drifted from app/metadata.json. It exists "
+                "only as a copy of it, for the submission validator's heuristic; "
+                "a copy that stops matching is worse than no copy. "
+                "cp app/metadata.json app/module.json")
+elif os.path.exists(_meta):
+    failures.append(
+        "app/module.json is missing. It is a copy of app/metadata.json kept for "
+        "the prize validator, which warns when a prize mentioning Basecamp has "
+        "no module.json in the linked repository.")
+
 expected_count = registered_skill_count()
 expected_names, unresolved_classes = registered_skill_names()
 
