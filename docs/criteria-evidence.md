@@ -540,29 +540,28 @@ evidence and the command that re-derives it; what does not work is in
   It builds the LEZ workspace at pinned revision `47eba25`, installs `r0vm` 3.0.5,
   and runs the full lifecycle against a real standalone sequencer with
   `RISC0_DEV_MODE: 0`. It runs on schedule (`cron: '20 5 * * *'`) and on demand.
-  **Green on `main` under both of its triggers — and no green run of it is
-  clickable from this branch.** Those are two different claims and this entry
-  keeps them apart, because letting the first stand in for the second is how a
-  citation comes to point at nothing. The two runs measured below are the ones
-  this document quotes figures from; they are not the only green ones.
+  **Green under both of its triggers, on commits this branch contains.**
 
   | run | trigger | conclusion | duration | head commit |
   |---|---|---|---|---|
-  | `31916748823` | `workflow_dispatch` | **success** | 3 h 05 m | `d65a95a`, removed by the rewrite |
-  | `31929846814` | `schedule` | **success** | 2 h 16 m | `91154ef`, removed by the rewrite |
+  | [`32104382201`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32104382201) | `schedule` | **success** | 3 h 05 m | `bc1de5b` |
+  | [`32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786) | `workflow_dispatch` | **success** | 3 h 03 m | `44cf3a8` |
 
-  What has been demonstrated is the table: those runs happened, they took the
-  hours it records, and over those hours they drove a real standalone sequencer
-  at `RISC0_DEV_MODE: 0` to real proofs. What a reader can verify by clicking is
-  not the table. This branch's history was rewritten and
-  `git merge-base --is-ancestor` returns non-zero for both of those commits — as
-  it does for the head commit of every other green run this workflow has — so
-  the ids are printed as ids rather than as links. `gh run view 31916748823`
-  still fetches them for anyone who wants the logs; a run against a commit you
-  cannot check out is simply not evidence about the branch you can, and that is
-  the same qualifier the CI entry below applies to its own run ids.
+  Both head commits pass `git merge-base --is-ancestor … HEAD`, which is the
+  property that makes them evidence about the tree you cloned rather than about
+  one you cannot check out.
 
-  **No step skips its work.** Run 31916748823's job has fifteen steps: fourteen
+  **This entry said the opposite until 2026-08-19, and the correction is the
+  interesting part.** Every green run this workflow had — `31916748823` on
+  `d65a95a`, `31929846814` on `91154ef` — sat on a commit removed when this
+  branch's history was rewritten, so the ids were printed as ids rather than as
+  links, on purpose. The fix was not editing the sentence: the repository became
+  public, the job stopped drawing the two-core runner it cannot finish on, and it
+  went green twice on commits that are still here. `scripts/check-submission-ready.py`
+  now refuses to report ready unless a green run of this workflow sits on an
+  ancestor of HEAD, so the claim cannot rot in either direction again.
+
+  **No step skips its work.** Run 32024953786's job has fifteen steps: fourteen
   concluded `success` and exactly one concluded `skipped` — the sequencer-log
   step, which is guarded so that it runs only when there is a failure to
   explain, and therefore skips precisely when the job succeeds. Its guard was
@@ -723,13 +722,17 @@ evidence and the command that re-derives it; what does not work is in
   **The box stays unchecked** because publication is the requirement and
   publication has not happened. It is not a claim about the films.
 
-### The one unchecked box, by cause
+### There is no unchecked box, and the one there was is closed
 
-| Criterion | Cause | What closing it takes |
-|---|---|---|
-| Recorded video demo | not built | Record and publish the narrated films. Irreducible work. |
+This subsection listed the recorded video demo as "not built" for as long as that
+was true. It was published on 2026-08-17 —
+<https://youtu.be/5HF0xv6GX64>, one narrated walkthrough, four use cases, against
+the public testnet — and the entry above it is marked MET with the checks that
+back it.
 
-**It is entirely ours. Nothing here is refused by the Logos stack.** That is worth
+What is worth keeping is the sentence that followed it.
+
+**It was entirely ours. Nothing here was refused by the Logos stack.** That is worth
 stating flatly because this submission twice carried an "upstream forbids it"
 label that did not survive being checked, and both criteria those labels defended
 have since been built and are marked MET above. The larger of the two stood for

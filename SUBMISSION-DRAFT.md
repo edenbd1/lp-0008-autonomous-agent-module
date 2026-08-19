@@ -1765,29 +1765,28 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   run, which is worse than red because nobody looks at it again. If this cannot
   run, it fails.
 
-  **This workflow has run green, and no green run of it is clickable from this
-  branch.** Both halves are true, they are different claims, and this entry
-  states them apart rather than letting one stand in for the other.
+  **This workflow is green on a commit this branch contains**, which is a
+  stronger statement than "it has run green" and is the one that matters — a run
+  against a commit you cannot check out is not evidence about the branch you can.
 
-  *What has been demonstrated.* Two measured runs: `31916748823` (`success`,
-  3 h 05 m, by dispatch) and `31929846814` (`success`, 2 h 16 m, by schedule),
-  and they are not the only green runs this workflow has. Each ran the full
+  | run | trigger | | head commit |
+  |---|---|---|---|
+  | [`32104382201`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32104382201) | schedule | **success**, 3 h 05 | `bc1de5b` |
+  | [`32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786) | dispatch | **success**, 3 h 03 | `44cf3a8` |
+
+  Both head commits pass `git merge-base --is-ancestor … HEAD`. Each ran the full
   lifecycle against a real standalone sequencer at `RISC0_DEV_MODE: 0` and
-  produced real proofs over those hours. That happened, and the measurements
-  from it stay in this document.
+  produced real proofs over those hours.
 
-  *What a reader can check by clicking.* No green run — not on this branch. The
-  head commit of every green run this workflow has, `d65a95a` and `91154ef`
-  among them, was removed when this branch's history was rewritten, and
-  `git merge-base --is-ancestor` returns non-zero for each of them. That is why
-  the two ids above are printed as ids and not as links.
-  `gh run view 31916748823` still fetches the logs for anyone who wants them;
-  what this document will not do is offer that as something you can hold the
-  tree you cloned to, because a run against a commit you cannot check out is not
-  evidence about the branch you can. An earlier version of this paragraph said "at the
-  commit this document describes"; that was the third time a hash written into a
-  rebased branch stopped naming anything, which is the reason the top of this
-  file pins nothing.
+  **This paragraph said the opposite for two days, and the reason is worth
+  keeping.** Every green run this workflow had — `d65a95a` and `91154ef` among
+  them — sat on a commit removed when this branch's history was rewritten, so the
+  ids were printed as ids rather than as links, deliberately. What changed is not
+  the wording: the repository became public, the job stopped drawing a two-core
+  runner it cannot finish on, and it went green twice on commits that are still
+  here. `scripts/check-submission-ready.py` now refuses to report ready unless at
+  least one green run of this workflow sits on an ancestor of HEAD, so this
+  paragraph cannot quietly go stale in the other direction either.
 
   A run of this workflow whose commit this branch **does** contain —
   [31950647965](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/31950647965)
@@ -2004,10 +2003,10 @@ sentence was re-read. All three were built and run:
   "the same build-once-per-platform job that closed the variants, and the same
   three containers" — was right, and it was one afternoon.
 
-### The one unchecked box, by cause
+### The boxes that were once unchecked, and when each closed
 
-A reader should be able to read this table instead of the prose above and get
-the same answer about what is missing and whose it is.
+A reader should be able to read this table instead of the prose above and get the
+same answer about what was missing and whose it was. Nothing is unchecked now.
 
 | Criterion | Cause | What closing it takes |
 |---|---|---|
