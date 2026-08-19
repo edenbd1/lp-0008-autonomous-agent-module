@@ -188,7 +188,9 @@ not, which is irreversible for them. What it did not need was a new agent: the
 owner provisioned for the approval demonstration below, `HCV2Y4Vf…`, is claimed,
 sits at nonce 3 with a balance of 0, and a claimed account signs indefinitely.
 
-    fa9651a70e79f9d5af051411a18d7fd2aa8e3e8a917101640aa34e0ff65ace52
+[`fa9651a7…f65ace52`](https://explorer.testnet.lez.logos.co/transaction/fa9651a70e79f9d5af051411a18d7fd2aa8e3e8a917101640aa34e0ff65ace52) —
+on the explorer, under program `778a9341…e670c4661`, which is the shipped
+program's ImageID byte for byte.
 
 Signed by that owner, against policy account `DaFSZy2u…V4kJ`. Read back off the
 chain, the record moved `per_tx` from 1 to 5 and left everything else exactly as
