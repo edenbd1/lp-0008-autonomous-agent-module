@@ -162,6 +162,39 @@ otool -L build-ui/agent_ui.dylib | grep QtCore   # @rpath, current version 6.9.2
 nm -u build-ui/agent_ui.dylib | grep -i logos    # 7 undefined symbols, and that is correct
 ```
 
+### The one rpath in the shipped plugin, and why it is harmless — measured
+
+`otool -l` on the committed `darwin-arm64` binary shows a single `LC_RPATH`, and
+it names the machine that built it:
+
+```
+path /Users/eden/logos/Qt/6.9.2/macos/lib
+```
+
+`app/CMakeLists.txt` sets `$ORIGIN` on ELF and leaves macOS alone deliberately,
+on the reasoning that a plugin Basecamp `dlopen`s resolves Qt through the host's
+own frameworks. That reasoning was an argument for as long as it stood here, and
+everything else in this repository is watched rather than argued, so it was
+measured instead:
+
+| run | Qt at the build path | Basecamp's Qt in the process | result |
+|---|---|---|---|
+| control | present | — | past Qt, stops at the undefined Logos symbols |
+| **the reviewer's case** | **renamed away** | pre-loaded, no `DYLD_*` set | **past Qt, stops at the same symbols** |
+| the control that makes it evidence | renamed away | **not loaded** | fails earlier: `Library not loaded: @rpath/QtWidgets.framework/…` |
+
+The loader used carries no `LC_RPATH` of its own, which is what
+`/Applications/LogosBasecamp.app/Contents/MacOS/LogosBasecamp` also has — none at
+all. So the resolution in row two came from the frameworks already in the
+process, matched by install name, and not from the dead path in the plugin or
+from an environment variable. Row three is what tells those apart: without the
+pre-load the same binary cannot find Qt at all.
+
+What that leaves is one inert string naming a directory on the build machine.
+It is a leak of a home directory into a redistributed binary and not a load
+failure, and it is written down here rather than removed, because removing it
+means rebuilding a committed artefact whose record is checked byte for byte.
+
 Undefined `LogosAPI` / `LogosAPIClient` symbols are the design, not a build
 error. They resolve at load time against the `liblogos_core` Basecamp already
 has in its process — which is exactly what `nm -u` on Basecamp's own

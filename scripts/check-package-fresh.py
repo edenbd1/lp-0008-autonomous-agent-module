@@ -1429,8 +1429,10 @@ def check_app_package(repo, r):
         if shape["rpaths"]:
             r.note("%s carries rpath(s) %s. Not a failure here and it is one for "
                    "the harness: a package plugin is dlopen'd by Basecamp and "
-                   "resolves Qt through the host's own rpath, which is why this "
-                   "one loads on machines that have no such directory."
+                   "resolves Qt against the frameworks already in that process, "
+                   "matched by install name — measured with the build path "
+                   "renamed away, and with a control that fails earlier when "
+                   "Qt is not pre-loaded (app/README.md)."
                    % (member, ", ".join(shape["rpaths"])))
 
     # ---- layer 1: the record describes THIS source ------------------------
