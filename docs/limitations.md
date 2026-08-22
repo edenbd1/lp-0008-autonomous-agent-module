@@ -1646,10 +1646,26 @@ it greps the generated header for `LogosdeliverySendReq` and refuses if that is
 the module's pin. Pointing at a library and pointing at the correct one are
 different questions, and only the first was being asked.
 
-The whole workflow is green as of run `32040423074`: all six builds, the
-four-module load, both negative controls, and the file-vault use case — a real
-Storage node returning a CID, a real Delivery node carrying it, and the bytes
-coming back and decrypting.
+The whole workflow is green as of run `32582715045` on `4f4ede8`: all six
+builds, the four-module load, both negative controls, and the file-vault use case
+— a real Storage node returning a CID, a real Delivery node carrying it, and the
+bytes coming back and decrypting.
+
+**It was red for three days in between, and the cause is worth keeping.** The
+Logos Messaging step died with `Illegal instruction (core dumped)` while every
+other step of the use case passed, on a commit where nothing on that path had
+changed. It was the companion cache. Both green runs logged *"Cache not found"*
+and built fresh; all three red ones logged *"Cache restored from key:
+companions-Linux-…"*, with identical pinned revisions, identical Nim, and — on
+the first red — identical rustc. Same inputs, different machine, different
+outcome. That cache carries compiled native libraries and its key named nothing
+about the machine that produced them, while `restore-keys` let any older entry
+match; GitHub's hosted pool mixes CPU generations, so a `liblogosdelivery` built
+where AVX-512 exists and restored where it does not is a SIGILL on first call.
+The key and the restore prefix now hash `/proc/cpuinfo` flags. This is the
+`~/.nimble` lesson above one level harder: caching a toolchain over a fresh
+install of itself costs a build; caching a native binary onto a different CPU
+costs the run.
 
 One caveat that used to cost time rather than correctness: `actions/cache`
 covered `build-companions/logos-delivery` and not `_external/logos-delivery`, so

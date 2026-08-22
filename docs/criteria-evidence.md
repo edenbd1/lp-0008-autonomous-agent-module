@@ -53,8 +53,8 @@ evidence and the command that re-derives it; what does not work is in
   files only under `lib/` and `generated_code/`. Both halves were watched failing.
 
   **And it now runs in CI, on Linux, from the published sources.** In
-  [run `32040423074`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32040423074)
-  on `d2ac806` — **the whole workflow green** — on a bare `ubuntu-latest` runner
+  [run `32582715045`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32582715045)
+  on `4f4ede8`, this branch's head — **the whole workflow green** — on a bare `ubuntu-latest` runner
   that starts with none of this installed, all six builds succeed — the Delivery
   library from source, the Go wallet SDK, and the three companion modules — and
   then:
