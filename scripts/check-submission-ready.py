@@ -193,6 +193,40 @@ def main():
             notes.append("the e2e is green on this branch: run %s on %s"
                          % (good[0]["databaseId"], good[0]["headSha"][:7]))
 
+    # 4b. and no workflow is currently RED on HEAD.
+    #
+    # The check above asks whether a GREEN run exists on a commit this branch
+    # contains. That is necessary and it is not enough: a workflow can be green on
+    # an ancestor and red on HEAD, and the citation still passes while a reviewer
+    # opening the Actions tab sees failures. That is precisely what happened —
+    # 'alongside the companion modules' went red for three consecutive days on the
+    # submission's own head commit, with the criterion it backs citing a green run
+    # from five days earlier. The citation was true. The picture was not.
+    latest = sh("gh", "run", "list", "--limit", "60", "--json",
+                "name,conclusion,headSha,databaseId")
+    if latest.returncode != 0:
+        failures.append("could not ask GitHub for the latest workflow runs: "
+                        + latest.stderr.strip()[:120])
+    else:
+        head = sh("git", "rev-parse", "HEAD").stdout.strip()
+        seen, red = set(), []
+        for r in json.loads(latest.stdout or "[]"):
+            if r.get("headSha") != head or r["name"] in seen:
+                continue
+            seen.add(r["name"])          # newest first, so this is the latest run
+            if r.get("conclusion") == "failure":
+                red.append((r["name"], r["databaseId"]))
+        for name, rid in red:
+            failures.append(
+                "'%s' is RED on HEAD (run %s). A reviewer opening the Actions tab "
+                "sees that before reading any citation. Fix it, or say in the "
+                "document that it is red and why." % (name, rid))
+        if seen and not red:
+            notes.append("every workflow that ran on HEAD is green (%d)" % len(seen))
+        elif not seen:
+            notes.append("no workflow has run on HEAD yet — nothing to contradict, "
+                         "and nothing to show either")
+
     # 5. nothing that points outside this repository
     leak = sh("git", "grep", "-nIE",
               r"competing submission|another submission|was closed with|"

@@ -262,6 +262,29 @@ jobs:
       # bump: this repository has been bitten by a warm target/ hiding a build
       # that no longer works, and a cache keyed on nothing in particular is the
       # same trap.
+      # This cache carries COMPILED NATIVE LIBRARIES, and the key did not say
+      # which machine compiled them. GitHub's hosted pool mixes CPU generations, so
+      # a `liblogosdelivery` built where AVX-512 exists and restored where it does
+      # not is a SIGILL waiting for the first call — which is exactly what happened:
+      # three consecutive red runs, `share_drive` dying with "Illegal instruction
+      # (core dumped)" on the Logos Messaging step while every other step passed.
+      # The correlation was total. Both green runs logged "Cache not found" and
+      # built fresh; all three red ones logged "Cache restored from key:
+      # companions-Linux-…", with identical pinned revisions, identical Nim, and —
+      # on the first red — identical rustc. Same inputs, different machine,
+      # different outcome.
+      #
+      # So the CPU's feature set is part of the key, and of the restore-keys prefix
+      # too: a near-miss restore must not cross a CPU generation either. Same lesson
+      # as the `~/.nimble` note below, one level harder — caching a toolchain over a
+      # fresh install of itself costs a build; caching a native binary onto a
+      # different CPU costs the run.
+      - name: The CPU this build will also run on
+        id: cpu
+        run: |
+          echo "sig=$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | sort \
+                        | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/cache@v4
         with:
           # `_external/logos-delivery` is the DRIVERS' revision of the library.
@@ -290,8 +313,8 @@ jobs:
           # died on `no nim on PATH`, one line apart. Caching a toolchain and
           # restoring it over a fresh install of the same toolchain saves a
           # minute and costs a build.
-          key: companions-${{ runner.os }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
-          restore-keys: companions-${{ runner.os }}-
+          key: companions-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
+          restore-keys: companions-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       - name: Build the three companion modules from their published sources
         env:
