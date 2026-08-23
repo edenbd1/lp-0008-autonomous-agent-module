@@ -126,14 +126,28 @@ jobs:
           PY_COUNTS
           rm -f check-docs.out
 
+      # A cache key that does not name the CPU can restore code compiled for one
+      # instruction set onto a machine that does not have it — a SIGILL on first
+      # call, which is exactly how three `alongside` runs died (32328278187,
+      # 32443822382, 32548844556) before that workflow put this md5 of
+      # /proc/cpuinfo's flags in its key. `target/` holds objects rustc compiled
+      # for the machine it ran on, and the tests in this job run them. The
+      # signature goes in the restore-keys prefix too: a near-miss restore must
+      # not cross a CPU generation either.
+      - name: The CPU this build will also run on
+        id: cpu
+        run: |
+          echo "sig=$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | sort \
+                        | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       # Every CI run this repository CITES must have run on a commit this
       # branch has. The history was rewritten once, for a good reason, and
@@ -214,6 +228,20 @@ jobs:
       # cached. Both target directories are cached: the workspace one for the
       # policy crate, and the adversarial checker's own, which is a separate
       # workspace precisely so `cargo build --workspace` does not pay for risc0.
+      # A cache key that does not name the CPU can restore code compiled for one
+      # instruction set onto a machine that does not have it — a SIGILL on first
+      # call, which is exactly how three `alongside` runs died (32328278187,
+      # 32443822382, 32548844556) before that workflow put this md5 of
+      # /proc/cpuinfo's flags in its key. Both target trees here are executed by
+      # demo.sh, including the risc0 executor, which is where a missing
+      # instruction would land. The signature goes in the restore-keys prefix
+      # too: a near-miss restore must not cross a CPU generation either.
+      - name: The CPU this build will also run on
+        id: cpu
+        run: |
+          echo "sig=$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | sort \
+                        | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -221,8 +249,8 @@ jobs:
             ~/.cargo/git
             target
             crates/agent-verifier-adversarial/target
-          key: demo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: demo-${{ runner.os }}-
+          key: demo-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: demo-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       # The guest is content-addressed and committed under artifacts/programs/.
       # Rebuilding it needs the risc0 docker toolchain and is done locally;
@@ -2557,6 +2585,19 @@ jobs:
       - name: The system library spel's smartcard dependency links against
         run: sudo apt-get update -qq && sudo apt-get install -y -qq pkgconf libpcsclite-dev
 
+      # A cache key that does not name the CPU can restore code compiled for one
+      # instruction set onto a machine that does not have it — a SIGILL on first
+      # call, which is exactly how three `alongside` runs died (32328278187,
+      # 32443822382, 32548844556) before that workflow put this md5 of
+      # /proc/cpuinfo's flags in its key. The `spel` binary built here is run by
+      # every use-case script below. The signature goes in the restore-keys
+      # prefix too: a near-miss restore must not cross a CPU generation either.
+      - name: The CPU this build will also run on
+        id: cpu
+        run: |
+          echo "sig=$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | sort \
+                        | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -2564,8 +2605,8 @@ jobs:
             ~/.cargo/git
             vendor/spel/target
             tools/shielded-receipt/target
-          key: spel-${{ runner.os }}-${{ hashFiles('vendor/spel/Cargo.lock', 'tools/shielded-receipt/Cargo.lock') }}
-          restore-keys: spel-${{ runner.os }}-
+          key: spel-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('vendor/spel/Cargo.lock', 'tools/shielded-receipt/Cargo.lock') }}
+          restore-keys: spel-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       # `spel` derives the PDAs these scripts check against the chain, and the
       # runner has no `spel` on PATH. It is built rather than skipped: a script
@@ -2876,6 +2917,19 @@ jobs:
       - name: The system library spel's smartcard dependency links against
         run: sudo apt-get update -qq && sudo apt-get install -y -qq pkgconf libpcsclite-dev
 
+      # A cache key that does not name the CPU can restore code compiled for one
+      # instruction set onto a machine that does not have it — a SIGILL on first
+      # call, which is exactly how three `alongside` runs died (32328278187,
+      # 32443822382, 32548844556) before that workflow put this md5 of
+      # /proc/cpuinfo's flags in its key. The `spel` binary built here is run by
+      # 03-spending-ceiling.sh. The signature goes in the restore-keys prefix
+      # too: a near-miss restore must not cross a CPU generation either.
+      - name: The CPU this build will also run on
+        id: cpu
+        run: |
+          echo "sig=$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | sort \
+                        | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -2883,8 +2937,8 @@ jobs:
             ~/.cargo/git
             vendor/spel/target
             target
-          key: spel-uc03-${{ runner.os }}-${{ hashFiles('vendor/spel/Cargo.lock', 'Cargo.lock') }}
-          restore-keys: spel-uc03-${{ runner.os }}-
+          key: spel-uc03-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('vendor/spel/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: spel-uc03-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       - name: Build spel
         run: |
