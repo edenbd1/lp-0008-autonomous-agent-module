@@ -1777,6 +1777,7 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
 
   | run | trigger | | head commit |
   |---|---|---|---|
+  | [`32621320255`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32621320255) | schedule | **success**, 3 h 04 | `e23cc55` — the head |
   | [`32104382201`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32104382201) | schedule | **success**, 3 h 05 | `bc1de5b` |
   | [`32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786) | dispatch | **success**, 3 h 03 | `44cf3a8` |
 
@@ -1835,10 +1836,11 @@ A further 3 rows belong to superseded programs — `a780003b…` (3). Those tran
   shipped module, headless, on Linux`, `The same command, on a machine with no
   compiler at all`, `The illustrative use cases verify against the public
   testnet`, and `The spending ceiling is account data, and the chain keeps it`.
-  Two further workflows carry what cannot be fast, both scheduled and on demand
-  and neither with a skip path: `alongside-companion-modules.yml` runs the agent
+  Two further workflows carry what cannot be fast, and neither has a skip path:
+  `alongside-companion-modules.yml` — scheduled and on demand — runs the agent
   beside the wallet, storage and messaging modules built from their published
-  sources, and `e2e-local-sequencer.yml` runs the lifecycle below.
+  sources, and `e2e-local-sequencer.yml` runs the lifecycle below, scheduled, on
+  demand, and on pushes to `main` that touch its own inputs.
 
   **The green streak that was read out of the runs covered the eight jobs that
   existed when it was read**, and it is stated that way rather than extended by a

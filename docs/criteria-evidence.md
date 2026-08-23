@@ -550,17 +550,33 @@ evidence and the command that re-derives it; what does not work is in
   **"e2e vs local sequencer"**, job **"policy lifecycle vs standalone sequencer"**.
   It builds the LEZ workspace at pinned revision `47eba25`, installs `r0vm` 3.0.5,
   and runs the full lifecycle against a real standalone sequencer with
-  `RISC0_DEV_MODE: 0`. It runs on schedule (`cron: '20 5 * * *'`) and on demand.
-  **Green under both of its triggers, on commits this branch contains.**
+  `RISC0_DEV_MODE: 0`. It runs nightly (`cron: '20 5 * * *'`), on demand, and on
+  every push to `main` that touches the deployed program, the IDL, the vendored
+  `spel`, the crates, or the script and workflow that drive them.
+  **Green on this branch's head commit itself, and under each trigger that has
+  fired.**
 
   | run | trigger | conclusion | duration | head commit |
   |---|---|---|---|---|
+  | [`32621320255`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32621320255) | `schedule` | **success** | 3 h 04 m | `e23cc55` — **the head of this branch** |
   | [`32104382201`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32104382201) | `schedule` | **success** | 3 h 05 m | `bc1de5b` |
   | [`32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786) | `workflow_dispatch` | **success** | 3 h 03 m | `44cf3a8` |
 
-  Both head commits pass `git merge-base --is-ancestor … HEAD`, which is the
-  property that makes them evidence about the tree you cloned rather than about
-  one you cannot check out.
+  The first row is the one that carries the criterion: it ran on the commit a
+  clone gives you, not on an ancestor of it. **This entry cited only the third
+  row until 2026-08-23** — a run 54 commits and five days behind the head —
+  while a green run on the head itself was sitting in the Actions tab unnamed.
+  The other two rows are kept rather than deleted: the second is the same
+  workflow green on an earlier commit, and the third is the only run under
+  `workflow_dispatch`, which is what shows that trigger works.
+
+  **The `push:` trigger is not in that table, and will not be until it fires.**
+  It was added to the workflow in the same commit as this paragraph, so no run
+  of it exists yet; a table claiming three triggers on the evidence of two would
+  be the defect this document keeps being corrected for. All three head commits
+  pass `git merge-base --is-ancestor … HEAD`, which is the property that makes
+  them evidence about the tree you cloned rather than about one you cannot check
+  out.
 
   **This entry said the opposite until 2026-08-19, and the correction is the
   interesting part.** Every green run this workflow had — `31916748823` on
@@ -572,7 +588,7 @@ evidence and the command that re-derives it; what does not work is in
   now refuses to report ready unless a green run of this workflow sits on an
   ancestor of HEAD, so the claim cannot rot in either direction again.
 
-  **No step skips its work.** Run 32024953786's job has fifteen steps: fourteen
+  **No step skips its work.** Run 32621320255's job has fifteen steps: fourteen
   concluded `success` and exactly one concluded `skipped` — the sequencer-log
   step, which is guarded so that it runs only when there is a failure to
   explain, and therefore skips precisely when the job succeeds. Its guard was

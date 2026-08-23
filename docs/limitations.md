@@ -1443,8 +1443,9 @@ invoked. The shim is not decoration: with the same `PATH` and
 
 ## CLOSED: the standalone-sequencer e2e is green in CI
 
-**It is green.** [Run `32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786)
-— success, 3 h 03, `RISC0_DEV_MODE: 0`, on a commit this branch contains. The
+**It is green.** [Run `32621320255`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32621320255)
+— success, 3 h 04, `RISC0_DEV_MODE: 0`, on this branch's head commit `e23cc55`
+itself rather than on an ancestor of it. The
 lifecycle ends with a payment inside the envelope moving a recipient 0 → 50 read
 back from the chain, and a payment above the ceiling refused with
 `Program error 6005` leaving that balance untouched.
