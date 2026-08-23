@@ -48,13 +48,24 @@ cd lp-0008-autonomous-agent-module
 ```
 
 **`--depth 1` on purpose, and it is worth the four characters.** Measured
-against this repository: `--depth 1` fetches **51 MB**, a full clone **222 MB**.
+against this repository, and stated as two different quantities because they are
+two different quantities: `--depth 1` **transfers 21 MiB** over the network and
+leaves **51 MB on disk**; a full clone **transfers 177 MiB** and leaves **222 MB
+on disk**. The transferred figure is what `git clone --progress` reports on the
+`Receiving objects: 100%` line; the on-disk figure is `du -sh` over the clone.
 The difference is history, not content — `module/agent.lgx` is an 18 MB packaged
 plugin and **twenty** versions of it have been committed as it was rebuilt.
 Nothing below needs any of them. Drop the flag if you want the history; the
 working tree is identical either way.
 
-The two sizes are properties of the repository and reproduce. The wall-clock
+**This paragraph gave two on-disk sizes and called them what is fetched.** It
+said `--depth 1` "fetches 51 MB" — 51 MB is `du -sh` over the finished shallow
+clone, and the fetch is 21 MiB, because a pack arrives compressed and is
+expanded into a working tree on arrival. The full-clone number had the same
+defect: 222 MB on disk against 177 MiB on the wire. Both pairs are above, so
+whichever one you go to measure, the number you get is here.
+
+The four sizes are properties of the repository and reproduce. The wall-clock
 times are not, and this paragraph used to give them as though they were: it said
 nine seconds and fifty-seven, and the same two clones on a faster link now take
 four and thirty. Time a clone on your own link if you want the number; the ratio
