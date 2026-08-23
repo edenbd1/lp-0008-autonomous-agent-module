@@ -504,11 +504,16 @@ deliberately, by what they cost. Only the first is on the push path:
   1 against real Storage and Messaging nodes as the last step. It is not on the
   push path because it builds Nim, Go, four CMake trees and a Qt of its own, and
   a gate that slow on every push is a gate people learn to ignore.
-- `.github/workflows/e2e-local-sequencer.yml` — hours, scheduled: the
-  whole policy lifecycle against a real standalone LEZ sequencer with
-  `RISC0_DEV_MODE=0`. It has no skip path, deliberately: a job that completes
-  through one reports green without having run, which is worse than red. Neither
-  scheduled workflow has one, for that reason.
+- `.github/workflows/e2e-local-sequencer.yml` — hours; nightly, on demand, and
+  on every push to `main` that touches what it proves (the deployed program, the
+  IDL, the vendored `spel`, the crates, and the script and workflow themselves):
+  the whole policy lifecycle against a real standalone LEZ sequencer with
+  `RISC0_DEV_MODE=0`. On the push path it is grouped per commit with
+  `cancel-in-progress: false`, because the ref-grouped default would have each
+  push kill the three-hour proof the previous one started. It has no skip path,
+  deliberately: a job that completes through one reports green without having
+  run, which is worse than red. Neither of the two slow workflows has one, for
+  that reason.
 
 ## Reading order
 

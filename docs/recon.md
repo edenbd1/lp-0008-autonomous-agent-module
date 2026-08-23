@@ -138,14 +138,17 @@ command in a container that has no compiler on it at all (`toolchain-free`);
 the illustrative use cases against the public testnet (`use-cases`); and the
 spending ceiling read back off the chain that keeps it (`use-case-03`).
 
-The other two workflows are scheduled and on demand rather than on the push
-path, because each is hours where that one is minutes, and a slow gate is a
-gate people learn to ignore:
-`.github/workflows/e2e-local-sequencer.yml` runs the whole policy lifecycle
-against a real standalone sequencer, and
-`.github/workflows/alongside-companion-modules.yml` builds the wallet, storage
-and messaging modules from their published sources and runs the agent module in
-one runtime beside them, with use case 1 as its last step.
+The other two workflows are hours where that one is minutes, so neither gates
+every push — a slow gate on every commit is a gate people learn to ignore.
+`.github/workflows/alongside-companion-modules.yml` is scheduled and on demand
+only; it builds the wallet, storage and messaging modules from their published
+sources and runs the agent module in one runtime beside them, with use case 1 as
+its last step. `.github/workflows/e2e-local-sequencer.yml` runs the whole policy
+lifecycle against a real standalone sequencer, and is scheduled, on demand, **and
+on pushes to `main` that touch its own inputs** — the deployed program, the IDL,
+the vendored `spel`, the crates, and the script and workflow that drive them.
+Measured over the last hundred commits, 16 of them would have started it; the
+other 84 are documents and would not.
 
 **Retracted: "the Linux plugin build is not in CI, and the job is removed until
 it passes."** That was written about a *compile* that failed on

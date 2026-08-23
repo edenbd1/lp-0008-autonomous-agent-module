@@ -5,8 +5,9 @@ name: e2e vs local sequencer
 # spend inside it unattended, and be refused outside it.
 #
 # Separate from ci.yml on purpose. That one is a few minutes and gates every
-# push; this builds the whole logos-execution-zone workspace, so it runs on a
-# schedule and on demand. Both are CI; only one of them can be fast.
+# push; this builds the whole logos-execution-zone workspace, so it runs
+# nightly, on demand, AND on every push to `main` that touches what it proves.
+# Both are CI; only one of them can be fast.
 #
 # It does not have a skip path. A job that completes through one reports green
 # without having run, which is worse than red because nobody looks again. If
@@ -16,10 +17,43 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '20 5 * * *'
+  # And on every push to `main` that touches what this job actually proves. A
+  # workflow that only runs nightly and on demand cannot say a given commit was
+  # proved — it says some commit was. The filter is the job's real input set:
+  # the deployed program, the IDL, the vendored spel, the Rust crates and the
+  # script and workflow that drive them. A README typo does not spend three
+  # hours of proving.
+  push:
+    branches: [main]
+    paths:
+      - 'artifacts/programs/**'
+      - 'idl/**'
+      - 'vendor/spel/**'
+      - 'crates/**'
+      - 'scripts/e2e-local-sequencer.sh'
+      - '.github/workflows/e2e-local-sequencer.yml'
 
+# ONE GROUP PER COMMIT, AND NOTHING IS CANCELLED. This had to change in the
+# same edit as the `push:` trigger above, not after it.
+#
+# It used to be `group: e2e-${{ github.ref }}` with `cancel-in-progress: true`,
+# which is the right setting for a job of a few minutes and the wrong one for a
+# job of three hours: grouped on the ref, every push to `main` cancels the run
+# the previous push started. Measured over the 165 push-triggered CI runs this
+# repository has, the densest 3 h 04 window — one full run of this job — holds
+# 20 of them. Ref-grouped, that day is 19 runs killed mid-proof and an Actions
+# tab that is a wall of cancellations, with the commit that mattered no likelier
+# than any other to be the one that survived. The `paths:` filter above brings
+# it down but does not fix it: 21 of those 165 pushes touch the filter, and four
+# of them still fall inside one window.
+#
+# Keyed on the SHA, each commit gets its own group, so a push never touches a
+# run already proving, and `cancel-in-progress: false` says the same for a
+# re-dispatch of the same commit. The cost is concurrent runners; what it buys
+# is an answer for each commit rather than for whichever one was last.
 concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.sha }}
+  cancel-in-progress: false
 
 env:
   # The revision this was developed against. Floating HEAD would turn an
@@ -104,6 +138,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # A cache key that does not name the CPU can restore code compiled for one
+      # instruction set onto a machine that does not have it — a SIGILL on first
+      # call, which is exactly how three `alongside` runs died (32328278187,
+      # 32443822382, 32548844556) before that workflow put this md5 of
+      # /proc/cpuinfo's flags in its key. This cache is the most exposed of the
+      # five: it carries the compiled sequencer and wallet, and this job then
+      # EXECUTES them for three hours. The signature goes in the restore-keys
+      # prefix too: a near-miss restore must not cross a CPU generation either.
+      - name: The CPU this build will also run on
+        id: cpu
+        run: |
+          echo "sig=$(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | sort \
+                        | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - name: Cache the LEZ build
         uses: actions/cache@v4
         with:
@@ -111,8 +159,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             _external/lez/target
-          key: lez-${{ runner.os }}-${{ env.LEZ_REV }}-${{ hashFiles('_external/lez/Cargo.lock') }}
-          restore-keys: lez-${{ runner.os }}-${{ env.LEZ_REV }}-
+          key: lez-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ env.LEZ_REV }}-${{ hashFiles('_external/lez/Cargo.lock') }}
+          restore-keys: lez-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ env.LEZ_REV }}-
 
       - name: Install r0vm
         run: |
