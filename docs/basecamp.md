@@ -1714,9 +1714,10 @@ Honest list, in the order that matters:
    that reproduces Basecamp's own PluginLoader and was watched failing against
    two other real Qt plugins before it was believed.
 5. ~~The wallet, storage and messaging modules loaded beside it.~~ Built and
-   run: see the section below. This item spent two revisions of
-   `SUBMISSION-DRAFT.md` being described as impossible against Basecamp 0.2.2,
-   which was a statement about the app *bundle* and not about Logos Core.
+   run: see the section below. This item spent two revisions of the submission
+   draft — the working document, which is no longer carried in this repository —
+   being described as impossible against Basecamp 0.2.2, which was a statement
+   about the app *bundle* and not about Logos Core.
 
 ## Alongside the wallet, storage and messaging modules
 
@@ -1724,7 +1725,7 @@ The criterion, verbatim: "The agent module loads and runs inside Logos Core
 alongside the wallet, storage, and messaging modules without requiring
 modifications to those modules."
 
-This document, and `SUBMISSION-DRAFT.md` with it, said for a long time that no
+This document, and the submission draft with it, said for a long time that no
 submission could close that against this host, because
 `ls /Applications/LogosBasecamp.app/Contents/modules/` returns exactly three
 modules and none of them is a wallet, a storage or a messaging module. The

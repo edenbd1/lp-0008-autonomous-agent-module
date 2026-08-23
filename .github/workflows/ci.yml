@@ -259,7 +259,8 @@ jobs:
       # Two steps used to live here, and between them they hardcoded the deploy
       # hash TWICE — once as `want=` and once in a curl payload. That is the
       # same literal-that-must-be-hand-edited-on-every-redeploy pattern that put
-      # three superseded transactions in SUBMISSION-DRAFT.md, and it was wrong
+      # three superseded transactions in the submission draft — a document no
+      # longer carried in this tree — and it was wrong
       # three times today under different names: a content-addressed chain moves
       # that hash on every deploy, so a copy of it in a workflow is a copy that
       # has to be remembered.
@@ -395,48 +396,75 @@ jobs:
           fi
           rm -f fromsrc.out
 
-      # SUBMISSION-DRAFT.md's evidence sections are generated from the chain and
-      # from the committed binary by scripts/submission-evidence.py. --check
-      # re-fetches every figure and fails if the document has drifted from what
-      # the chain now says. This step is the whole anti-rot property: without
-      # it, the generator is something a person has to remember to run, and the
-      # last four times a person had to remember, the document shipped claiming
-      # transactions that DEPLOYMENT.md disowns by name.
-      - name: SUBMISSION-DRAFT.md still matches the chain
+      # THE EVIDENCE SECTIONS ARE STILL GENERATED FROM THE CHAIN AND A DRIFTED
+      # DOCUMENT IS STILL REJECTED. What changed is the subject.
+      #
+      # This step used to run `--check SUBMISSION-DRAFT.md`. That document was
+      # 159 KB of working draft at the top level of a public repository, against
+      # the criterion asking for "a clean public repository", and it is no longer
+      # in the tree — it is a build input kept outside it, which is what the
+      # .gitignore entry says. So there is no file on the runner to check, and
+      # guarding the step on one existing would be the skip path this workflow
+      # refuses everywhere else: a job that completes through one reports green
+      # without having run.
+      #
+      # The assertions are therefore kept and the document is produced here. The
+      # generator renders the three sections from the LIVE chain and the
+      # committed manifests — which is where it refuses to emit a placeholder
+      # where a fetched fact belongs — the render is written out, and `--check`
+      # must agree with it after re-fetching everything a second time. The
+      # control then alters one generated figure in that same render and demands
+      # a red, for the reason it always did.
+      #
+      # WHAT WAS LOST, SAID PLAINLY: the comparison against a COMMITTED copy.
+      # Nothing here can now catch a hand-edited figure in a document this
+      # repository does not carry. What is still caught is a figure the chain no
+      # longer supports, a section the generator will not stand behind, and a
+      # checker that cannot fail.
+      - name: The evidence sections still resolve against the chain
         run: |
           set -e
-          if ! ./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md > evidence.out 2>&1; then
+          if ! ./scripts/submission-evidence.py > generated.md 2> evidence.out; then
             cat evidence.out
-            echo "SUBMISSION-DRAFT.md is stale. Run: ./scripts/submission-evidence.py --write SUBMISSION-DRAFT.md"
+            echo "the generator refused to render: it will not state something the chain does not"
             exit 1
           fi
           cat evidence.out
 
-          # A green exit code is not evidence that anything was checked. Assert
-          # the banner, and refuse the skip pattern this workflow already guards
-          # against elsewhere: no step may go green by skipping.
-          #
-          # The banner is quoted with the document's name in front of it. It was
-          # `grep -q "agrees with"`, and "agrees with" is a substring of
-          # "disagrees with" — which is how submission-evidence.py words its
-          # `artifacts/agents.tsv disagrees with the chain` failure. That path
-          # exits non-zero today, so the `if !` above catches it first and the
-          # trap is not reachable; a pattern that matches its own negation is
-          # still a pattern that is one refactor away from reading a
-          # disagreement as an agreement, and it costs nothing to name the file.
-          if ! grep -q "SUBMISSION-DRAFT.md agrees with" evidence.out; then
-            echo "the check exited 0 without reporting agreement: it did not run to completion"
+          # A green exit code is not evidence that anything was rendered. Every
+          # section has to be there by name, and the skip word this workflow
+          # guards against elsewhere must not be.
+          for name in program agents settlements; do
+            grep -q "BEGIN GENERATED $name" generated.md \
+              || { echo "the generator emitted no '$name' section"; exit 1; }
+          done
+          if grep -q SKIPPED generated.md evidence.out; then
+            echo "the evidence render reported SKIPPED"
             exit 1
           fi
-          if grep -q SKIPPED evidence.out; then
-            echo "the evidence check reported SKIPPED"
+
+          # Re-fetch and compare. The banner is quoted with the document's name
+          # in front of it, and that is not a nicety: it was `grep -q "agrees
+          # with"`, and "agrees with" is a substring of "disagrees with" — which
+          # is how submission-evidence.py words its `artifacts/agents.tsv
+          # disagrees with the chain` failure. A pattern that matches its own
+          # negation is one refactor away from reading a disagreement as an
+          # agreement, and naming the file costs nothing.
+          if ! ./scripts/submission-evidence.py --check generated.md > evidence-check.out 2>&1; then
+            cat evidence-check.out
+            echo "the sections did not survive a second fetch of the same chain"
+            exit 1
+          fi
+          cat evidence-check.out
+          if ! grep -q "generated.md agrees with" evidence-check.out; then
+            echo "the check exited 0 without reporting agreement: it did not run to completion"
             exit 1
           fi
 
           # The control, and the same argument as the dedede hash two steps up:
           # a checker that cannot fail would pass everything above just as
           # happily. So alter one generated figure and require a red.
-          cp SUBMISSION-DRAFT.md drift.md
+          cp generated.md drift.md
           python3 - <<'PY'
           import re, sys
           s = open('drift.md', encoding='utf-8').read()
@@ -471,8 +499,8 @@ jobs:
                  echo "an unreachable sequencer refuses to generate and exits 1 too,"; \
                  echo "and that says nothing about whether drift is detected:"; \
                  cat drift.out; exit 1; }
-          rm -f drift.md drift.out evidence.out
-          echo "OK the document matches the chain, and a drifted one is rejected"
+          rm -f generated.md drift.md drift.out evidence-check.out evidence.out
+          echo "OK the sections resolve against the chain, and a drifted render is rejected"
 
       # The generated sections must be a function of the chain and the
       # repository, and of nothing else about the machine.
@@ -1675,8 +1703,9 @@ jobs:
       # as evidence, and that citation was found reading cf07408e… — the package
       # whose Agent Cards this repository's own verifier rejects — long after
       # that package had been replaced. Same failure as the three superseded
-      # transactions in SUBMISSION-DRAFT.md: a literal in prose that has to be
-      # hand-edited on every rebuild is a literal that will be forgotten.
+      # transactions in the submission draft, which this repository no longer
+      # carries: a literal in prose that has to be hand-edited on every rebuild
+      # is a literal that will be forgotten.
       - name: Negative control — the document may not cite a superseded package
         run: |
           set -euo pipefail

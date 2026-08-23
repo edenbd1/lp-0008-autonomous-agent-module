@@ -541,8 +541,10 @@ evidence and the command that re-derives it; what does not work is in
   Program, three anchors and thirteen settlements all live on the public testnet,
   each re-verified for this document with a null-returning control:
   `./scripts/verify-deployment.sh` (exit 0),
-  `./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md` (exit 0), and
-  `./scripts/demo.sh` (exit 0) from a clean clone with only a Rust toolchain.
+  `./scripts/submission-evidence.py` (exit 0 — it renders the three evidence
+  sections by re-fetching every figure from the chain, and refuses to emit one
+  it cannot fetch), and `./scripts/demo.sh` (exit 0) from a clean clone with only
+  a Rust toolchain.
 
 - [x] **MET — End-to-end integration tests run against a LEZ sequencer (standalone
   mode) and are included in CI.**

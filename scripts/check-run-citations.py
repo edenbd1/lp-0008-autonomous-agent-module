@@ -36,7 +36,10 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCS = ["README.md", "SUBMISSION-DRAFT.md", "solutions/LP-0008.md"] + [
+# SUBMISSION-DRAFT.md was here until it left the repository — 159 KB of draft
+# at the top level of a public tree — and is not replaced by anything: a name
+# in this list that never resolves is a citation nobody is checking.
+DOCS = ["README.md", "solutions/LP-0008.md"] + [
     os.path.join("docs", f)
     for f in sorted(os.listdir(os.path.join(ROOT, "docs")))
     if f.endswith(".md")

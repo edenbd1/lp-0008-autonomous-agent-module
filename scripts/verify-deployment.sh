@@ -483,7 +483,7 @@ print('%s %s' % (r[1], 'SHIPPED' if carries else 'OTHER'))")
 
     # The positive statement, and the reason it is a failure rather than a
     # label. What this manifest is cited for — README §7, docs/DEPLOYMENT.md,
-    # SUBMISSION-DRAFT.md — is that the SHIPPED program paid an agent at its
+    # docs/criteria-evidence.md — is that the SHIPPED program paid an agent at its
     # shielded account. A `builtin:` row is the money coming back out through
     # LEZ's own transfer program and cannot support that sentence, so it is
     # counted separately and does not satisfy this. Zero rows is not "nothing

@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Generate the evidence sections of SUBMISSION-DRAFT.md from the chain.
+"""Generate the submission's evidence sections from the chain.
 
     ./scripts/submission-evidence.py                 # print the sections
-    ./scripts/submission-evidence.py --write SUBMISSION-DRAFT.md
-    ./scripts/submission-evidence.py --check SUBMISSION-DRAFT.md   # CI guard
+    ./scripts/submission-evidence.py --write FILE    # splice them into FILE
+    ./scripts/submission-evidence.py --check FILE    # exit 1 if FILE drifted
+
+The document these sections are written into is the submission draft, which is
+a BUILD INPUT KEPT OUTSIDE THIS REPOSITORY (see .gitignore) rather than 159 KB
+of draft at the top level of a public tree. Pass its path; nothing here assumes
+one. CI runs the generator with no FILE, writes the render out, and requires
+--check to agree with it and a drifted copy of it to be rejected.
 
 Why this exists
 ---------------
 
-SUBMISSION-DRAFT.md is the first thing a reviewer reads, and it had a table
+The submission draft is the first thing a reviewer reads, and it had a table
 headed "(getAccount)" and "(from getTransaction)", captioned "Verified
 independently for this document", in which every single value was a literal
 somebody typed. The transactions it named as the headline evidence were the four
@@ -37,7 +43,7 @@ What makes each number safe to print
     The sequencer silently drops failing transactions and `getTransaction`
     answers null identically for dropped, pending, rejected and never-submitted,
     so "not null" is the weakest possible claim and block membership is checked
-    rather than accepted. (SUBMISSION-DRAFT.md claimed this check for months; no
+    rather than accepted. (The draft claimed this check for months; no
     script in the repository performed it. This one does — see `confirm`.)
 
   * Balances are read from the transaction's committed POST-STATE, not from
@@ -115,7 +121,7 @@ Exit status
      --check found the document drifting from what the chain now says
 
 Non-zero means the document must not ship. That is the whole point: a stale
-SUBMISSION-DRAFT.md can no longer be produced quietly.
+submission document can no longer be produced quietly.
 """
 
 import argparse
@@ -418,7 +424,7 @@ def deploy_tx_of(binary):
 def policy_seeds(idl_path):
     """How the shipped IDL says a policy account's address is derived.
 
-    Generated rather than described, because SUBMISSION-DRAFT.md spent three
+    Generated rather than described, because the submission draft spent three
     deployments asserting a derivation the program no longer used — and not a
     harmless one: it advertised `PDA(SHA256(owner ‖ agent ‖ limits))`, which is
     the design an attacker holding the agent's key broke by anchoring a fresh
@@ -1058,7 +1064,7 @@ def splice(text, sections):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Generate SUBMISSION-DRAFT.md's evidence sections from the chain.")
+        description="Generate the submission's evidence sections from the chain.")
     ap.add_argument("--rpc", default=os.environ.get("SEQUENCER_URL", RPC_DEFAULT))
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))), help="repository root to read manifests from")
