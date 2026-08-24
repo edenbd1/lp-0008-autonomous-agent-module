@@ -64,18 +64,6 @@ ANCHORS = {
         ("balance",                 r"balance|[0-9]+\s*->\s*[0-9]+"),
         ("explorer",                r"explorer\.testnet\.lez"),
     ],
-    "lp-0003-claim-and-double-claim.srt": [
-        ("dev mode is 0",           r"DEV_MODE\s*=\s*[0@oO]"),
-        ("Five checks",             r"\[\s*[1-5]\s*/\s*5\s*\]|VERIFIED"),
-        ("marker already exists",   r"AccountAlreadyInitialized"),
-        ("public LEZ testnet",      r"testnet\.lez\.logos\.co"),
-    ],
-    "lp-0002-threshold-moves-value.srt": [
-        ("privacy-preserving variant", r"variant\s*1|PrivacyPreserving"),
-        ("approval marker",         r"approval\s*[01]|approval markers"),
-        ("Eight transactions",      r"variant\s*[0-9]|create_multisig"),
-        ("recipient",               r"recipient|balance\s*1"),
-    ],
 }
 
 # A film whose transcript is not listed above cannot be anchored, and this
