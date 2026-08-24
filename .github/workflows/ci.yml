@@ -41,6 +41,21 @@ jobs:
       # catch, one level up. It needs no toolchain, so it fails in seconds
       # rather than after the risc0 build in the next job.
       - name: Documentation points at things that exist
+
+      # One submission per repository. A reviewer reading this one should find
+      # the thing it is about and nothing else — not the identifier of a different
+      # prize entry, not the vocabulary of comparison. That is a judgement about
+      # what belongs in a deliverable, and nobody makes it while writing code.
+      #
+      # It has already been wrong here: check-transcript.py shipped an anchor
+      # table naming films from two different entries, and app/CMakeLists.txt cited
+      # a different entry's plugin in a build comment. Neither was noticed, because
+      # the only check that looks for this lived in one repository out of three
+      # and was run by nothing.
+      - name: Nothing here names a different prize entry
+        env:
+          OWN_PRIZE: LP-0008
+        run: ./scripts/check-no-cross-submission.py
         run: |
           # `pipefail`, because `cmd | tee` reports TEE's exit status: without it
           # a check-docs.py that exited 1 was masked, and the only thing standing
