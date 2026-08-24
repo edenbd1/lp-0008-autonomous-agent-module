@@ -39,11 +39,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # SUBMISSION-DRAFT.md was here until it left the repository — 159 KB of draft
 # at the top level of a public tree — and is not replaced by anything: a name
 # in this list that never resolves is a citation nobody is checking.
-DOCS = ["README.md", "solutions/LP-0008.md"] + [
-    os.path.join("docs", f)
-    for f in sorted(os.listdir(os.path.join(ROOT, "docs")))
-    if f.endswith(".md")
-]
+#
+# The docs/ scan WALKS rather than lists. `os.listdir` does not descend, which
+# left `docs/benchmarks/cu-budget.md` — 443 lines of it — outside this gate
+# entirely. Nothing in that file cites a run today, so nothing was being missed;
+# a blind spot that happens to be empty is still a blind spot, and the next
+# citation written there would have been unchecked with no sign of it.
+def _docs():
+    found = ["README.md", "solutions/LP-0008.md"]
+    for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, "docs")):
+        dirnames[:] = sorted(dirnames)
+        for f in sorted(filenames):
+            if f.endswith(".md"):
+                found.append(os.path.relpath(os.path.join(dirpath, f), ROOT))
+    return found
+
+
+DOCS = _docs()
 RUN_RE = re.compile(r"actions/runs/(\d+)")
 
 # A cited run that is not green, and is not SAID to be not green.
