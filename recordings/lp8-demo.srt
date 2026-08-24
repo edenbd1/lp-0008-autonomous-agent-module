@@ -1,0 +1,1389 @@
+1
+00:00:01,000 --> 00:00:03,418
+I built an autonomous agent for Logos
+Core.
+
+2
+00:00:03,498 --> 00:00:07,790
+It runs as a module inside the Logos app,
+it holds its own keys,
+
+3
+00:00:07,870 --> 00:00:11,537
+and it spends its own money on the Logos
+Execution Zone —
+
+4
+00:00:11,617 --> 00:00:13,722
+the public testnet, not a local chain.
+
+5
+00:00:13,802 --> 00:00:17,157
+Start with the problem, because it is the
+only interesting part.
+
+6
+00:00:17,237 --> 00:00:20,280
+An agent that pays for things needs a
+spending limit,
+
+7
+00:00:20,360 --> 00:00:24,339
+and the obvious way to write one is an
+if-statement inside the agent.
+
+8
+00:00:24,419 --> 00:00:28,398
+That is worth nothing: the agent has to
+sign without waking anybody up,
+
+9
+00:00:28,478 --> 00:00:30,896
+so whoever takes the process takes the
+key,
+
+10
+00:00:30,976 --> 00:00:34,331
+and an attacker with the key does not run
+your if-statement.
+
+11
+00:00:34,411 --> 00:00:36,829
+So the limit cannot live in the agent.
+
+12
+00:00:36,909 --> 00:00:40,576
+It has to live somewhere the agent can
+read and cannot write.
+
+13
+00:00:40,656 --> 00:00:44,011
+On this chain that means an account owned
+by a program,
+
+14
+00:00:44,091 --> 00:00:45,884
+and that is what I built.
+
+15
+00:00:47,200 --> 00:00:48,996
+This is the repository's own check script,
+
+16
+00:00:49,076 --> 00:00:51,408
+run from a clean clone against the public
+testnet.
+
+17
+00:00:51,488 --> 00:00:53,015
+Nothing in it is asserted —
+
+18
+00:00:53,095 --> 00:00:56,499
+every line is computed here or fetched
+from the chain while you watch.
+
+19
+00:01:03,000 --> 00:01:07,802
+The first line is the one the prize asks
+for: dev mode is zero.
+
+20
+00:01:11,020 --> 00:01:14,775
+Then the deployment check, which is
+arithmetic rather than a lookup.
+
+21
+00:01:14,855 --> 00:01:17,216
+A deploy transaction hash on this chain
+
+22
+00:01:17,296 --> 00:01:20,005
+is the hash of the program bytecode
+itself.
+
+23
+00:01:20,085 --> 00:01:22,446
+So the script hashes the binary committed
+
+24
+00:01:22,526 --> 00:01:25,236
+here and asks the chain for that hash.
+
+25
+00:01:25,316 --> 00:01:26,282
+If they agree,
+
+26
+00:01:26,362 --> 00:01:30,815
+the program running on the testnet is
+byte-for-byte the program you can read.
+
+27
+00:01:30,895 --> 00:01:32,907
+There is no registry to trust.
+
+28
+00:01:32,987 --> 00:01:37,439
+Underneath it, a control: a hash that
+cannot exist, which comes back null.
+
+29
+00:01:37,519 --> 00:01:42,321
+Without that, an RPC that answered yes to
+everything would pass just as happily.
+
+30
+00:01:45,000 --> 00:01:46,748
+This section is the design history,
+
+31
+00:01:46,828 --> 00:01:49,490
+and I would rather be honest about it than
+
+32
+00:01:49,570 --> 00:01:52,537
+present the final answer as if I had it
+first.
+
+33
+00:01:52,617 --> 00:01:55,583
+The first two versions put the limits in
+the address:
+
+34
+00:01:55,663 --> 00:01:59,849
+the policy account was a hash of the
+owner, the agent and the numbers.
+
+35
+00:01:59,929 --> 00:02:02,591
+It looks strong — you cannot edit a limit,
+
+36
+00:02:02,671 --> 00:02:05,028
+because a different limit is a different
+address.
+
+37
+00:02:05,108 --> 00:02:05,942
+It was wrong.
+
+38
+00:02:06,022 --> 00:02:10,208
+Every combination had an address of its
+own and all of them were empty,
+
+39
+00:02:10,288 --> 00:02:12,950
+so there was always a fresh one to take.
+
+40
+00:02:13,030 --> 00:02:15,692
+So the third version moved the limits into
+the
+
+41
+00:02:15,772 --> 00:02:18,738
+account's data and gave each agent exactly
+one policy account,
+
+42
+00:02:18,818 --> 00:02:20,871
+derived from the agent and nothing else.
+
+43
+00:02:20,951 --> 00:02:22,699
+That fixed where a policy goes.
+
+44
+00:02:22,779 --> 00:02:25,746
+It said nothing about who may put one
+there —
+
+45
+00:02:25,826 --> 00:02:28,183
+and the answer turned out to be anybody.
+
+46
+00:02:29,500 --> 00:02:34,011
+This is the transaction that proves it,
+and it is still in a block.
+
+47
+00:02:34,091 --> 00:02:36,962
+A stranger — an account created for the
+purpose,
+
+48
+00:02:37,042 --> 00:02:40,570
+which has never held the agent's key and
+never will —
+
+49
+00:02:40,650 --> 00:02:43,521
+anchored an unlimited policy over one of
+my agents.
+
+50
+00:02:43,601 --> 00:02:44,833
+No key was needed.
+
+51
+00:02:44,913 --> 00:02:48,112
+It needed the agent's public identifier,
+which this repository publishes.
+
+52
+00:02:48,192 --> 00:02:50,735
+The account that anchor created is still
+there,
+
+53
+00:02:50,815 --> 00:02:53,031
+and it still says what it said:
+
+54
+00:02:53,111 --> 00:02:56,966
+a stranger owns that agent's only policy,
+with no ceiling, for good.
+
+55
+00:02:57,046 --> 00:02:59,589
+That is not an argument about source code.
+
+56
+00:02:59,669 --> 00:03:01,557
+It is a matter of record.
+
+57
+00:03:06,000 --> 00:03:10,626
+The fix is consent, and it is two
+signatures in two transactions.
+
+58
+00:03:10,706 --> 00:03:14,940
+First the agent itself signs, naming the
+owner it will accept.
+
+59
+00:03:15,020 --> 00:03:20,039
+The address of that claim is derived from
+the account doing the signing,
+
+60
+00:03:20,119 --> 00:03:24,353
+so there is no identifier in the
+instruction to lie about.
+
+61
+00:03:24,433 --> 00:03:27,098
+Then the designated owner signs the
+policy,
+
+62
+00:03:27,178 --> 00:03:31,805
+and the program reads the claim back and
+refuses any other signer.
+
+63
+00:03:31,885 --> 00:03:34,158
+A third party holds neither key.
+
+64
+00:03:34,238 --> 00:03:37,687
+It cannot claim an agent it cannot sign
+for,
+
+65
+00:03:37,767 --> 00:03:42,786
+and it cannot anchor over an agent that
+has already designated somebody else.
+
+66
+00:03:42,866 --> 00:03:48,277
+On screen is the identical stranger call,
+sent to the program this repository ships.
+
+67
+00:03:48,357 --> 00:03:51,022
+It was never included in any block.
+
+68
+00:04:15,000 --> 00:04:18,809
+Three agents, one for each skill category
+the prize names: Storage, Messaging,
+Blockchain.
+
+69
+00:04:18,889 --> 00:04:22,697
+Each is a separate deployment on the
+public testnet with its own keys.
+
+70
+00:04:22,777 --> 00:04:25,688
+The first column is the agent's own
+shielded account —
+
+71
+00:04:25,768 --> 00:04:27,483
+that is where its money is.
+
+72
+00:04:27,563 --> 00:04:30,175
+The second is public, and that asymmetry
+is forced:
+
+73
+00:04:30,255 --> 00:04:32,269
+a payment into a shielded account can
+
+74
+00:04:32,349 --> 00:04:34,662
+be read back by nobody but its owner,
+
+75
+00:04:34,742 --> 00:04:36,756
+so an agent that wants to be
+
+76
+00:04:36,836 --> 00:04:39,149
+paid checkably has to advertise a public
+account.
+
+77
+00:04:48,000 --> 00:04:51,381
+These are the ceilings — a per-transaction
+limit, a per-period limit,
+
+78
+00:04:51,461 --> 00:04:53,899
+and how long a period is in blocks.
+
+79
+00:04:53,979 --> 00:04:57,046
+I want to be precise about where those
+numbers live,
+
+80
+00:04:57,126 --> 00:04:58,934
+because it is the whole mechanism.
+
+81
+00:04:59,014 --> 00:05:00,822
+They are not in the agent,
+
+82
+00:05:00,902 --> 00:05:03,654
+and they are not arguments to the payment
+instruction,
+
+83
+00:05:03,734 --> 00:05:06,801
+which carries an amount and a period and
+nothing else.
+
+84
+00:05:06,881 --> 00:05:10,891
+They are ninety-seven bytes of data in
+that account in the middle column,
+
+85
+00:05:10,971 --> 00:05:13,409
+and the program this repository ships is
+the
+
+86
+00:05:13,489 --> 00:05:16,241
+only thing on the chain that can write
+there.
+
+87
+00:05:24,500 --> 00:05:28,544
+Here are those two signatures, on the
+public testnet, for all three agents.
+
+88
+00:05:28,624 --> 00:05:32,351
+The agent's claim first, then the owner's
+policy on top of it.
+
+89
+00:05:32,431 --> 00:05:36,158
+Nothing is anchored on camera, and that is
+deliberate rather than convenient.
+
+90
+00:05:36,238 --> 00:05:40,282
+The claim can only be made once — the
+instruction creates the account,
+
+91
+00:05:40,362 --> 00:05:44,088
+and an instruction that creates an account
+refuses one that already exists.
+
+92
+00:05:44,168 --> 00:05:46,626
+A second attempt has nowhere to be
+written.
+
+93
+00:05:55,000 --> 00:05:58,585
+Use case four, as the prize words it: a
+privacy-preserving notary.
+
+94
+00:05:58,665 --> 00:06:01,917
+The agent timestamps a document, stores it
+on Logos Storage,
+
+95
+00:06:01,997 --> 00:06:04,249
+and records it on the chain —
+
+96
+00:06:04,329 --> 00:06:07,248
+a proof of existence that is verifiable,
+and private.
+
+97
+00:06:07,328 --> 00:06:11,579
+The trick is what goes on chain, which is
+nothing about the document.
+
+98
+00:06:11,659 --> 00:06:15,911
+The content address the storage node
+returns is turned into a signing key.
+
+99
+00:06:15,991 --> 00:06:20,575
+The chain sees a transaction signed by
+that key, and never sees the document,
+
+100
+00:06:20,655 --> 00:06:23,241
+the address, or even a hash of it.
+
+101
+00:06:26,000 --> 00:06:30,341
+So anyone holding the document can
+rederive the key and check the chain
+themselves,
+
+102
+00:06:30,421 --> 00:06:33,814
+and anyone who does not hold it learns
+nothing at all.
+
+103
+00:06:33,894 --> 00:06:35,393
+That is the whole property.
+
+104
+00:06:35,473 --> 00:06:38,551
+What you are watching is the re-check, not
+the notarisation:
+
+105
+00:06:38,631 --> 00:06:41,077
+it reads the record back off the chain,
+
+106
+00:06:41,157 --> 00:06:43,288
+confirms the transaction is in a block,
+
+107
+00:06:43,368 --> 00:06:47,077
+and confirms it was signed by the key that
+this document derives.
+
+108
+00:06:47,157 --> 00:06:49,919
+Beside it, two controls, both shown red on
+purpose.
+
+109
+00:06:55,000 --> 00:06:57,304
+Use case five: an on-chain event alerter.
+
+110
+00:06:57,384 --> 00:07:00,030
+The agent watches an account for a state
+
+111
+00:07:00,110 --> 00:07:02,755
+change and tells its owner over Logos
+Messaging.
+
+112
+00:07:02,835 --> 00:07:06,161
+I want to be careful about what makes this
+real,
+
+113
+00:07:06,241 --> 00:07:08,205
+because it is easy to fake.
+
+114
+00:07:08,285 --> 00:07:10,930
+The watcher was never told the transaction
+hash.
+
+115
+00:07:11,010 --> 00:07:14,677
+It derived the address it watches from the
+agent's own identifier,
+
+116
+00:07:14,757 --> 00:07:17,743
+noticed the account change, decoded who
+had been named,
+
+117
+00:07:17,823 --> 00:07:20,127
+and then found the transaction that did
+
+118
+00:07:20,207 --> 00:07:22,852
+it by reading blocks until it found one.
+
+119
+00:07:22,932 --> 00:07:24,896
+A separate process made the claim.
+
+120
+00:07:28,000 --> 00:07:31,296
+It is on chain at block eight thousand
+nine hundred and forty-five,
+
+121
+00:07:31,376 --> 00:07:34,672
+and the block either side of it does not
+contain that agent.
+
+122
+00:07:34,752 --> 00:07:35,797
+I checked that separately,
+
+123
+00:07:35,877 --> 00:07:39,736
+because "found it in a block" is only
+evidence if it could have failed.
+
+124
+00:07:53,000 --> 00:07:55,287
+Now the ceiling itself, from both sides —
+
+125
+00:07:55,367 --> 00:07:57,358
+not one of the prize's use cases,
+
+126
+00:07:57,438 --> 00:07:59,725
+but the criterion the other three rest on.
+
+127
+00:07:59,805 --> 00:08:02,092
+First the script reads the envelope
+straight out
+
+128
+00:08:02,172 --> 00:08:04,459
+of the account on chain and decodes it:
+
+129
+00:08:04,539 --> 00:08:06,234
+the owner, both limits, the period,
+
+130
+00:08:06,314 --> 00:08:08,897
+and the total spent so far in this period.
+
+131
+00:08:08,977 --> 00:08:11,855
+Then it checks those against the manifest
+in the repository.
+
+132
+00:08:11,935 --> 00:08:15,110
+The account is the authority; the file is
+only a copy,
+
+133
+00:08:15,190 --> 00:08:18,069
+and this is the line that catches the copy
+drifting.
+
+134
+00:08:20,500 --> 00:08:24,397
+Then it derives the policy account's
+address from the agent's identifier,
+
+135
+00:08:24,477 --> 00:08:27,289
+using the seeds declared in the interface
+definition,
+
+136
+00:08:27,369 --> 00:08:31,989
+and shows there is exactly one derivation
+and no limit among the seeds.
+
+137
+00:08:32,069 --> 00:08:35,604
+That is the demonstration — not that ten
+derivations agree,
+
+138
+00:08:35,684 --> 00:08:37,412
+but that only one exists.
+
+139
+00:08:37,492 --> 00:08:40,666
+Beside it, a control: an agent nobody ever
+anchored,
+
+140
+00:08:40,746 --> 00:08:44,281
+whose address is real arithmetic and whose
+account is empty.
+
+141
+00:08:57,500 --> 00:09:01,588
+Below the ceiling: settlements that
+already landed on the public testnet,
+
+142
+00:09:01,668 --> 00:09:05,756
+each one under the limit, each one
+confirmed against the chain,
+
+143
+00:09:05,836 --> 00:09:09,924
+and each one checked by the recipient's
+balance actually moving —
+
+144
+00:09:10,004 --> 00:09:11,818
+not by the transaction existing.
+
+145
+00:09:11,898 --> 00:09:17,123
+Above the ceiling: the agent asks for more
+than it is allowed, twice —
+
+146
+00:09:17,203 --> 00:09:18,638
+once for too much,
+
+147
+00:09:18,718 --> 00:09:23,564
+and once by trying to slide its period
+forward to reset the total.
+
+148
+00:09:23,644 --> 00:09:26,595
+Both refused, and notice how fast that is.
+
+149
+00:09:26,675 --> 00:09:31,142
+The guest stops at the check, so no
+transaction is ever built:
+
+150
+00:09:31,222 --> 00:09:34,552
+there is nothing to submit and nothing to
+reject.
+
+151
+00:09:34,632 --> 00:09:37,584
+And each refusal carries a named error
+code,
+
+152
+00:09:37,664 --> 00:09:41,373
+because "some error happened" is also what
+a typo produces.
+
+153
+00:09:49,000 --> 00:09:52,468
+Two things I did not demonstrate on the
+testnet,
+
+154
+00:09:52,548 --> 00:09:56,409
+and I would rather say them than have them
+found.
+
+155
+00:09:56,489 --> 00:09:59,957
+An over-threshold payment is not
+forbidden, it is routed:
+
+156
+00:10:00,037 --> 00:10:04,293
+a second instruction takes an approval
+only the owner can create,
+
+157
+00:10:04,373 --> 00:10:06,658
+and that approval carries an expiry,
+
+158
+00:10:06,738 --> 00:10:10,600
+because an approval that never expires is
+a bearer instrument.
+
+159
+00:10:10,680 --> 00:10:14,147
+A third lets the owner change the limits
+later,
+
+160
+00:10:14,227 --> 00:10:16,907
+carrying the spent total through untouched
+—
+
+161
+00:10:16,987 --> 00:10:19,666
+raising a ceiling is not forgiveness for
+
+162
+00:10:19,746 --> 00:10:22,819
+what was already spent under the old one.
+
+163
+00:10:22,899 --> 00:10:27,944
+Both are exercised against the deployed
+binary; neither has landed on the testnet.
+
+164
+00:10:28,024 --> 00:10:31,097
+The reason is written down rather than
+hidden:
+
+165
+00:10:31,177 --> 00:10:33,856
+every transaction is built against nonce
+zero,
+
+166
+00:10:33,936 --> 00:10:37,404
+so a fresh public account gets one program
+transaction,
+
+167
+00:10:37,484 --> 00:10:39,769
+and these owners spent theirs anchoring.
+
+168
+00:10:41,500 --> 00:10:44,365
+Everything in this film ran against the
+public LEZ testnet.
+
+169
+00:10:44,445 --> 00:10:47,898
+There is no local sequencer anywhere in
+it, the proofs are real,
+
+170
+00:10:47,978 --> 00:10:51,137
+and every hash on screen can be looked up
+by anyone.
+
+171
+00:10:56,200 --> 00:10:59,041
+This is use case two: an agent services
+marketplace.
+
+172
+00:10:59,121 --> 00:11:01,963
+One agent advertises a priced skill,
+another discovers it,
+
+173
+00:11:02,043 --> 00:11:05,533
+has the work done, and pays for it, with
+nobody approving.
+
+174
+00:11:05,613 --> 00:11:09,753
+What makes that autonomous is not that no
+human happened to be watching.
+
+175
+00:11:09,833 --> 00:11:12,025
+It is that the chain would have
+
+176
+00:11:12,105 --> 00:11:14,621
+refused the payment if it had needed one.
+
+177
+00:11:14,701 --> 00:11:18,192
+One warning, because it is the whole
+middle of this film:
+
+178
+00:11:18,272 --> 00:11:19,815
+the proof takes several minutes,
+
+179
+00:11:19,895 --> 00:11:23,710
+and for most of it the only thing moving
+is a heartbeat.
+
+180
+00:11:23,790 --> 00:11:25,333
+That is not a hang.
+
+181
+00:11:25,413 --> 00:11:28,579
+That is what a real proof costs on a
+laptop.
+
+182
+00:11:33,700 --> 00:11:36,158
+The storage agent publishes an A2A Agent
+Card.
+
+183
+00:11:36,238 --> 00:11:40,599
+A2A gives me the vocabulary — the card,
+the skill, the task lifecycle —
+
+184
+00:11:40,679 --> 00:11:43,771
+and deliberately leaves out the two things
+I need most:
+
+185
+00:11:43,851 --> 00:11:46,309
+payment, and any way to trust the card.
+
+186
+00:11:46,389 --> 00:11:47,895
+So the card is signed,
+
+187
+00:11:47,975 --> 00:11:52,019
+by the key that owns the account the card
+asks you to pay.
+
+188
+00:11:52,099 --> 00:11:56,143
+An unsigned card is a document anyone on
+the discovery topic can rewrite,
+
+189
+00:11:56,223 --> 00:11:57,095
+payment account included,
+
+190
+00:11:57,175 --> 00:11:59,633
+and "discover an agent and pay it" would
+
+191
+00:11:59,713 --> 00:12:02,171
+then mean "pay whoever edited the card
+last".
+
+192
+00:12:04,700 --> 00:12:07,456
+The client verifies that signature with a
+separate verifier,
+
+193
+00:12:07,536 --> 00:12:09,347
+not with the signing code —
+
+194
+00:12:09,427 --> 00:12:12,814
+two implementations of the same curve
+arithmetic is how a verifier
+
+195
+00:12:12,894 --> 00:12:16,596
+ends up agreeing with a signer about a
+signature that is wrong.
+
+196
+00:12:16,676 --> 00:12:19,747
+Then it compares the price against its own
+anchored ceiling.
+
+197
+00:12:19,827 --> 00:12:24,160
+Inside the envelope, so it takes the
+autonomous branch and no owner is asked.
+
+198
+00:12:36,200 --> 00:12:38,314
+The task lifecycle: submitted, working,
+completed.
+
+199
+00:12:38,394 --> 00:12:42,702
+Then the agent re-syncs its private
+account before it proves anything —
+
+200
+00:12:42,782 --> 00:12:47,090
+the proof is built against its local view
+of its own notes,
+
+201
+00:12:47,170 --> 00:12:51,844
+and a stale view produces a valid-looking
+hash the chain will never accept.
+
+202
+00:13:06,700 --> 00:13:09,723
+Now the settlement, and this is the line
+that matters:
+
+203
+00:13:09,803 --> 00:13:12,827
+it signs from the agent's own wallet, not
+the owner's.
+
+204
+00:13:12,907 --> 00:13:14,689
+That is what unattended means here.
+
+205
+00:13:14,769 --> 00:13:17,482
+Signing this with the owner's key would
+prove nothing.
+
+206
+00:13:17,562 --> 00:13:19,033
+And now the prover starts.
+
+207
+00:13:19,113 --> 00:13:20,275
+Dev mode is zero,
+
+208
+00:13:20,355 --> 00:13:22,447
+so this is a real proof of
+
+209
+00:13:22,527 --> 00:13:24,930
+two programs and the call between them —
+
+210
+00:13:25,010 --> 00:13:28,964
+the policy program checking the ceiling,
+and the transfer program moving the
+balance.
+
+211
+00:13:43,200 --> 00:13:44,928
+The heartbeat is the prover.
+
+212
+00:13:45,008 --> 00:13:49,630
+That percentage is r0vm, the RISC-Zero
+virtual machine, measured off the process
+table,
+
+213
+00:13:49,710 --> 00:13:54,694
+and that is what it looks like with every
+core on this machine busy.
+
+214
+00:13:54,774 --> 00:13:56,864
+Dev mode cannot produce that line.
+
+215
+00:13:56,944 --> 00:13:59,395
+It returns a fake receipt in milliseconds
+
+216
+00:13:59,475 --> 00:14:02,289
+and never starts a prover at all —
+
+217
+00:14:02,369 --> 00:14:06,629
+so the line is itself the evidence that
+the proof is real,
+
+218
+00:14:06,709 --> 00:14:10,246
+and it carries the dev mode setting on
+every repeat.
+
+219
+00:14:23,200 --> 00:14:26,874
+The lines above it are still on screen and
+worth reading.
+
+220
+00:14:26,954 --> 00:14:27,556
+The nonce,
+
+221
+00:14:27,636 --> 00:14:32,333
+which makes this payment distinct from any
+other with the same recipient and amount.
+
+222
+00:14:32,413 --> 00:14:37,111
+The block the chain was at, and the period
+this spend is accounted to.
+
+223
+00:14:37,191 --> 00:14:41,206
+And the recipient's balance, read off the
+chain before anything was signed.
+
+224
+00:14:41,286 --> 00:14:44,959
+An earlier version of this instruction
+produced a confirmed on-chain proof
+
+225
+00:14:45,039 --> 00:14:48,713
+that a policy permitted a payment and
+moved nothing at all.
+
+226
+00:14:48,793 --> 00:14:51,102
+It was written up as a settlement.
+
+227
+00:14:51,182 --> 00:14:53,832
+That is why the balance is read twice.
+
+228
+00:15:13,200 --> 00:15:17,718
+While we wait, the architecture, because
+this is the part a diagram would flatten.
+
+229
+00:15:17,798 --> 00:15:20,016
+The module is a Logos Core plugin.
+
+230
+00:15:20,096 --> 00:15:24,285
+It exposes three skill categories to the
+app — Storage, Messaging, Blockchain —
+
+231
+00:15:24,365 --> 00:15:26,584
+and each is a thin binding onto
+
+232
+00:15:26,664 --> 00:15:29,211
+a real Logos node or onto this chain.
+
+233
+00:15:29,291 --> 00:15:31,182
+The agent logic sits above them.
+
+234
+00:15:31,262 --> 00:15:34,794
+The spending policy does not sit in the
+module at all.
+
+235
+00:15:34,874 --> 00:15:39,392
+It is a program deployed on the testnet,
+and the module cannot alter it.
+
+236
+00:15:39,472 --> 00:15:43,004
+If somebody replaced the module tomorrow,
+the ceiling would still hold.
+
+237
+00:16:15,200 --> 00:16:20,284
+The other decision worth stating is the
+one that took four deployments to find.
+
+238
+00:16:20,364 --> 00:16:23,972
+I kept trying to make the anchoring call
+honest —
+
+239
+00:16:24,052 --> 00:16:27,292
+bind the identifiers, compare the limits,
+check the caller.
+
+240
+00:16:27,372 --> 00:16:30,980
+Each version added a comparison, and each
+was walked around,
+
+241
+00:16:31,060 --> 00:16:33,193
+because the attacker was never lying.
+
+242
+00:16:33,273 --> 00:16:36,881
+They really were the owner of the policy
+they anchored.
+
+243
+00:16:36,961 --> 00:16:40,570
+They had simply never been asked whether
+the agent agreed.
+
+244
+00:16:40,650 --> 00:16:43,152
+The answer was not a better comparison.
+
+245
+00:16:43,232 --> 00:16:47,947
+It was to ask the agent, once, in a
+transaction it signs itself.
+
+246
+00:17:25,200 --> 00:17:27,360
+Two things this film does not show,
+
+247
+00:17:27,440 --> 00:17:30,560
+and I would rather say them than have them
+found.
+
+248
+00:17:30,640 --> 00:17:33,120
+No language model runs behind the
+inference skill.
+
+249
+00:17:33,200 --> 00:17:36,000
+The port is real and both backends are
+written,
+
+250
+00:17:36,080 --> 00:17:39,200
+but one is a stub with an honest name and
+
+251
+00:17:39,280 --> 00:17:42,399
+the other has never had a request leave
+this repository.
+
+252
+00:17:42,479 --> 00:17:46,239
+The price decision you saw was a shell
+comparison, not a model.
+
+253
+00:17:46,319 --> 00:17:49,439
+And in the file-vault case the encryption
+is the script's,
+
+254
+00:17:49,519 --> 00:17:53,599
+not the module's — the storage skill is a
+passthrough to the node.
+
+255
+00:17:53,679 --> 00:17:57,119
+That is a real gap, written down rather
+than papered over.
+
+256
+00:18:45,200 --> 00:18:49,071
+Still proving, and nothing new will print
+until it finishes,
+
+257
+00:18:49,151 --> 00:18:53,418
+because the script hands the prover's
+output back all at once.
+
+258
+00:18:53,498 --> 00:18:56,183
+Which is worth a sentence about privacy.
+
+259
+00:18:56,263 --> 00:19:00,530
+This is a privacy-preserving transaction,
+so the payer stays shielded —
+
+260
+00:19:00,610 --> 00:19:03,691
+nobody watching the chain learns which
+agent paid.
+
+261
+00:19:03,771 --> 00:19:09,222
+The payee is public, and that is
+deliberately the only checkable side of
+it.
+
+262
+00:19:09,302 --> 00:19:12,383
+Privacy for the spender, accountability
+for the recipient.
+
+263
+00:19:46,200 --> 00:19:50,105
+When it finishes, one line appears: the
+settlement transaction hash.
+
+264
+00:19:50,185 --> 00:19:53,292
+Then the script stops proving and starts
+waiting,
+
+265
+00:19:53,372 --> 00:19:56,480
+because a submitted hash is not a payment.
+
+266
+00:19:56,560 --> 00:19:59,269
+Blocks here are about a minute apart.
+
+267
+00:20:03,200 --> 00:20:04,117
+There it is.
+
+268
+00:20:04,197 --> 00:20:06,776
+Signed by the agent, on the public
+testnet.
+
+269
+00:20:06,856 --> 00:20:09,435
+Now it polls for inclusion and refuses to
+
+270
+00:20:09,515 --> 00:20:12,094
+write anything down if the transaction
+never lands.
+
+271
+00:20:12,174 --> 00:20:14,753
+A hash that was submitted and a hash
+
+272
+00:20:14,833 --> 00:20:17,745
+that was dropped look identical to the RPC
+—
+
+273
+00:20:17,825 --> 00:20:19,407
+both come back null —
+
+274
+00:20:19,487 --> 00:20:23,395
+so absence proves nothing and the script
+waits properly rather than guessing.
+
+275
+00:20:45,200 --> 00:20:45,533
+Landed.
+
+276
+00:20:45,553 --> 00:20:50,412
+And now the check that matters: the
+recipient's balance, read off the chain
+again.
+
+277
+00:20:50,492 --> 00:20:55,351
+The difference is the price, exactly, and
+no owner signed anything at any point.
+
+278
+00:20:55,431 --> 00:20:57,821
+Only now does it write the manifest.
+
+279
+00:20:57,901 --> 00:21:02,407
+On any other outcome it refuses to, and
+leaves the previous record alone.
+
+280
+00:21:05,200 --> 00:21:07,820
+And then every settlement the marketplace
+has ever produced is
+
+281
+00:21:07,900 --> 00:21:10,791
+decoded out of the chain's own copy of the
+transaction —
+
+282
+00:21:10,871 --> 00:21:12,951
+not out of the file that recorded it.
+
+283
+00:21:13,031 --> 00:21:15,111
+The running total in the policy account is
+
+284
+00:21:15,191 --> 00:21:17,272
+the sum of every price charged to it.
+
+285
+00:21:17,352 --> 00:21:19,162
+That number is not kept by the
+
+286
+00:21:19,242 --> 00:21:21,322
+agent and not passed in by the caller.
+
+287
+00:21:21,402 --> 00:21:24,023
+It lives in the same ninety-seven bytes as
+the limits,
+
+288
+00:21:24,103 --> 00:21:25,913
+and the period it belongs to is
+
+289
+00:21:25,993 --> 00:21:28,073
+pinned to the transaction's own block
+validity window.
+
+290
+00:21:31,200 --> 00:21:32,647
+That is the whole thing.
+
+291
+00:21:32,727 --> 00:21:34,480
+An agent discovered a priced service,
+
+292
+00:21:34,560 --> 00:21:38,452
+decided by itself that it could afford it,
+proved it was allowed to,
+
+293
+00:21:38,532 --> 00:21:41,812
+and paid — on a public chain, with a real
+proof,
+
+294
+00:21:41,892 --> 00:21:44,562
+against a ceiling it has no way to raise.
+
+295
+00:21:44,642 --> 00:21:46,700
+The last line is an explorer link.
+
+296
+00:21:46,780 --> 00:21:50,061
+The explorer indexes about an hour and
+three-quarters behind the sequencer,
+
+297
+00:21:50,141 --> 00:21:52,199
+so it may still say not found.
+
+298
+00:21:52,279 --> 00:21:54,338
+The RPC has already returned this
+transaction.
