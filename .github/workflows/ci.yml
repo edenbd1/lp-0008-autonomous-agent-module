@@ -197,6 +197,15 @@ jobs:
             || { echo "only $passed test(s) ran: a suite that is not there exits 0 too"; exit 1; }
           rm -f cargo-test.out
 
+      # The floor above catches a suite that vanished. It does not catch a suite
+      # that GREW: README.md documents the command a reader runs and says "the
+      # policy crate, 24 tests" in its comment, and adding a test leaves that
+      # comment one short with every check in this file still green. The reader
+      # runs the line, counts 25, and the walkthrough is wrong about the only
+      # thing they can verify in five seconds.
+      - name: The README's stated test count is what the suite passes
+        run: ./scripts/check-test-count.py
+
       # The module's copy of the approval-marker derivation, against the crate
       # the chain runs. Not a table of expected values: the check RUNS
       # `agent-policy-core` and compares, so a change to either side that the
