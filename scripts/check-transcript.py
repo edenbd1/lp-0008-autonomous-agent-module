@@ -34,27 +34,44 @@ import tempfile
 TAIL = 30.0          # the last cue may end at most this far before the film does
 WINDOW = 25.0        # how far either side of a cue an anchor may appear on screen
 
-# (a phrase in the narration, a regex the picture must show while it is spoken).
-# Deliberately few and deliberately loose: this is a tie between two artefacts,
-# not an OCR accuracy contest.
-ANCHORS = [
-    # Chosen because the narration names what the picture is showing at that
-    # instant — "that percentage is r0vm" only makes sense over the prover's
-    # output. The digit classes are not decoration: tesseract renders 0 as @ or
-    # O in this terminal font, so the real OCR of that line comes back as
-    # `RISC@_DEV_MODE=0 r@vm 1129% cpu`, and a pattern spelling r0vm literally
-    # fails on a correct transcript. `scripts/check-video.py` documents the same
-    # confusion.
-    #
-    # `RISC0_DEV_MODE=0` is deliberately *not* anchored here: the narration
-    # states it in the opening minute, long before the proving output appears,
-    # so tying the two would fail on a transcript that is right. check-video.py
-    # asserts it against the whole film, which is where that belongs.
-    ("r0vm",                    r"r[0@oO]vm|elapsed"),
-    ("settlement transaction",  r"[0-9a-f]{16}"),
-    ("balance",                 r"balance|[0-9]+\s*->\s*[0-9]+"),
-    ("explorer",                r"explorer\.testnet\.lez"),
-]
+# Anchors are per film, because films do not show the same things: looking for
+# "r0vm" in a film that never proves anything reports "not testable" on every
+# line and then passes, which is the failure this file exists to prevent.
+#
+# Each entry is (a phrase in the narration, a regex the picture must show while
+# it is spoken). Deliberately few and deliberately loose: this ties two
+# artefacts together, it is not an OCR accuracy contest. The digit classes are
+# not decoration — tesseract renders 0 as @ or O in this terminal font, so the
+# prover line comes back as `RISC@_DEV_MODE=0 r@vm 1129% cpu`.
+ANCHORS = {
+    "lp8-demo.srt": [
+        # `RISC0_DEV_MODE=0` is deliberately not anchored here: the narration
+        # states it in the opening minute, long before the proving output
+        # appears, so tying the two would fail on a transcript that is right.
+        # check-video.py asserts it against the whole film, which is where that
+        # belongs.
+        ("r0vm",                    r"r[0@oO]vm|elapsed"),
+        ("settlement transaction",  r"[0-9a-f]{16}"),
+        ("balance",                 r"balance|[0-9]+\s*->\s*[0-9]+"),
+        ("explorer",                r"explorer\.testnet\.lez"),
+    ],
+    "lp-0003-claim-and-double-claim.srt": [
+        ("dev mode is 0",           r"DEV_MODE\s*=\s*[0@oO]"),
+        ("Five checks",             r"\[\s*[1-5]\s*/\s*5\s*\]|VERIFIED"),
+        ("marker already exists",   r"AccountAlreadyInitialized"),
+        ("public LEZ testnet",      r"testnet\.lez\.logos\.co"),
+    ],
+    "lp-0002-threshold-moves-value.srt": [
+        ("privacy-preserving variant", r"variant\s*1|PrivacyPreserving"),
+        ("approval marker",         r"approval\s*[01]|approval markers"),
+        ("Eight transactions",      r"variant\s*[0-9]|create_multisig"),
+        ("recipient",               r"recipient|balance\s*1"),
+    ],
+}
+
+# A film whose transcript is not listed above cannot be anchored, and this
+# refuses rather than passing on structure alone.
+MIN_ANCHORS = 2
 
 
 def need(binary):
@@ -135,7 +152,12 @@ def main(argv):
         if not any(probe):
             sys.exit("  tesseract read nothing from three frames of %s. The tool cannot see "
                      "the film; this says nothing about the transcript." % os.path.basename(film))
-        for phrase, pattern in ANCHORS:
+        table = ANCHORS.get(os.path.basename(srt))
+        if table is None:
+            sys.exit("  no anchors are defined for %s. Add them to ANCHORS rather than "
+                     "letting a structural pass stand in for a check."
+                     % os.path.basename(srt))
+        for phrase, pattern in table:
             hit = next((c for c in cs if phrase.lower() in c[3].lower()), None)
             if hit is None:
                 print("    the narration never says %r — anchor not testable" % phrase)
@@ -155,6 +177,10 @@ def main(argv):
                 print("    %-26s spoken at %.0fs, but no %s within %.0fs of it"
                       % (phrase, mid, pattern, WINDOW)); bad += 1
 
+    if found < MIN_ANCHORS:
+        print("    only %d anchor(s) could be tested (need %d): the part of this check "
+              "that ties words to pictures did not run, so it proved nothing." % (found, MIN_ANCHORS))
+        bad += 1
     if bad:
         print("  %d problem(s): this transcript is not this film's." % bad)
         return 1
