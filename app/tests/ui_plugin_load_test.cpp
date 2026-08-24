@@ -46,6 +46,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPluginLoader>
+#include <QTemporaryFile>
 #include <QPointer>
 #include <QString>
 #include <QWidget>
@@ -71,9 +72,23 @@ Q_DECLARE_INTERFACE(IComponent, IComponent_IID)
 namespace {
 
 int failures = 0;
+int asserted = 0;
+// Every assertion this harness is supposed to make. A run that makes fewer has
+// skipped one, and a skipped assertion is not a passing one. `failures == 0` is
+// true of a run that asserted nothing at all, which is the shape of green this
+// file spends its length arguing against everywhere else.
+//
+// Two numbers, because the second argument is optional by design: given
+// Basecamp's liblogos_core the harness also binds the plugin *with* the runtime
+// and casts through it, which is two more assertions. Without it the run is
+// legitimately shorter, and a single floor would reject the documented usage
+// instead of catching a skip.
+constexpr int EXPECTED_WITH_RUNTIME = 17;
+constexpr int EXPECTED_WITHOUT_RUNTIME = 15;
 
 void check(bool condition, const QString &what)
 {
+    ++asserted;
     std::fprintf(stderr, "  %s  %s\n", condition ? "ok  " : "FAIL", qPrintable(what));
     if (!condition) {
         ++failures;
@@ -154,6 +169,20 @@ int main(int argc, char **argv)
 
     // ---- 2. the Qt plugin contract ----------------------------------------
     QPluginLoader loader(pluginPath);
+    // The control for everything below it. QPluginLoader is pointed at a file
+    // that is not a plugin and must refuse it — without that, "the loader
+    // accepted this binary" is a sentence about a loader nobody has watched say
+    // no, and step 2 would pass on a JSON file.
+    {
+        QTemporaryFile notAPlugin;
+        notAPlugin.open();
+        notAPlugin.write("{\"this\":\"is json, not a plugin\"}");
+        notAPlugin.flush();
+        QPluginLoader bogus(notAPlugin.fileName());
+        check(bogus.instance() == nullptr,
+              QStringLiteral("QPluginLoader refuses a file that is not a plugin, so what it "
+                             "accepts below is a decision rather than a rubber stamp"));
+    }
     const QJsonObject metaData = loader.metaData();
     const QString iid = metaData.value(QStringLiteral("IID")).toString();
     note(QStringLiteral("declared IID: %1").arg(iid.isEmpty() ? QStringLiteral("(none)") : iid));
@@ -288,8 +317,20 @@ int main(int argc, char **argv)
                              "same call reaching the same verdict on the same input"));
     }
 
+    const int expected =
+        corePath.isEmpty() ? EXPECTED_WITHOUT_RUNTIME : EXPECTED_WITH_RUNTIME;
+    if (asserted < expected) {
+        std::fprintf(stderr,
+                     "\nonly %d of %d assertions ran%s. The rest were skipped, not\n"
+                     "passed. A step that returns early leaves `failures` at zero, and zero\n"
+                     "failures out of nothing asserted is the green this file exists to\n"
+                     "refuse.\n",
+                     asserted, expected,
+                     corePath.isEmpty() ? " (no runtime given)" : "");
+        return 1;
+    }
     if (failures == 0) {
-        std::fprintf(stderr, "all steps confirmed (0 failure(s))\n");
+        std::fprintf(stderr, "%d assertions, all of them ran (0 failure(s))\n", asserted);
         return 0;
     }
     std::fprintf(stderr, "\nSOME CHECKS FAILED (%d failure(s))\n", failures);
