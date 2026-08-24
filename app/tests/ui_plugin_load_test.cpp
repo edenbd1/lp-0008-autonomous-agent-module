@@ -330,7 +330,14 @@ int main(int argc, char **argv)
         return 1;
     }
     if (failures == 0) {
-        std::fprintf(stderr, "%d assertions, all of them ran (0 failure(s))\n", asserted);
+        // The banner keeps its exact wording: the workflow greps for it, and a
+        // negative control there mutates it on purpose to prove that grep fires.
+        // Renaming it broke the assertion and its falsifiability in one edit, and
+        // the step said "it exited 0 without reporting a full pass" about a run
+        // that had just reported seventeen. The count is added to it, not
+        // substituted for it.
+        std::fprintf(stderr, "all steps confirmed (0 failure(s)) — %d assertions, "
+                             "all of them ran\n", asserted);
         return 0;
     }
     std::fprintf(stderr, "\nSOME CHECKS FAILED (%d failure(s))\n", failures);
