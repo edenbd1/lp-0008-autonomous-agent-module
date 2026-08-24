@@ -168,7 +168,7 @@ def main():
 
     failures = []
     for run_id, sites in sorted(cited.items()):
-        out = sh("gh", "run", "view", run_id, "--json", "headSha,workflowName,conclusion")
+        out = sh("gh", "run", "view", run_id, "--json", "headSha,workflowName,conclusion,status")
         if out.returncode != 0:
             failures.append("run %s (cited at %s) could not be resolved: %s"
                             % (run_id, ", ".join(sites), out.stderr.strip()[:120]))
@@ -188,8 +188,19 @@ def main():
         # Green, or said not to be. Checked before the ancestry question,
         # because a red run a reader clicks is a worse citation than one on a
         # commit they cannot check out.
-        concl = info.get("conclusion", "")
-        if concl != "success":
+        # "Still running" and "finished badly" are different mistakes and get
+        # different sentences. A document that cites an unfinished run was
+        # written ahead of its evidence, and that is how a duration measured on
+        # an EARLIER run ends up printed next to a later one — a claim no reader
+        # can falsify without opening both.
+        concl = info.get("conclusion") or ""
+        if info.get("status") != "completed":
+            failures.append(
+                "run %s has not finished (%s) and is already cited at %s as "
+                "evidence. Whatever this document says about it — that it is "
+                "green, how long it took — was written before the run said so"
+                % (run_id, info.get("status", "?"), ", ".join(sites)))
+        elif concl != "success":
             excused = False
             for site in sites:
                 doc = site.split(":")[0]
@@ -235,7 +246,7 @@ def main():
         print("\n%d run id(s) mentioned without a link:" % len(bare))
         for run_id, sites in sorted(bare.items()):
             out = sh("gh", "run", "view", run_id, "--json",
-                     "headSha,workflowName,conclusion")
+                     "headSha,workflowName,conclusion,status")
             if out.returncode != 0:
                 failures.append(
                     "run %s is named at %s and DOES NOT RESOLVE — a number that "
