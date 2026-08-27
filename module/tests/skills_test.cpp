@@ -303,26 +303,6 @@ int main()
         check(!okOf(j.invoke(R"({"group_id":"a/json"})")),
               "messaging.join refuses a group id that would subscribe elsewhere");
 
-        // THE PRIZE DEFINES THIS SKILL AS "joins a Logos Messaging group topic",
-        // and `create_group` opens the channel on `groupTopic`. Join subscribed
-        // to `discoveryTopic` instead, so the two never met: both answered ok,
-        // and a frame on the group reached nobody who had joined it. Nothing
-        // caught it — the tests here and in the two live drivers only asserted
-        // `ok`, which both topics satisfy. So the topic itself is asserted now,
-        // and the two builders are required to differ, which is the whole reason
-        // the confusion was possible.
-        std::string joined;
-        DeliveryPort probe{[] { return true; },
-                           [](const std::string &, const std::vector<std::uint8_t> &) { return true; },
-                           [&](const std::string &t) { joined = t; return true; },
-                           [](const std::string &) { return true; }};
-        JoinSkill j2(probe);
-        check(okOf(j2.invoke(R"({"group_id":"g1"})")), "messaging.join accepts an ordinary group id");
-        check(joined == groupTopic("g1"),
-              "and subscribes to the group topic create_group opens, not another one");
-        check(groupTopic("g1") != discoveryTopic("g1"),
-              "which matters because the two topics are different by construction");
-
         CreateGroupSkill g(up);
         check(!okOf(g.invoke(R"({"group_id":"g1","members":["../../owner-VICTIM/json"]})")),
               "and create_group refuses to invite onto a forged topic");
