@@ -1,9 +1,16 @@
 # Success criteria: the evidence, at length
 
 This is the long form of the checklist in
-[`solutions/LP-0008.md`](../solutions/LP-0008.md), copied unchanged. The
-submission carries each criterion, its verdict and the one command that
-re-derives it; everything that did not fit is here.
+[`solutions/LP-0008.md`](../solutions/LP-0008.md), which is the submitted
+document byte for byte. It names the commit it was submitted against, and that
+commit is the parent of the one that put this copy here — the two differ by this
+file and nothing else. The submission carries each criterion, its verdict and the
+one command that re-derives it; everything that did not fit is here.
+
+That the copy and the submission agree is not something to take on trust: it has
+already drifted six kilobytes once, to a state where the copy contradicted itself
+about whether the storage skills had driven a live node, while this sentence went
+on calling it unchanged. Diff them before believing either.
 
 **Why it does not all live in the submission.** The prize's validator reads
 `solutions/LP-0008.md` with `echo "$SOL_CONTENT" | grep -qF "## Summary"` under
@@ -54,7 +61,7 @@ evidence and the command that re-derives it; what does not work is in
 
   **And it now runs in CI, on Linux, from the published sources.** In
   [run `32582715045`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32582715045)
-  on `4f4ede8`, this branch's head — **the whole workflow green** — on a bare `ubuntu-latest` runner
+  on `4f4ede8` — **the whole workflow green** — on a bare `ubuntu-latest` runner
   that starts with none of this installed, all six builds succeed — the Delivery
   library from source, the Go wallet SDK, and the three companion modules — and
   then:
@@ -555,12 +562,12 @@ evidence and the command that re-derives it; what does not work is in
   `RISC0_DEV_MODE: 0`. It runs nightly (`cron: '20 5 * * *'`), on demand, and on
   every push to `main` that touches the deployed program, the IDL, the vendored
   `spel`, the crates, or the script and workflow that drive them.
-  **Green on this branch's head commit itself, and under each trigger that has
-  fired.**
+  **Green under each trigger that has fired, and on the commits named below
+  rather than only on ancestors of them.**
 
   | run | trigger | conclusion | duration | head commit |
   |---|---|---|---|---|
-  | [`32621320255`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32621320255) | `schedule` | **success** | 3 h 04 m | `e23cc55` — **the head of this branch** |
+  | [`32621320255`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32621320255) | `schedule` | **success** | 3 h 04 m | `e23cc55` |
   | [`32104382201`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32104382201) | `schedule` | **success** | 3 h 05 m | `bc1de5b` |
   | [`32024953786`](https://github.com/edenbd1/lp-0008-autonomous-agent-module/actions/runs/32024953786) | `workflow_dispatch` | **success** | 3 h 03 m | `44cf3a8` |
 
