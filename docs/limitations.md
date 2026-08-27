@@ -82,6 +82,35 @@ ok  a separate account the attacker controls: the anchor refused [6020], the
     against that policy, and the attacker's own approval refused [6012]
 ```
 
+## `messaging.join` subscribes to the discovery topic, not the group's
+
+The prize defines the skill as "joins a Logos Messaging group topic".
+`JoinSkill::invoke` builds its topic with `discoveryTopic(group)`
+(`module/src/messaging_skills.cpp`), while `messaging.create_group` opens its
+channel with `groupTopic(channelId)` (`module/src/delivery_runtime.cpp`). Those
+are different topics by construction, so **the two calls do not meet**: both
+answer `{"ok":true}`, and a frame published to the group reaches nobody who
+joined it through this skill.
+
+The header above `groupTopic` already argues why group frames must stay off the
+discovery topic, and `delivery_runtime.cpp` cites that argument where it opens
+the channel. Only one side of the pair was moved.
+
+Nothing here would have caught it, which is the part worth stating. The unit test
+asserts that join *refuses* a malformed id; the two live drivers assert `ok:true`,
+which both topics satisfy; `skills-live-drive.cpp` never calls join. An assertion
+on the topic itself is what was missing.
+
+**Why it is disclosed rather than fixed here.** The one-line source change is
+obvious and was written. It is not shipped, because `module/agent.lgx` carries
+compiled binaries for three architectures and this repository's own
+`check-package-fresh.py` refuses — correctly — a package whose source has moved
+under it. Rebuilding needs the `logos-module-builder` toolchain and a
+cross-compile for `linux-amd64` and `linux-arm64`. Landing the source fix without
+the rebuild would make the tree claim a behaviour the shipped module does not
+have, which is the failure this file exists to prevent, and which
+`check-package-fresh.py` was written after the package shipped stale twice.
+
 ## An approval used to be a bearer instrument, and now expires
 
 Same class, found in the same pass. `spend_approved` returned a bare
