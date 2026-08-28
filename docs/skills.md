@@ -330,9 +330,9 @@ Notation: **bold** parameters are required.
 
 | Skill | Parameters | Answers |
 |---|---|---|
-| `storage.upload` | **`path`** string, `label` string | content address |
+| `storage.upload` | **`path`** string, `label` string | content address. **It does not encrypt**, though the prize's wording for this skill says it does: it is a passthrough to the node, and an agent wanting an encrypted vault must encrypt before calling it. Named in full in `docs/use-cases.md` |
 | `storage.download` | **`address`** string, **`path`** string | local path written |
-| `storage.list` | — | stored items with labels and addresses |
+| `storage.list` | — | the node's own manifest list, passed through unreshaped — content addresses, **not the labels given at upload**: Storage addresses by content and has nowhere to put a name, so a label is echoed back by `storage.upload` and stored nowhere |
 | `storage.share` | **`address`** string, **`recipient`** string | which half failed, if either — sharing a content address is a messaging act |
 
 ### Messaging — over Logos Delivery
