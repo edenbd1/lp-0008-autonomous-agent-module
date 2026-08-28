@@ -1,16 +1,18 @@
 # Success criteria: the evidence, at length
 
 This is the long form of the checklist in
-[`solutions/LP-0008.md`](../solutions/LP-0008.md), which is the submitted
-document byte for byte. It names the commit it was submitted against, and that
-commit is the parent of the one that put this copy here — the two differ by this
-file and nothing else. The submission carries each criterion, its verdict and the
-one command that re-derives it; everything that did not fit is here.
+[`solutions/LP-0008.md`](../solutions/LP-0008.md), which is a copy of the
+submitted document. **The pull request is authoritative; this copy is a
+convenience.** It cannot be byte-identical by construction — a document cannot
+name the commit that contains it, and a correction made after this commit lands
+on the pull request first — so the honest instruction is to diff them rather than
+to take a claim of equality on trust.
 
-That the copy and the submission agree is not something to take on trust: it has
-already drifted six kilobytes once, to a state where the copy contradicted itself
-about whether the storage skills had driven a live node, while this sentence went
-on calling it unchanged. Diff them before believing either.
+That instruction is not a formality. This sentence used to assert the copy was
+unchanged, and the copy had drifted six kilobytes to a state where it
+contradicted itself about whether the storage skills had driven a live node. A
+claim of equality between two files that move independently is a claim that
+becomes false without anyone touching it.
 
 **Why it does not all live in the submission.** The prize's validator reads
 `solutions/LP-0008.md` with `echo "$SOL_CONTENT" | grep -qF "## Summary"` under
