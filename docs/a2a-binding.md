@@ -97,12 +97,13 @@ this binding follows the grammar Logos documents in
 
 with `application = lp-0008`, `version = 1`, `encoding = json`.
 
-### 2.2 The three topics
+### 2.2 The four topics
 
 | Purpose | Topic | Function |
 |---|---|---|
 | Owner channel, and one-to-one traffic with any account | `/lp-0008/1/owner-<account>/json` | `ownerTopic` in `messaging_skills.cpp` |
 | Agent Card discovery, per namespace | `/lp-0008/1/discovery-<namespace>/json` | `discoveryTopic` in `messaging_skills.cpp` |
+| A group, joined by `messaging.join` and opened by `messaging.create_group` | `/lp-0008/1/group-<id>/json` | `groupTopic` in `messaging_skills.cpp` |
 | One A2A task | `/lp-0008/1/task-<agentAccount>-<taskId>/json` | `taskTopic` in `agent_skills.cpp` |
 
 `<account>` and `<agentAccount>` are base58 LEZ account ids. `<taskId>` is the

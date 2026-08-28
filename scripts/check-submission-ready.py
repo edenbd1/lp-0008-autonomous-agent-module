@@ -214,15 +214,22 @@ def main():
             if r.get("headSha") != head or r["name"] in seen:
                 continue
             seen.add(r["name"])          # newest first, so this is the latest run
-            if r.get("conclusion") == "failure":
-                red.append((r["name"], r["databaseId"]))
-        for name, rid in red:
+            # Green is `success` and nothing else. `failure` is the obvious red,
+            # but `cancelled`, `timed_out`, `stale` and a run still in flight
+            # (conclusion null) are not green either, and treating them as green
+            # is how a reviewer reads "CI is green" over a HEAD whose skills test
+            # was cancelled before it ran. A run that has not concluded cannot be
+            # cited as passing; report it rather than assume it.
+            c = r.get("conclusion")
+            if c != "success":
+                red.append((r["name"], r["databaseId"], c or "still running"))
+        for name, rid, why in red:
             failures.append(
-                "'%s' is RED on HEAD (run %s). A reviewer opening the Actions tab "
-                "sees that before reading any citation. Fix it, or say in the "
-                "document that it is red and why." % (name, rid))
+                "'%s' is not green on HEAD (run %s: %s). A reviewer opening the "
+                "Actions tab sees that before reading any citation. Get it green, "
+                "or say in the document that it is not and why." % (name, rid, why))
         if seen and not red:
-            notes.append("every workflow that ran on HEAD is green (%d)" % len(seen))
+            notes.append("every workflow that ran on HEAD concluded success (%d)" % len(seen))
         elif not seen:
             notes.append("no workflow has run on HEAD yet — nothing to contradict, "
                          "and nothing to show either")

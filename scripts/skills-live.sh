@@ -22,27 +22,24 @@
 #
 # WHAT RUNNING IT FOUND
 #
-# `messaging.create_group` does not work through the port the module builds for
-# itself. `DeliveryRuntime::deliveryPort()` passes the group id where the CONTENT
-# TOPIC goes — `channelCreate(channelId, channelId, channelId)` — and a real node
-# subscribes to that content topic before opening the channel, so it refuses a
-# bare identifier. Measured on one node, in one process, two calls apart: pass B
-# below opens a channel whose content topic is `/lp-0008/1/discovery-<id>/json`
-# and is refused for the same channel with the bare id. `owner_channel.cpp`
-# passes `ownerTopic(account)` and has always worked live, which is why nothing
-# else caught this. The fix is one line in `module/src`; THIS SCRIPT DOES NOT
-# MAKE IT — a source change there makes the shipped `.lgx` stale — and
-# `docs/skills.md` states the resulting position.
+# `messaging.create_group` and `messaging.join` used to disagree about which
+# topic a group lives on. `deliveryPort()` passed the group id where the CONTENT
+# TOPIC goes and `JoinSkill` subscribed `discoveryTopic(group)`, so a joiner never
+# met the channel. Both were one-line source changes; both are made, which makes
+# the shipped `.lgx` stale and forces a repackage — done, all three variants, and
+# `docs/skills.md` states the resulting position. `owner_channel.cpp` passes
+# `ownerTopic(account)` and has always worked live, which is why nothing else
+# caught either one.
 #
 # So there are two passes, and they answer two different questions:
 #
 #   A. module-port  the storage skills against a real Storage node, and
 #                   `messaging.create_group` against the port the module builds
-#                   for itself — which refuses, and that refusal is asserted.
+#                   for itself — which now OPENS the channel on `groupTopic`, and
+#                   that success is asserted.
 #   B. host-port    `messaging.create_group` against a DeliveryPort a host
-#                   supplies, differing from the module's in that one line. The
-#                   channel opens, both members are invited, and the invitations
-#                   come back off the members' own topics.
+#                   supplies. The channel opens, both members are invited, and the
+#                   invitations come back off the members' own topics.
 #
 # WHAT IT COSTS: nothing. Storage and Messaging, no chain, no transaction, no
 # balance moved. It is separate from `demo.sh` for the same reason
@@ -293,10 +290,10 @@ fi
 rule "6. pass B — create_group through a DeliveryPort a host supplies"
 # One node again, and this time no storage node at all. The port differs from
 # `DeliveryRuntime::deliveryPort()`'s in one line — the content topic the channel
-# is opened on — and the same skill that was refused in pass A now opens a
-# channel, invites two members, and their invitations come back off their own
-# owner topics. The bare-id call is made directly on the same node, so the
-# difference is measured rather than argued.
+# is opened on. The skill opens a channel, invites two members, and their
+# invitations come back off their own owner topics, the same as it does through
+# the module's own port in pass A. The bare-id call is made directly on the same
+# node, so the difference is measured rather than argued.
 LOG_B="$WORK/pass-b.log"
 ( cd "$WORK" && "$BIN" host-port "$RUN_ID" "$WORK/store" "$IN" "$OUT" "$CONTROL_OUT" ) \
   > "$LOG_B" 2>&1; rc_b=$?
