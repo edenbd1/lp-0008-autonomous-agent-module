@@ -173,7 +173,14 @@ std::string JoinSkill::invoke(const std::string &paramsJson)
     if (!field(p, "group_id", group, err)) return fail(err);
     if (!port_.ready || !port_.ready()) return fail("delivery node is not started");
 
-    const std::string topic = discoveryTopic(group);
+    // `groupTopic`, not `discoveryTopic`. The prize defines this skill as
+    // "joins a Logos Messaging group topic", and `messaging.create_group` opens
+    // the channel on `groupTopic(channelId)` — so subscribing to the discovery
+    // namespace meant join and create_group never met: both answered ok, and a
+    // frame published to the group reached nobody who had joined it. The header
+    // above `groupTopic` already argued why group frames must stay off the
+    // discovery topic; only one side of the pair had been moved.
+    const std::string topic = groupTopic(group);
     if (topic.empty()) return fail(notAnIdentifier("group_id", group));
     if (!port_.subscribe || !port_.subscribe(topic)) {
         return fail("delivery refused the subscription");

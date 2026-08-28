@@ -199,7 +199,14 @@ The way back is therefore in the record rather than in the address:
   to the terms.
 
 `update_policy` with `per_tx = 0` is the brake — the agent may then spend nothing
-unattended and every payment needs an owner approval. That state is a policy
+unattended and every payment needs an owner approval. **On the three agents
+published here that brake cannot be pulled**, and the reason is in
+`docs/limitations.md`: each of their owners spent its pristine state on
+`create_policy`, so all three now read `nonce: 1` with the default program owner
+and cannot sign again. Measured, not inferred — an `auth-transfer init` against
+one of them was submitted and never included. The mechanism below is the
+program's; the three shipped agents cannot reach it, and a fourth owner
+provisioned before anchoring can. That state is a policy
 rather than a mistake, which is why `create_policy` accepts `per_tx = 0` too, and
 why accepting it is safe now and was not before: under the previous program the
 identical value, from any stranger, was a permanent denial of service; here only

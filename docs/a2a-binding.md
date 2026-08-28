@@ -319,8 +319,11 @@ agent.discover({"topic": "/lp-0008/1/discovery-<ns>/json",
 
 `agent.discover` passes the topic through **exactly as given**
 (`DiscoveryPort` in `agent_skills.h`); turning a namespace into a content topic is
-`discoveryTopic()`'s job, and `messaging.join(group_id)` is the call that
-subscribes to it (`messaging_skills.cpp`).
+`discoveryTopic()`'s job. `messaging.join(group_id)` does **not** subscribe to it
+— it subscribes the group's own topic, which is what the prize defines that skill
+as doing. Discovery topics are reached by `agent.discover`, whose read auto-
+subscribes; nothing needs `join` for that, and the sentence that used to say
+otherwise was describing a defect as though it were the design.
 
 For each document fetched it returns either a summary — `name`, `url`,
 `version`, `signed`, `transport`, `skills` (ids only), `price`, `lez_account`,

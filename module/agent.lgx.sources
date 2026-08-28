@@ -37,7 +37,7 @@
     "module/src/delivery_runtime.h": "5cd0c108bdf342f2a260cd6043b22dc1f5ae3d9bc981537878aa7e5a53227892",
     "module/src/inference.cpp": "ecb0d3048ee7c26688f31af1621db7da2bf52437547e16920ea323c82a34c3fa",
     "module/src/inference.h": "5c27af5158edd83fe9bcaaa355a86d90748f68cfc787f922d8190a5969ac2732",
-    "module/src/messaging_skills.cpp": "a3d65d382a0f750c5ddec000274b1ac4d17168e6411f8068c19bb621de8ef770",
+    "module/src/messaging_skills.cpp": "ab0be6d3c47f16d8be9263fc196a493ebed3f8abf4fdeed590e69cffee23495e",
     "module/src/messaging_skills.h": "1c2f1eb6677e15135d9eda5f5c65737e5606c7b623ec1eb168ba2390b3fdce7e",
     "module/src/owner_channel.cpp": "1fd284251653869cc8721e5051e298b56d8b4f4444611526e28e7288bc9f002e",
     "module/src/owner_channel.h": "d84c978a8d5e6189e39ac2accdc4d0de430577f5bf195d0f016ac2e21cb7f8d5",
@@ -56,7 +56,7 @@
   },
   "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
   "package": "module/agent.lgx",
-  "package_root_hash": "ff4e250b8acbd0fb9869bdd2e322784f9eb6dc9f0edd3db3244a5ff08f496318",
+  "package_root_hash": "05028f1024605d1562455e9c39b888551c454a73952192a61132aaa43cfdcc02",
   "variants": {
     "darwin-arm64": {
       "built_on": null,
@@ -67,7 +67,7 @@
       "main": "agent_plugin.dylib",
       "qt": "6.9",
       "qt_reported": "6.9.2",
-      "sha256": "e411d3f4f0d2aae5a550e28afe6b59c3443d63243d5c742f7692df5a2c085345"
+      "sha256": "a59d0c16fcd74c5252865232cd0fcc7ba639c7a3e52e77fe41d7965902667dab"
     },
     "linux-amd64": {
       "built_on": null,
@@ -78,18 +78,18 @@
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "41469df784427d635bb4d77db336b060981dbb150f0a47c0ed8ceb6cc3df80fa"
+      "sha256": "50aa2de8b7d35cfd4ec55f6030e997b0f4201e13df5b394efa16e3ea00989708"
     },
     "linux-arm64": {
       "built_on": null,
-      "bytes": 7353784,
+      "bytes": 7354000,
       "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
       "delivery": null,
       "format": "ELF aarch64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "a23eaa9ae2c13d71e342828476dec5114899bbd22246138e9c3f4f0e7dab6aed"
+      "sha256": "1ab551c69d1771c26fafee9df9702f601578e31044b16f493f120f57770a7699"
     }
   }
 }

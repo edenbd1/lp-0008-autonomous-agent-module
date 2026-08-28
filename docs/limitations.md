@@ -82,34 +82,39 @@ ok  a separate account the attacker controls: the anchor refused [6020], the
     against that policy, and the attacker's own approval refused [6012]
 ```
 
-## `messaging.join` subscribes to the discovery topic, not the group's
+## CLOSED: `messaging.join` joins the group's own topic
 
-The prize defines the skill as "joins a Logos Messaging group topic".
-`JoinSkill::invoke` builds its topic with `discoveryTopic(group)`
-(`module/src/messaging_skills.cpp`), while `messaging.create_group` opens its
-channel with `groupTopic(channelId)` (`module/src/delivery_runtime.cpp`). Those
-are different topics by construction, so **the two calls do not meet**: both
-answer `{"ok":true}`, and a frame published to the group reaches nobody who
+The prize defines the skill as "joins a Logos Messaging group topic". For a while
+it did not: `JoinSkill::invoke` built its topic with `discoveryTopic(group)` while
+`messaging.create_group` opened its channel with `groupTopic(channelId)`. Those
+are different topics by construction, so the two calls did not meet — both
+answered `{"ok":true}`, and a frame published to the group reached nobody who had
 joined it through this skill.
 
-The header above `groupTopic` already argues why group frames must stay off the
-discovery topic, and `delivery_runtime.cpp` cites that argument where it opens
-the channel. Only one side of the pair was moved.
+**Nothing would have caught it, and that is the part worth keeping.** The unit
+test asserted that join *refuses* a malformed id; the two live drivers assert
+`ok:true`, which both topics satisfy; `skills-live-drive.cpp` never calls join. An
+assertion on the topic itself was what was missing, and it is what the fix added:
 
-Nothing here would have caught it, which is the part worth stating. The unit test
-asserts that join *refuses* a malformed id; the two live drivers assert `ok:true`,
-which both topics satisfy; `skills-live-drive.cpp` never calls join. An assertion
-on the topic itself is what was missing.
+    check(joined == groupTopic("g1"), "and subscribes to the group topic create_group opens, not another one");
+    check(groupTopic("g1") != discoveryTopic("g1"), "and it is not the discovery topic, which carries Agent Cards");
 
-**Why it is disclosed rather than fixed here.** The one-line source change is
-obvious and was written. It is not shipped, because `module/agent.lgx` carries
-compiled binaries for three architectures and this repository's own
-`check-package-fresh.py` refuses — correctly — a package whose source has moved
-under it. Rebuilding needs the `logos-module-builder` toolchain and a
-cross-compile for `linux-amd64` and `linux-arm64`. Landing the source fix without
-the rebuild would make the tree claim a behaviour the shipped module does not
-have, which is the failure this file exists to prevent, and which
-`check-package-fresh.py` was written after the package shipped stale twice.
+**Why it stayed open as long as it did, which is the more useful record.** The
+source change was written, then reverted, on the stated grounds that
+`module/agent.lgx` carries compiled plugins for three architectures and
+`check-package-fresh.py` correctly refuses a package whose source has moved under
+it — and that rebuilding all three was out of reach here. That premise was never
+tested. It was wrong three times over: `lgx` and `logos-module-builder` are both
+present, and the two Docker images that carry Qt 6.9.2 for `linux-amd64` and
+`linux-arm64` had already been built. The defect outlived its cause by the width
+of an assumption nobody checked.
+
+**One trap on the way out, worth writing down.** The change moves no string
+literal — `group-` and `discovery-` were already in all three binaries — so
+`check-package-fresh.py`'s second layer, the one that corroborates by literals,
+sees nothing. A darwin-only rebuild would have gone green while shipping the
+defect on both Linux variants. Only the per-file digest catches it, and it is the
+reason all three were rebuilt rather than the one that was convenient.
 
 ## An approval used to be a bearer instrument, and now expires
 

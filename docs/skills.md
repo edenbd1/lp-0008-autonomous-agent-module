@@ -341,7 +341,7 @@ Notation: **bold** parameters are required.
 |---|---|---|
 | `messaging.send` | **`recipient`** string (Logos account id), **`message`** string | dispatch result |
 | `messaging.receive` | **`topic`** string (passed through exactly as given), `since` integer ≥ 0 (skip this many already read) | the frames on that topic. Non-draining: a consuming read would give two readers half the traffic each |
-| `messaging.join` | **`group_id`** string | join result |
+| `messaging.join` | **`group_id`** string | join result, and the topic joined — `groupTopic(group_id)`, the same channel `messaging.create_group` opens. A unit test asserts the two meet, because for a while they did not |
 | `messaging.create_group` | **`group_id`** string, **`members`** array of string | a reliable channel, not a bare topic |
 
 `messaging.create_group` requires a `group_id`; the prize's signature is
