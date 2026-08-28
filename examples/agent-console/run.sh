@@ -108,6 +108,7 @@ echo "[2/5] compile agent-console, linking the agent module unmodified"
     "$repo/module/src/spend_marker.cpp" \
     "$repo/module/src/messaging_skills.cpp" \
     "$repo/module/src/storage_skills.cpp" \
+    "$repo/module/src/vault_crypto.cpp" \
     "$repo/module/src/inference.cpp" \
     "$repo/module/src/wallet_skills.cpp" \
     "$repo/module/src/program_skills.cpp" \

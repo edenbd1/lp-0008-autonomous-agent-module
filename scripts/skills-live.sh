@@ -181,6 +181,7 @@ before="$(git status --porcelain module/ 2>/dev/null || true)"
   module/src/spend_marker.cpp \
   module/src/messaging_skills.cpp \
   module/src/storage_skills.cpp \
+  module/src/vault_crypto.cpp \
   module/src/inference.cpp \
   module/src/wallet_skills.cpp \
   module/src/program_skills.cpp \
@@ -337,6 +338,7 @@ MUT_BIN="$WORK/skills-live-drive-unwired"
   module/src/spend_marker.cpp \
   module/src/messaging_skills.cpp \
   module/src/storage_skills.cpp \
+  module/src/vault_crypto.cpp \
   module/src/inference.cpp \
   module/src/wallet_skills.cpp \
   module/src/program_skills.cpp \
