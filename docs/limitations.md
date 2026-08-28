@@ -326,7 +326,17 @@ cannot be claimed, and cannot be credited. `update_policy` over the shipped thre
 is unreachable for the same reason and stays unreachable.
 
 The fix is therefore **an ordering requirement on new deployments**: claim the
-owner before it anchors. It does not rescue an owner that has already anchored.
+owner before it anchors. It does not rescue an owner that has already anchored,
+and it is **not applied in `scripts/deploy-agents.sh` as shipped** — `resolve_signer`
+creates the owner and lets `create_policy` be its first transaction, so a reviewer
+who clones and re-runs the script reproduces exactly these three frozen owners.
+That is stated here rather than left to be discovered: the deployment is
+reproducible and the below-threshold path works on all three, but the approval and
+`update_policy` paths on a freshly-run deployment are reachable only on an owner
+claimed before `create_policy`, which the fourth demonstration agent is and the
+three category agents are not. Getting the ordering right against a program whose
+`create_policy` is `#[account(init)]` on the owner is not a one-line edit; it is
+left for a redeployment rather than shipped half-tested.
 
 ### The demonstration
 
