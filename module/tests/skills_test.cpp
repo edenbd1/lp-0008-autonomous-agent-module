@@ -32,6 +32,7 @@
 // the module half of this suite now needs every skill's translation unit.)
 #include "../src/messaging_skills.h"
 #include "../src/storage_skills.h"
+#include "../src/vault_crypto.h"
 
 #include <nlohmann/json.hpp>
 #include <cstdio>
@@ -45,7 +46,10 @@
 #include <cstdlib>
 #include <functional>
 #include <future>
+#include <fstream>
 #include <map>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -418,20 +422,90 @@ int main()
               "blaming the wiring that time");
     }
     {
-        StoragePort up{[] { return true; },
-                       [](const std::string &, std::int64_t) { return std::string("cid-1"); },
-                       [](const std::string &, const std::string &) { return true; },
-                       [] { return std::string("[]"); },
-                       [](const std::string &c) { return c == "cid-1"; }};
+        // A real round trip through a backing store the fake actually keeps, so
+        // the encryption is exercised rather than asserted: upload reads a
+        // plaintext file, seals it, and hands the node a temp path; the fake
+        // stores whatever bytes that path holds; download hands them back and the
+        // skill decrypts. What the node stores must NOT be the plaintext, and
+        // what comes back out MUST be.
+        const std::string dir = "/tmp/vault-test-" + std::to_string(::getpid());
+        ::mkdir(dir.c_str(), 0700);
+        const std::string src = dir + "/plain.txt";
+        { std::ofstream f(src); f << "the owner's private notes, at rest"; }
+        std::map<std::string, std::vector<char>> store;
+        StoragePort up{
+            [] { return true; },
+            [&store](const std::string &path, std::int64_t) {
+                std::ifstream in(path, std::ios::binary);
+                std::vector<char> b((std::istreambuf_iterator<char>(in)), {});
+                std::string cid = "cid-" + std::to_string(store.size() + 1);
+                store[cid] = b;
+                return cid;
+            },
+            [&store](const std::string &cid, const std::string &path) {
+                auto it = store.find(cid);
+                if (it == store.end()) return false;
+                std::ofstream out(path, std::ios::binary);
+                out.write(it->second.data(), std::streamsize(it->second.size()));
+                return true;
+            },
+            [&store] {
+                std::string a = "[";
+                bool first = true;
+                for (auto &kv : store) { if (!first) a += ","; a += "{\"cid\":\"" + kv.first + "\"}"; first = false; }
+                return a + "]";
+            },
+            [&store](const std::string &c) { return store.count(c) > 0; },
+            [dir] { return dir; }};
+
         UploadSkill u(up);
-        const auto r = u.invoke(R"({"path":"/tmp/x","label":"notes"})");
+        const auto r = u.invoke(std::string(R"({"path":")") + src + R"(","label":"notes"})");
         auto j = json::parse(r, nullptr, false);
-        check(okOf(r) && j.value("address", std::string{}) == "cid-1", "upload returns the content address");
+        const std::string cid = j.value("address", std::string{});
+        check(okOf(r) && !cid.empty() && j.value("encrypted", false), "upload encrypts and returns the content address");
+
+        // The bytes the node holds are the sealed blob, not the file.
+        check(std::string(store[cid].begin(), store[cid].end()).find("private notes") == std::string::npos,
+              "and what Storage holds is the ciphertext, not the plaintext");
 
         DownloadSkill d(up);
         check(!okOf(d.invoke(R"({"address":"nope","path":"/tmp/y"})")),
               "download reports an unknown address as unknown");
-        check(okOf(d.invoke(R"({"address":"cid-1","path":"/tmp/y"})")), "and succeeds on a known one");
+        const std::string dst = dir + "/back.txt";
+        const auto dr = d.invoke(std::string(R"({"address":")") + cid + R"(","path":")" + dst + R"("})");
+        check(okOf(dr), "and decrypts a known one");
+        std::ifstream back(dst); std::string got((std::istreambuf_iterator<char>(back)), {});
+        check(got == "the owner's private notes, at rest", "the file comes back exactly as it went in");
+
+        ListSkill l(up);
+        const auto lr = l.invoke("{}");
+        check(okOf(lr) && lr.find("notes") != std::string::npos, "and list carries the label the upload gave");
+
+        // Known answers for the sealing primitives, so a subtle break in the
+        // keystream or the tag is caught here rather than by a file that will not
+        // decrypt. SHA-256 and HMAC-SHA256 are standard; the vectors are theirs.
+        auto hx = [](const std::vector<std::uint8_t> &v) {
+            static const char *d = "0123456789abcdef";
+            std::string o; for (auto b : v) { o += d[b>>4]; o += d[b&15]; } return o; };
+        auto bytes = [](const std::string &t) {
+            return std::vector<std::uint8_t>(t.begin(), t.end()); };
+        check(hx(vault::sha256(bytes("abc")))
+                == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+              "vault sha256 matches the standard test vector for \"abc\"");
+        check(hx(vault::hmacSha256(bytes("Jefe"), bytes("what do ya want for nothing?")))
+                == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+              "vault hmac matches RFC 4231 test case 2");
+        {
+            auto key = vault::newKey();
+            auto blob = vault::seal(key, bytes("round trip"));
+            std::vector<std::uint8_t> back;
+            check(vault::open(key, blob, back) && std::string(back.begin(), back.end()) == "round trip",
+                  "vault seal/open round-trips");
+            blob.back() ^= 1;
+            std::vector<std::uint8_t> nope;
+            check(!vault::open(key, blob, nope) && nope.empty(),
+                  "a tampered tag is rejected and yields nothing");
+        }
     }
     {
         // share must refuse when it CANNOT check the address, not only when the
@@ -846,11 +920,15 @@ int main()
             [&](const std::string &t, const std::vector<std::uint8_t> &) { sentTopic = t; return true; },
             [](const std::string &) { return true; },
             [](const std::string &) { return true; }};
+        const std::string storageDir = "/tmp/vault-dispatch-" + std::to_string(::getpid());
+        ::mkdir(storageDir.c_str(), 0700);
+        { std::ofstream f("/tmp/x"); f << "dispatch payload"; }
         ports.storage = StoragePort{[] { return true; },
                                     [](const std::string &, std::int64_t) { return std::string("cid-1"); },
                                     [](const std::string &, const std::string &) { return true; },
                                     [] { return std::string("[]"); },
-                                    [](const std::string &c) { return c == "cid-1"; }};
+                                    [](const std::string &c) { return c == "cid-1"; },
+                                    [storageDir] { return storageDir; }};
         // The shielded read: the only path to a private balance, and the reason
         // WalletPort has two account functions rather than one.
         ports.agentAccount = std::string("Private/") + kAgentAccount;

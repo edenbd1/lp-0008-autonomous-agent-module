@@ -330,9 +330,9 @@ Notation: **bold** parameters are required.
 
 | Skill | Parameters | Answers |
 |---|---|---|
-| `storage.upload` | **`path`** string, `label` string | content address. **It does not encrypt**, though the prize's wording for this skill says it does: it is a passthrough to the node, and an agent wanting an encrypted vault must encrypt before calling it. Named in full in `docs/use-cases.md` |
-| `storage.download` | **`address`** string, **`path`** string | local path written |
-| `storage.list` | — | the node's own manifest list, passed through unreshaped — content addresses, **not the labels given at upload**: Storage addresses by content and has nowhere to put a name, so a label is echoed back by `storage.upload` and stored nowhere |
+| `storage.upload` | **`path`** string, `label` string | content address. **Encrypts the file before the node sees it** — SHA256-CTR keystream with an HMAC-SHA256 tag, sealed in `module/src/vault_crypto.cpp`, so what Logos Storage holds and what the content address names is the ciphertext, never the file. The vault key is made once and kept in the node's data directory. |
+| `storage.download` | **`address`** string, **`path`** string | local path written, **decrypted** — retrieves the sealed blob and opens it with the vault key. A wrong key or a tampered blob fails the tag and writes nothing, so a reader never gets plausible garbage. |
+| `storage.list` | — | the node's manifest list joined with the labels the agent recorded at upload. Storage addresses by content and keeps no name, so the label lives in a small map beside the node and `storage.list` attaches it to each content address |
 | `storage.share` | **`address`** string, **`recipient`** string | which half failed, if either — sharing a content address is a messaging act |
 
 ### Messaging — over Logos Delivery

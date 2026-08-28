@@ -31,6 +31,11 @@ struct StoragePort {
     std::function<std::string()> manifests;
     /// `exists(cid)`
     std::function<bool(const std::string &cid)> exists;
+    /// The node's data directory. The skills keep the vault key and the
+    /// content-address to label map here, beside the node's own storage, so both
+    /// survive a restart. Empty means "not wired" — the skills then refuse to
+    /// encrypt rather than fall back to plaintext.
+    std::function<std::string()> dataDir;
 };
 
 /// How a shared address reaches its recipient. Sharing a content address is a

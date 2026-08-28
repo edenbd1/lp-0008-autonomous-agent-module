@@ -130,6 +130,7 @@ logos_module(
         src/messaging_skills.cpp
         src/storage_skills.h
         src/storage_skills.cpp
+        src/vault_crypto.cpp
         src/inference.h
         src/inference.cpp
         src/wallet_skills.h

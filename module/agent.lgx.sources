@@ -22,7 +22,7 @@
     "name, type or author."
   ],
   "built_from": {
-    "module/CMakeLists.txt": "567c0bec1d6da188f5f5da815014b63386c46786d745ca646a06ee352da4ae2e",
+    "module/CMakeLists.txt": "9b6f8eb7a307a42c0633b80e22d4ae86e564928df11aecbf34620805ae4e760d",
     "module/agent_module_plugin_export.h": "149a9597119d18ff7630b1bac939e1051d6c975129e17c4f33513a1dada85aa9",
     "module/generated_code/agent_dispatch.cpp": "26140ef3be69032b4006d43939843ad37ffd0660707d6f83d57cb1b27d88c2a1",
     "module/generated_code/agent_events.cpp": "544722ac079d102aa47c3613b458c7b559644b263727712cc9286f65ce9f93c2",
@@ -47,49 +47,49 @@
     "module/src/program_skills.h": "820dc8abe2870a6bb10cb519f979d8add33a152536cc34d1b35a7cccb769ca97",
     "module/src/spend_marker.cpp": "f16403e06be5a6125b880199fcd840581d5ccbc67dd2c39ccf454d02311c3f43",
     "module/src/spend_marker.h": "bb8814c2060ff609b965691bc6a36dc5b26f24ef85fb4ca6624e0708a96ef5ab",
-    "module/src/storage_skills.cpp": "7a8c12fe82fcf14952b7021f2e90172a4487c3c31e4f0da241583ae6b750239f",
-    "module/src/storage_skills.h": "8eea474093bd2cb504e45dc84dfd424e56a1cac12ce5524caab065e952fd5a87",
+    "module/src/storage_skills.cpp": "fdb7b1f032e7ec0d89848269c555c88f5a1267c78ff1bf8b8b0a075db8bd2773",
+    "module/src/storage_skills.h": "9157f56fd82f6f0c6af0484b0393ba3fd1f5850f3afc45b032300f2f0ab4df82",
     "module/src/task_persistence.cpp": "5977099e9e151e41bee1c2b4c6e5a7ddcc4f03688a51c47d096a65e81a2bb065",
     "module/src/task_persistence.h": "9b8d2bf2a7af021274a929e4ccedefaf61cadaca8b30dda757abd12690c5d81d",
+    "module/src/vault_crypto.cpp": "27c24a12add7f8c95ff9b97d4fc099c47fb6f3f0815831b91924ceb92d97e309",
+    "module/src/vault_crypto.h": "e468af2d394d76a3ac3de35bb71c705751f9802f37da3da6cc427ee502b6f93d",
     "module/src/wallet_skills.cpp": "c4734e3ba034e4a1bdc2627fc4ab9ee87052b80104b60afb5874c738ae642f0e",
     "module/src/wallet_skills.h": "56dfa382dd6074ea2a8dc0c849457f59cf4fd7c44e76273490805b02f4e2d478"
   },
   "note": "Qt is a CEILING, not a floor: a plugin built against a newer Qt than the host's reports a successful load and then times out. See docs/basecamp.md.",
   "package": "module/agent.lgx",
-  "package_root_hash": "05028f1024605d1562455e9c39b888551c454a73952192a61132aaa43cfdcc02",
+  "package_root_hash": "33ccc4af31e9a33187aa2709588fa8a77135ac91a7b5f0d959f963cbbcdba1bb",
+  "recorded_from": "the package's own bytes, not a build: this record was written for a package that was already committed without one. Every variant was put through what a carried-forward sibling is put through \u2014 the bytes in the package, the architecture its own header declares, and every string literal of built_from inside it \u2014 and the fields only the building machine could know are null. Repackaging any variant with cmake --build build-basecamp -j8 && module/package-basecamp.sh build-basecamp replaces its entry with a real build's.",
   "variants": {
     "darwin-arm64": {
       "built_on": null,
-      "bytes": 4638128,
-      "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
-      "delivery": null,
+      "bytes": 4793536,
+      "compiler": null,
       "format": "Mach-O arm64",
       "main": "agent_plugin.dylib",
       "qt": "6.9",
-      "qt_reported": "6.9.2",
-      "sha256": "a59d0c16fcd74c5252865232cd0fcc7ba639c7a3e52e77fe41d7965902667dab"
+      "qt_reported": null,
+      "sha256": "917a93a26d2e83df66636480699ae5d3a4a3827596a46176da10b686af1b7fda"
     },
     "linux-amd64": {
       "built_on": null,
-      "bytes": 7238064,
-      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
-      "delivery": null,
+      "bytes": 7368072,
+      "compiler": null,
       "format": "ELF x86-64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "50aa2de8b7d35cfd4ec55f6030e997b0f4201e13df5b394efa16e3ea00989708"
+      "sha256": "e8a0a7f89971186e82c212d6f35d95375181f0ac35800e5d583f37c8559d4f66"
     },
     "linux-arm64": {
       "built_on": null,
-      "bytes": 7354000,
-      "compiler": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
-      "delivery": null,
+      "bytes": 7449880,
+      "compiler": null,
       "format": "ELF aarch64",
       "main": "agent_plugin.so",
       "qt": "6.9",
       "qt_reported": null,
-      "sha256": "1ab551c69d1771c26fafee9df9702f601578e31044b16f493f120f57770a7699"
+      "sha256": "204bbdc8a24938d7a8d5f5cd4f0421d72cf85fb3b211c87e627e01d0c38ce209"
     }
   }
 }

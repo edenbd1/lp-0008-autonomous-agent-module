@@ -1,10 +1,12 @@
 #include "storage_skills.h"
+#include "vault_crypto.h"
 
 #include <nlohmann/json.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <mutex>
 #include <thread>
 
@@ -49,6 +51,59 @@ bool field(const json &j, const char *key, std::string &out, std::string &err)
     return true;
 }
 
+// The vault key lives in the node's data directory and is made once. A reader who
+// wants their files back needs this file; that is the whole of the key
+// management, stated plainly rather than hidden.
+std::vector<std::uint8_t> vaultKey(const std::string &dataDir, std::string &err)
+{
+    if (dataDir.empty()) { err = "storage data directory is not wired, so nothing can be encrypted"; return {}; }
+    const std::string keyPath = dataDir + "/vault.key";
+    std::ifstream in(keyPath, std::ios::binary);
+    if (in) {
+        std::vector<std::uint8_t> k((std::istreambuf_iterator<char>(in)), {});
+        if (k.size() == 32) return k;
+    }
+    std::vector<std::uint8_t> k = vault::newKey();
+    std::ofstream out(keyPath, std::ios::binary | std::ios::trunc);
+    if (!out) { err = "could not write the vault key to " + keyPath; return {}; }
+    out.write(reinterpret_cast<const char *>(k.data()), k.size());
+    return k;
+}
+
+bool readFile(const std::string &path, std::vector<std::uint8_t> &out)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    out.assign((std::istreambuf_iterator<char>(in)), {});
+    return true;
+}
+
+bool writeFile(const std::string &path, const std::vector<std::uint8_t> &data)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    if (!data.empty()) out.write(reinterpret_cast<const char *>(data.data()), data.size());
+    return static_cast<bool>(out);
+}
+
+// content-address -> label, one JSON object in the data directory. Storage
+// addresses by content and has nowhere to keep a name, so the agent keeps it.
+json labelStore(const std::string &dataDir)
+{
+    std::ifstream in(dataDir + "/labels.json", std::ios::binary);
+    if (!in) return json::object();
+    json j = json::parse(in, nullptr, false);
+    return j.is_object() ? j : json::object();
+}
+
+void recordLabel(const std::string &dataDir, const std::string &cid, const std::string &label)
+{
+    json j = labelStore(dataDir);
+    j[cid] = label;
+    std::ofstream out(dataDir + "/labels.json", std::ios::binary | std::ios::trunc);
+    if (out) out << j.dump();
+}
+
 } // namespace
 
 std::string UploadSkill::parameterSchema() const
@@ -67,14 +122,36 @@ std::string UploadSkill::invoke(const std::string &paramsJson)
     if (!field(p, "path", path, err)) return fail(err);
     if (!port_.ready || !port_.ready()) return fail("storage node is not started");
     if (!port_.upload) return fail("storage upload is not wired");
+    if (!port_.dataDir) return fail("storage data directory is not wired");
 
-    const std::string cid = port_.upload(path, kChunkSize);
+    const std::string dir = port_.dataDir();
+    std::string keyErr;
+    const std::vector<std::uint8_t> key = vaultKey(dir, keyErr);
+    if (key.empty()) return fail(keyErr);
+
+    // Encrypt before the node ever sees the bytes. The plaintext file is read
+    // here, sealed, and only the ciphertext is written to a temp path the node
+    // uploads — so what lands on Logos Storage, and what its content address
+    // names, is the sealed blob, never the file.
+    std::vector<std::uint8_t> plain;
+    if (!readFile(path, plain)) return fail("could not read the file to upload");
+    const std::vector<std::uint8_t> sealed = vault::seal(key, plain);
+
+    const std::string tmp = dir + "/.upload.sealed";
+    if (!writeFile(tmp, sealed)) return fail("could not stage the encrypted upload");
+    const std::string cid = port_.upload(tmp, kChunkSize);
+    std::remove(tmp.c_str());
     if (cid.empty()) return fail("storage refused the upload");
 
-    // The label is the agent's own bookkeeping — Storage addresses by content,
-    // so it has nowhere to put a name.
-    json out{{"address", cid}};
-    if (p.contains("label") && p["label"].is_string()) out["label"] = p["label"];
+    // Storage has nowhere to keep a name, so the label is recorded here against
+    // the content address, and storage.list reads it back.
+    std::string label;
+    if (p.contains("label") && p["label"].is_string()) {
+        label = p["label"].get<std::string>();
+        recordLabel(dir, cid, label);
+    }
+    json out{{"address", cid}, {"encrypted", true}};
+    if (!label.empty()) out["label"] = label;
     return done(out);
 }
 
@@ -100,10 +177,29 @@ std::string DownloadSkill::invoke(const std::string &paramsJson)
     if (port_.exists && !port_.exists(cid)) {
         return fail("no such content address");
     }
-    if (!port_.download || !port_.download(cid, path)) {
+    if (!port_.dataDir) return fail("storage data directory is not wired");
+
+    // Retrieve the sealed blob to a temp path, then decrypt into the caller's
+    // path. A wrong key or a tampered blob fails the tag and writes nothing —
+    // the caller never receives plausible-looking garbage.
+    const std::string dir = port_.dataDir();
+    std::string keyErr;
+    const std::vector<std::uint8_t> key = vaultKey(dir, keyErr);
+    if (key.empty()) return fail(keyErr);
+
+    const std::string tmp = dir + "/.download.sealed";
+    if (!port_.download || !port_.download(cid, tmp)) {
+        std::remove(tmp.c_str());
         return fail("storage refused the download");
     }
-    return done(json{{"address", cid}, {"path", path}});
+    std::vector<std::uint8_t> sealed, plain;
+    const bool got = readFile(tmp, sealed);
+    std::remove(tmp.c_str());
+    if (!got) return fail("could not read the retrieved blob");
+    if (!vault::open(key, sealed, plain))
+        return fail("the retrieved blob did not decrypt: wrong key, or it was not sealed by this agent");
+    if (!writeFile(path, plain)) return fail("could not write the decrypted file");
+    return done(json{{"address", cid}, {"path", path}, {"decrypted", true}});
 }
 
 std::string ListSkill::parameterSchema() const
@@ -116,12 +212,29 @@ std::string ListSkill::invoke(const std::string &)
     if (!port_.ready || !port_.ready()) return fail("storage node is not started");
     if (!port_.manifests) return fail("storage manifests are not wired");
 
-    // Passed through rather than reshaped: the module owns this schema, and a
-    // translation layer here would drift from it silently.
+    // The node's manifest list, passed through unreshaped, joined with the labels
+    // the agent recorded at upload — Storage keys by content and keeps no name,
+    // so the label comes from the agent's own store beside the node.
     const std::string raw = port_.manifests();
     auto j = json::parse(raw, nullptr, false);
     if (j.is_discarded()) return fail("storage returned a manifest list that did not parse");
-    return done(json{{"manifests", j}});
+    json labels = port_.dataDir ? labelStore(port_.dataDir()) : json::object();
+    json items = json::array();
+    if (j.is_array()) {
+        for (auto &m : j) {
+            json item = m;
+            // A manifest entry names its content address; attach the label if the
+            // agent has one for it.
+            for (const char *k : {"cid", "address", "contentAddress", "hash"}) {
+                if (m.contains(k) && m[k].is_string() && labels.contains(m[k].get<std::string>())) {
+                    item["label"] = labels[m[k].get<std::string>()];
+                    break;
+                }
+            }
+            items.push_back(item);
+        }
+    }
+    return done(json{{"manifests", j}, {"items", items}, {"labels", labels}});
 }
 
 std::string ShareSkill::parameterSchema() const
@@ -734,6 +847,7 @@ StoragePort StorageRuntime::storagePort()
     };
     port.manifests = [this] { return manifests(); };
     port.exists = [this](const std::string &cid) { return exists(cid); };
+    port.dataDir = [this] { return dataDir(); };
     return port;
 }
 

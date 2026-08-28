@@ -235,12 +235,13 @@ timed-out call satisfies the next wait.
 
 ### What this use case does *not* show
 
-- **The encryption is the script's, not the module's.** `UploadSkill` in
-  `module/src/storage_skills.cpp` is a passthrough to the node; it does not
-  encrypt, and the prize's wording for `storage.upload` says it does. An agent
-  that wants an encrypted vault has to encrypt before it calls the skill, which
-  is what the script does with `openssl`. That is a real gap and it is named here
-  rather than hidden behind calling `openssl` "the agent".
+- **The encryption is the module's now.** `UploadSkill` in
+  `module/src/storage_skills.cpp` seals the file with the agent's vault key before
+  the node ever sees it — SHA256-CTR plus an HMAC-SHA256 tag, in
+  `module/src/vault_crypto.cpp` — and `DownloadSkill` opens it on the way back. The
+  content address names the ciphertext, so Logos Storage never holds the plaintext.
+  The demo script may still pre-encrypt with `openssl` for a belt-and-braces layer,
+  but it no longer has to: the skill does what the prize's wording asks.
 - **"Any device" is one node here.** The store and the retrieval are driven
   against the same running Logos Storage node. What a second device needs is the
   address, and the address is what crosses the network in step 4. A second
