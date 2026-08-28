@@ -1282,6 +1282,10 @@ RETRACTED = [
      r"PdaSeed::new\(policy_hash\)|PDA\(SHA256\(owner",
      {"docs/limitations.md", "docs/criteria-evidence.md",
       "scripts/check-docs.py"}),
+    ("the messaging.join fix is written but not shipped",
+     r"(?i)(?:source fix is one line and it is written|fix is written[,;].{0,40}not shipped"
+     r"|join.{0,40}not shipped)",
+     {"docs/limitations.md", "scripts/check-docs.py"}),
 ]
 
 _n_retr = 0

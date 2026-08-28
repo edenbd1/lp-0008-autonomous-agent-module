@@ -54,3 +54,6 @@ __pycache__/
 # file at all and checks them against the chain. What ships is the PR body and
 # solutions/LP-0008.md.
 SUBMISSION-DRAFT.md
+
+# Fichiers de travail : plugins extraits d un conteneur pour comparer les empreintes.
+.agent_plugin_*.so
