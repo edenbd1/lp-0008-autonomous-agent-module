@@ -56,6 +56,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # logos-delivery's reproducible build is its Nix flake: flake.lock pins
+      # every Nim dependency by hash, so the library builds without nimble's
+      # newest-version resolution against a Nim package registry that has drifted
+      # past the point of solving. build-companion-modules.sh calls `nix build`.
+      - name: Nix, to build logos-delivery from its flake.lock
+        uses: DeterminateSystems/nix-installer-action@main
+
       # WHY THIS JOB EXISTS
       #
       # `docs/limitations.md` says of this criterion: "It was run, it exits 0,
@@ -313,8 +320,12 @@ jobs:
           # died on `no nim on PATH`, one line apart. Caching a toolchain and
           # restoring it over a fresh install of the same toolchain saves a
           # minute and costs a build.
-          key: companions-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
-          restore-keys: companions-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
+          # `nix1` namespaces the key away from the pre-Nix caches: a build tree
+          # from the old nimble path has a liblogosdelivery.so but no
+          # library/generated/logosdelivery.h, and the restore-keys prefix would
+          # otherwise restore it and skip the Nix build that now produces both.
+          key: companions-nix5-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
+          restore-keys: companions-nix5-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       - name: Build the three companion modules from their published sources
         env:

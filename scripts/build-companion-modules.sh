@@ -350,14 +350,26 @@ fetch() { # url rev
 # This machine has had both all along, in two directories, which is exactly why
 # they never collided here and collided immediately on a runner with one.
 build_delivery() {
-  _src="$1"; _rev="$2"
+  _src="$1"; _rev="$2"; _require_hdr="${3:-}"
   _out="$_src/build/liblogosdelivery.$SO"
   if [ ! -f "$_out" ]; then
-    command -v nim >/dev/null || export PATH="$HOME/.nimble/bin:$PATH"
-    command -v nim >/dev/null \
-      || die "no nim on PATH (nimble installs it into ~/.nimble/bin and does not add it)"
+    # Build liblogosdelivery through its Nix flake, not `make build-deps`.
+    #
+    # The Makefile path runs `nimble setup --localdeps`, which resolves each
+    # transitive Nim dependency to the newest version satisfying a bare "any" —
+    # chronos is `>= 4.2.0` with no upper bound, and metrics/results/unittest2
+    # are unbounded. Enough of the Nim package registry has drifted since 2026-08
+    # that no newest set solves at all (`nimble … solveLockFileDeps: Couldn't
+    # find a solution`), so setup dies before the lock-pinning below could run —
+    # and every logos-delivery revision, including upstream's own "constrain the
+    # nimble dependency" fix, fails the same way. logos-delivery's *reproducible*
+    # build is the flake: flake.lock pins nixpkgs, the Rust zerokit input and
+    # every Nim dependency by hash, so `nix build` needs no registry and no SAT.
+    # That is how upstream itself builds it; this switches us onto the same path.
+    command -v nix >/dev/null \
+      || die "nix is required to build logos-delivery reproducibly from its flake.lock"
     if [ ! -d "$_src/.git" ]; then
-      echo "  cloning (this is a large repository and the build is not quick)"
+      echo "  cloning (this is a large repository)"
       git clone -q --recurse-submodules --shallow-submodules \
           https://github.com/logos-messaging/logos-delivery "$_src" \
         || die "could not clone logos-delivery"
@@ -366,44 +378,81 @@ build_delivery() {
       || die "could not fetch logos-delivery@$_rev"
     git -C "$_src" checkout -qf "$_rev" \
       || die "could not check out logos-delivery@$_rev"
-    ( cd "$_src" && make -j"${JOBS:-8}" build-deps ) \
-      || die "logos-delivery's build-deps failed"
-    # The lock pins, see the header note. Done after `build-deps` because that is
-    # what populates nimbledeps/ — and undone by nothing, because a rebuilt
-    # nimbledeps re-resolves them wrong every time.
-    _pins="$DELIVERY_PINNED_PKGS"
-    [ -n "$_pins" ] || _pins="$(lock_pkgs "$_src")"
-    [ -n "$_pins" ] || die "logos-delivery has no readable nimble.lock, so there is
-nothing to pin its dependencies to — and an unpinned set is what this step
-exists to prevent. Do not skip past this."
-    echo "  pinning dependencies to nimble.lock ($(printf '%s\n' $_pins | wc -w | tr -d ' ') package(s) named)"
-    _pinned=0
-    for _p in $_pins; do
-      pin_locked_pkg "$_src" "$_p" && _pinned=$((_pinned+1))
-    done
-    echo "  $_pinned package(s) considered; the lock is now what is on disk"
-    # librln BEFORE liblogosdelivery, and it is not part of `build-deps`.
-    # `liblogosdelivery`'s Nim link line ends in `--passL:librln_v2.0.2.a`, and
-    # that archive is built by its own Makefile target, which first does
-    # `git submodule update --init vendor/zerokit` and then compiles a Rust
-    # static library. On this machine the file already existed from an earlier
-    # build, so the ordering never mattered and was never written down; on a
-    # fresh checkout the Nim compile dies with an unhelpful `[OSError]` naming
-    # the archive it cannot find. Measured on the first run of the alongside
-    # workflow that got this far.
-    if [ ! -f "$_src/librln_v2.0.2.a" ]; then
-      command -v cargo >/dev/null \
-        || die "librln_v2.0.2.a is missing and cargo is not on PATH: it is a Rust
-static library and logos-delivery builds it from vendor/zerokit. Install a Rust
-toolchain, or supply the archive."
-      ( cd "$_src" && make -j"${JOBS:-8}" librln ) \
-        || die "librln did not build; liblogosdelivery cannot link without it"
+    git -C "$_src" submodule update -q --init --recursive 2>/dev/null || true
+    mkdir -p "$_src/build"
+    # A thin wrapper over the flake's liblogosdelivery: the same reproducible
+    # build, but its install step also captures `library/generated/logosdelivery.h`
+    # — the nim-ffi typed header the C use-case drivers (`share_drive.c`) include.
+    # The flake builds that header (nim `--header` + nim-ffi codegen) but does not
+    # install it, so a bare `nix build … #liblogosdelivery` leaves the driver
+    # compile with no header to find.
+    _ovr="$(mktemp "${TMPDIR:-/tmp}/deliv-override-XXXXXX.nix")"
+    cat > "$_ovr" <<'NIX'
+let
+  rev = builtins.getEnv "DELIV_REV";
+  flake = builtins.getFlake "github:logos-messaging/logos-delivery/${rev}";
+  system = builtins.currentSystem;
+  pkg = flake.packages.${system}.liblogosdelivery;
+  # Reproduce the exact --path flags nix/default.nix passes nim, so the header
+  # codegen resolves every Nim dependency (it fails with "cannot open file:
+  # chronicles" otherwise). deps.nix is the same file the build imports.
+  pkgs = flake.inputs.nixpkgs.legacyPackages.${system};
+  deps = import "${flake}/nix/deps.nix" { inherit pkgs; };
+  pathArgs = builtins.concatStringsSep " " (
+    builtins.concatMap (p: [ "--path:${p}" "--path:${p}/src" "--path:${p}/sds" ])
+      (builtins.attrValues deps));
+in pkg.overrideAttrs (o: {
+  # The flake compiles library/liblogosdelivery.nim with `--header` but not the
+  # nim-ffi binding defines, so it never writes library/generated/logosdelivery.h.
+  # Re-run the compile with those defines (the committed config.nims/nim.cfg and
+  # the build's already-resolved deps supply the paths) purely for the header;
+  # the .so it also emits is thrown away. nim-ffi writes the header during
+  # codegen, so a later link failure would not lose it.
+  # postInstall (not postBuild): this derivation's custom buildPhase does not
+  # runHook postBuild, so a postBuild here never fires. installPhase does
+  # runHook postInstall, and its cwd is still the build tree with the compile
+  # environment the buildPhase set up, so the same nim can re-run for the header.
+  postInstall = (o.postInstall or "") + ''
+    echo "== nim-ffi C bindings -> library/generated =="
+    nim c ${pathArgs} --path:. -d:ffiGenBindings -d:targetLang=c -d:ffiOutputDir=library/generated \
+      -d:ffiSrcPath=../liblogosdelivery.nim --app:lib --noMain --mm:refc --header \
+      --nimMainPrefix:liblogosdelivery --skipParentCfg:off -d:metrics \
+      -o:build/_ffigen_discard.so library/liblogosdelivery.nim \
+      || echo "  (ffi codegen compile exited nonzero; header may still be written)"
+    ls -la library/generated/ 2>/dev/null || echo "  no library/generated after codegen"
+    if [ -f library/generated/logosdelivery.h ]; then
+      mkdir -p $out/generated
+      cp library/generated/logosdelivery.h $out/generated/
     fi
-    ( cd "$_src" && make -j"${JOBS:-8}" liblogosdelivery ) \
-      || die "liblogosdelivery did not build; the log above says where"
+  '';
+})
+NIX
+    echo "  nix build liblogosdelivery @ ${_rev:0:7} (flake.lock, reproducible)"
+    DELIV_REV="$_rev" nix build --impure -L \
+        --extra-experimental-features 'nix-command flakes' \
+        -f "$_ovr" --out-link "$_src/build/nix-liblogosdelivery" \
+      || { rm -f "$_ovr"; die "nix build of liblogosdelivery failed; the log above says where"; }
+    rm -f "$_ovr"
+    _store="$(readlink -f "$_src/build/nix-liblogosdelivery")"
+    _so="$(find "$_store" -name "liblogosdelivery.$SO" 2>/dev/null | head -1)"
+    [ -n "$_so" ] || die "the flake output has no liblogosdelivery.$SO under $_store"
+    cp -f "$_so" "$_out"; chmod u+w "$_out" 2>/dev/null || true
+    # Place the generated FFI header where the driver compile includes it from.
+    if [ -f "$_store/generated/logosdelivery.h" ]; then
+      mkdir -p "$_src/library/generated"
+      cp -f "$_store/generated/logosdelivery.h" "$_src/library/generated/logosdelivery.h"
+      chmod u+w "$_src/library/generated/logosdelivery.h" 2>/dev/null || true
+      echo "  captured library/generated/logosdelivery.h"
+    fi
   fi
   [ -f "$_out" ] || die "no $_out after building"
   echo "  $_out  ($(du -h "$_out" | cut -f1))"
+  # The use-case drivers include library/generated/logosdelivery.h; when this
+  # build is the one they compile against, fail loudly here (with the nix -L log
+  # above) rather than deep inside a use-case, if the ffi codegen did not write it.
+  if [ -n "$_require_hdr" ] && [ ! -f "$_src/library/generated/logosdelivery.h" ]; then
+    die "the nim-ffi codegen wrote no $_src/library/generated/logosdelivery.h; the nix -L build log above shows the ffiGenBindings compile"
+  fi
 }
 
 # ── 1. the Logos Delivery library, at the module's own pin ────────────────
@@ -416,7 +465,7 @@ build_delivery "$DELIVERY_LIB_SRC" "$DELIVERY_LIB_REV"
 # driver is going to be compiled in this environment.
 if [ -n "${DELIVERY_DRIVER_SRC:-}" ]; then
   say "[1b/6] liblogosdelivery @ ${DELIVERY_DRIVER_REV:0:7} (the ABI the drivers are written against)"
-  build_delivery "$DELIVERY_DRIVER_SRC" "$DELIVERY_DRIVER_REV"
+  build_delivery "$DELIVERY_DRIVER_SRC" "$DELIVERY_DRIVER_REV" require-header
 fi
 
 # ── 2. go-wallet-sdk's c-archive ──────────────────────────────────────────
