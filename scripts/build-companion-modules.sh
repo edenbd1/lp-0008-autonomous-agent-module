@@ -437,6 +437,26 @@ NIX
     _so="$(find "$_store" -name "liblogosdelivery.$SO" 2>/dev/null | head -1)"
     [ -n "$_so" ] || die "the flake output has no liblogosdelivery.$SO under $_store"
     cp -f "$_so" "$_out"; chmod u+w "$_out" 2>/dev/null || true
+    # Vendor librln.so (zerokit RLN) beside THIS liblogosdelivery. liblogosdelivery
+    # links librln dynamically and librln.so lives ONLY in the nix store, which the
+    # CI cache does not carry — while it caches these output dirs. This runs for BOTH
+    # builds this function does: the module's (packaged into the .lgx) and the
+    # drivers' at _external/logos-delivery, which the use-case links go through. Both
+    # $_out dirs are cached, so a cache-hit restores librln.so beside liblogosdelivery
+    # and the RUNPATH below resolves it there rather than in an absent nix store.
+    if [ "$(uname -s)" = Linux ]; then
+      _rln="$(ldd "$_out" 2>/dev/null | awk '/librln/{print $3; exit}')"
+      { [ -n "${_rln:-}" ] && [ -f "${_rln:-}" ]; } \
+        || _rln="$(find "$_store" -maxdepth 4 -name 'librln*.so' -type f 2>/dev/null | head -1)"
+      if [ -n "${_rln:-}" ] && [ -f "$_rln" ]; then
+        cp -f "$_rln" "$(dirname "$_out")/librln.so"
+        chmod u+w "$(dirname "$_out")/librln.so" 2>/dev/null || true
+        command -v patchelf >/dev/null 2>&1 && patchelf --set-rpath '$ORIGIN' "$_out" 2>/dev/null || true
+        echo "  vendored librln.so beside $(basename "$_out") in $(dirname "$_out")"
+      else
+        echo "  WARNING: no librln.so found beside the flake output; a cache-hit may fail to link/load delivery"
+      fi
+    fi
     # Place the generated FFI header where the driver compile includes it from.
     if [ -f "$_store/generated/logosdelivery.h" ]; then
       mkdir -p "$_src/library/generated"
@@ -654,6 +674,39 @@ if [ "$(uname -s)" = Darwin ]; then
   install_name_tool -id "@rpath/liblogosdelivery.$SO" "$DM/lib/liblogosdelivery.$SO"
 fi
 build_module delivery_module "$DM" delivery_module_plugin.h DeliveryModuleImpl
+# ── make delivery self-contained for librln.so ────────────────────────────
+# `liblogosdelivery` links `librln.so` (zerokit RLN) DYNAMICALLY, and that .so
+# lives ONLY in the nix store. This workflow's cache carries `build-companions/
+# build` (which package_module stages the .lgx from) but NOT the nix store, so a
+# cache-hit restores liblogosdelivery without the librln.so its RUNPATH names and
+# `logos_host` fails to dlopen the delivery plugin: "librln.so: cannot open
+# shared object file" — deterministic on hit, green on a fresh miss, which is the
+# whole of the "flake". Vendor librln.so flat beside liblogosdelivery in the
+# module's own build/modules dir (package_module copies every sibling `.so`
+# there into the package) and point liblogosdelivery at $ORIGIN, so the cached
+# tree AND the .lgx are self-contained and resolve librln.so next to themselves.
+if [ "$(uname -s)" = Linux ]; then
+  _dm_mods="$BUILD/delivery_module/modules"
+  _dlv="$_dm_mods/liblogosdelivery.$SO"
+  if [ -f "$_dlv" ] && [ ! -f "$_dm_mods/librln.so" ]; then
+    _rln="$(ldd "$_dlv" 2>/dev/null | awk '/librln/{print $3; exit}')"
+    { [ -n "${_rln:-}" ] && [ -f "${_rln:-}" ]; } \
+      || _rln="$(find /nix/store -maxdepth 4 -name 'librln*.so' -type f 2>/dev/null | head -1)"
+    if [ -n "${_rln:-}" ] && [ -f "$_rln" ]; then
+      cp -f "$_rln" "$_dm_mods/librln.so"; chmod u+w "$_dm_mods/librln.so" 2>/dev/null || true
+      if command -v patchelf >/dev/null 2>&1; then
+        patchelf --set-rpath '$ORIGIN' "$_dlv" 2>/dev/null || true
+        echo "  vendored $(basename "$_rln") beside liblogosdelivery, RUNPATH=\$ORIGIN"
+      else
+        echo "  vendored $(basename "$_rln") beside liblogosdelivery (patchelf ABSENT — set-rpath skipped)"
+      fi
+    else
+      echo "  WARNING: no librln.so found to vendor; a cache-hit run will fail to load delivery"
+    fi
+  elif [ -f "$_dm_mods/librln.so" ]; then
+    echo "  librln.so already vendored beside liblogosdelivery (restored from cache)"
+  fi
+fi
 package_module delivery_module "$DM"
 
 # ── 5. wallet_module ──────────────────────────────────────────────────────

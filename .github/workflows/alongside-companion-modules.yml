@@ -96,10 +96,13 @@ jobs:
           # the headers alone are the whole dependency. Homebrew put Boost on
           # the machine this list was written on years before this project
           # existed. Measured on the first run that got as far as [4/6].
+          # `patchelf` sets liblogosdelivery's RUNPATH to $ORIGIN so the delivery
+          # module resolves its vendored librln.so beside itself, off the nix
+          # store the cache does not carry (see build-companion-modules.sh).
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             --no-install-recommends squashfs-tools nlohmann-json3-dev \
             libsodium-dev libboost-dev \
-            cmake ninja-build unzip xz-utils
+            cmake ninja-build unzip xz-utils patchelf
 
       # Rust, for `librln_v2.0.2.a`. `liblogosdelivery`'s link line ends in
       # `--passL:librln_v2.0.2.a`, which logos-delivery builds from its own
@@ -324,8 +327,12 @@ jobs:
           # from the old nimble path has a liblogosdelivery.so but no
           # library/generated/logosdelivery.h, and the restore-keys prefix would
           # otherwise restore it and skip the Nix build that now produces both.
-          key: companions-nix5-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
-          restore-keys: companions-nix5-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
+          # nix6: the nix5 caches carry a build tree from before librln.so was
+          # vendored beside the DRIVER's liblogosdelivery, and the restore-keys
+          # prefix would otherwise restore one and skip the fresh build that now
+          # vendors it — leaving use-case driver links with unresolved ffi_rln_*.
+          key: companions-nix6-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-${{ hashFiles('scripts/build-companion-modules.sh') }}
+          restore-keys: companions-nix6-${{ runner.os }}-${{ steps.cpu.outputs.sig }}-
 
       - name: Build the three companion modules from their published sources
         env:
@@ -352,6 +359,29 @@ jobs:
               || { echo "no build-companions/pkg/$m.lgx"; exit 1; }
           done
           rm -f companions.out
+
+      # librln.so (zerokit RLN) lives only in the nix store, which this workflow's
+      # cache does not carry. build-companion-modules.sh vendors it beside each
+      # liblogosdelivery into cached dirs; put those dirs on LD_LIBRARY_PATH so a
+      # use-case driver LINK against liblogosdelivery resolves its ffi_rln_* symbols
+      # and the loaded modules resolve librln.so at run time — on a cache-hit as
+      # well as on a fresh build.
+      - name: librln.so on the load path (nix store the cache omits)
+        run: |
+          set -euo pipefail
+          dirs=""
+          for d in _external/logos-delivery/build \
+                   build-companions/logos-delivery/build \
+                   build-companions/build/delivery_module/modules; do
+            [ -f "$PWD/$d/librln.so" ] && dirs="${dirs:+$dirs:}$PWD/$d"
+          done
+          if [ -n "$dirs" ]; then
+            echo "LD_LIBRARY_PATH=${dirs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+            echo "LD_LIBRARY_PATH += $dirs"
+          else
+            echo "no vendored librln.so found on any known path (unexpected)"
+            ls -la build-companions/build/delivery_module/modules 2>/dev/null || true
+          fi
 
       # THE STEP THE JOB IS FOR. It passes by RUNNING: four modules in one
       # runtime, with no display, no Logos app install and no GUI.
