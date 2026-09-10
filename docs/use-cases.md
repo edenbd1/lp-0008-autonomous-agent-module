@@ -572,11 +572,11 @@ The first record, made by a real run and re-checkable by anyone:
 
 | | |
 |---|---|
-| content address | `zDvZRwzm4a6BS3VPE6RXqhEyMGpz5hAGhUb4opHpmfSCENhBDUsL` (real Logos Storage node, manifest `datasetSize: 186`) |
-| derived public key | `6d12fb6f03c219e35775de58050e2ce5ddc53dd5a2707cd5974c66d9c437299d` |
-| notarising transaction | `aa0c0f9f3a88e5e193bf3ec7ac951ea5791d884c20ee723c1bfb0291b403de38` |
-| block | 8882 |
-| account created | `8x1cCdojpgRNziSyNvdscmk1zMLKg4vDrXj7t45Hy3LX` |
+| content address | `zDvZRwzm4dkWabwQrKNZ8vd51zddz4UEQYrV2ihMYXjQqHDT8XEr` (real Logos Storage node, manifest `datasetSize: 186`) |
+| derived public key | `9349b0caf6df62b0b6ca00b30678767c2ab2c594a8a24f4ff14876e8bf154003` |
+| notarising transaction | `11e170e39cff6058639459381c01fe97dfb8b82061dc8dccb982ec47f6aa1005` |
+| block | 3088 |
+| account created | `EkguBiZaHFtzWiiqDPUtoy979APjMeagpredtGx78ep8` |
 | cost | 0 LEZ |
 
 Those values are in `artifacts/notary.tsv` as **identifiers**, and the script
