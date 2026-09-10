@@ -50,36 +50,27 @@ all**. It needed the agent's public id — which this repository publishes in
 [`artifacts/agents.tsv`](../artifacts/agents.tsv) and inside every signed Agent
 Card, because the card's `url` *is* the agent's account id.
 
-That is on the chain rather than in an argument. Two transactions, the same
-call, the same agent, the same limits, from accounts that have never held that
-agent's key:
+That the program deployed today refuses this is a chain fact. The same call —
+same agent, same limits, from an account that has never held that agent's key —
+is submitted against the current program and **never included**: the guest halts
+with error 6020, `create_policy` refusing any signer the agent's own claim did
+not name.
 
 | Program | Signer | Result |
 |---|---|---|
-| `a780003b…` (superseded) | `RZmSLJAB…` | **accepted**, block 8869 — [`eedb3caf…`](https://explorer.testnet.lez.logos.co/transaction/eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7) |
-| `697746f5…` (current) | `Acissmag…` | submitted, never included — `60de3fc6…`, error 6020 |
+| `697746f5…` (current) | `Acissmag…` | submitted, **never included** — guest error 6020 |
 
-The accepted one is still readable, which is the point — this does not rest on a
-missing transaction:
-
-```bash
-curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["5QAVJAMHkpLnAMht3bonFijyApPZfAccHAFbzByNq8VV"]}' \
-| python3 -c "
-import json,sys
-d=bytes(json.load(sys.stdin)['result']['data'])
-print('owner ', d[1:33].hex())
-print('per_tx', int.from_bytes(d[33:49],'little'))"
-# owner  064afcfc304a27f737331a4105b8dc967ae892403449ae80023811405344aa4e
-# per_tx 340282366920938463463374607431768211455
-```
-
-Under the superseded program a stranger owns that agent's only policy account,
-for the life of the agent's identity, with an unlimited ceiling — and the honest
-owner's own anchor would then have been refused `AccountAlreadyInitialized` at
-the only address the agent has, permanently. `per_tx = 0` instead of `u128::MAX`
-makes the identical call a denial of service rather than a theft, and costs the
-attacker nothing either way.
+`crates/agent-verifier-adversarial` runs exactly this attack against the deployed
+binary and asserts the halt code it now stops at, and `demo.sh` replays it on the
+public chain. The attack is not hypothetical: an **earlier, buggy deployment** of
+this program accepted it — it folded the limits into the policy *address*, so a
+stranger could anchor a fresh `(owner, agent, limits)` account naming a compromised
+agent and itself with `per_tx = u128::MAX`, and own that agent's only policy for the
+life of its identity (`per_tx = 0` makes the same call a denial of service instead of
+a theft, and costs the attacker nothing either way). That acceptance was demonstrated
+on the pre-reset testnet; those transactions no longer resolve, which is exactly why
+the consent rule below — not a readable artifact of the old bug — is what the current
+program rests on.
 
 **The fix is consent, and it is two signatures in two transactions.**
 
@@ -116,18 +107,18 @@ comparison rather than a derivation:
 ```bash
 # 1. who the storage agent said may anchor over it — the claim_account column
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["EZSN69njgBixwniExyhRrjri1xUTX6iN7xxhcvG4Vvie"]}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["9JLJKZLukYQbX1k4efUUkbj4Ux9D93Wsoe95yxmnwLnW"]}' \
 | python3 -c "
 import json,sys
 d=bytes(json.load(sys.stdin)['result']['data'])
 assert len(d)==33 and d[0]==2, 'not an owner claim'
 print('owner', d[1:33].hex())"
-# owner 181eee76d02339bbe8ce7abee778942d80b2546a8f204e19940311ff5bd46214
-#     = 2dA9APZgzcoX65YhNMJmsDC2v838ufLSjPyUdMknWoZd, the `owner` column
+# owner 2eef01d81d73d460882754d497ca6978dbd2c4337ea2e60f51075133b8a0fbf7
+#     = 4AD8jMUy1ZBkYmEy32yCK2RN5Q3z7rHk7h8bAav98qWn, the `owner` column
 
 # 2. what that owner then anchored — the policy_account column
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe"]}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["C7DFFFvvQvFWkWczQTyBP2q9PsBGQmeFACTvSV4NRZgi"]}' \
 | python3 -c "
 import json,sys
 d=bytes(json.load(sys.stdin)['result']['data'])
@@ -303,7 +294,7 @@ account holder can always call the program that owns its balance.** The agent's
 LEZ is held by LEZ's authenticated transfer program — measured, not assumed:
 
 ```
-Private/9KdQSJ2t…  {"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB"}
+Private/94VUZEyE…  {"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB"}
 ```
 
 and that program's `transfer` asserts only that the sender is authorized
@@ -427,7 +418,7 @@ in the address.
 
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp"]}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["Eqpqkr9VjqqE2GEHonZAF5cQbTs7TVpwECDuh1AZHz59"]}' \
 | python3 -c "
 import json,sys
 d=bytes(json.load(sys.stdin)['result']['data'])
@@ -595,8 +586,8 @@ holds the agent process decides differently. Only §2 through §6 survive that, 
 - **Above-threshold payments are the exception.** Almost every recorded
   settlement is inside the envelope, so the approved path is exercised mainly by
   execution against the deployed binary (§8). It has also landed once on the
-  public testnet — `approve_spend` in block 10776, `spend_approved` in block
-  10786 — against an agent whose owner was claimed before it anchored. For the
+  public testnet — `approve_spend` in block 2819, `spend_approved` in block
+  2851 — against an agent whose owner was claimed before it anchored. For the
   three agents this repository ships that path stays closed, because their owners
   anchored while unclaimed; [`limitations.md`](limitations.md) carries both.
 

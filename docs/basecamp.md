@@ -321,17 +321,17 @@ card, which arrived over Waku a few seconds earlier:
 buyer                                       seller
   ok  discovered the OTHER agent's signed Agent Card over the public network
   ok  the discovered card advertises a price to pay: 1 LEZ
-  ok  and a public account to pay it into: Public/BzYks91a…
+  ok  and a public account to pay it into: Public/CJZzkWnT…
   ok  this agent opened an A2A task addressed to the other one
-  <-  agent-spend: resyncing ~/.lp0008-agents/storage
-  <-  agent-spend: Synced to block 9470
-  <-  agent-spend: 1 LEZ -> Public/BzYks91a…, window 9000, policy 6FscNXjN…
+  <-  agent-spend: resyncing ~/.lp0008-agents/messaging
+  <-  agent-spend: Synced to block 2862
+  <-  agent-spend: 1 LEZ -> Public/CJZzkWnT…, window 2000, policy Eqpqkr9V…
   <-  agent-spend: spel exited 0 after 432 s
-  <-  agent-spend: submitted ed8c3514…
-  <-  agent-spend: ed8c3514… is in block 9477
+  <-  agent-spend: submitted 59e3086e…
+  <-  agent-spend: 59e3086e… is in block 2863
   ok  it paid the price the peer's card advertised, 1 LEZ
   ok  and settled it on chain, from inside the loaded module, with no owner in
-      the path: ed8c351412409c81723ea7b90e2d9cdcb0841a33234894bfff8269af374b8cb3
+      the path: 59e3086e5febf3051bbeaff7b80634f8c41ab26ef43e63b0dfcef7a4929849b1
                                               ok  the card this agent was handed
                                                   advertises no price, so there
                                                   is nothing to pay
@@ -345,7 +345,7 @@ buyer                                       seller
   ok  THIS agent's own TaskStore reached `completed`, and every transition into
       it came off the wire
   ok  applying 2 status update(s) the peer published
-  ok  all 2 of them published by A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu,
+  ok  all 2 of them published by 94VUZEyE58HapD7uCoUU9gmrHv3er25EUavfPV1fpZV4,
       the OTHER account — none by this one
   ok  while the forged update this agent published about its own task was read
       back off the same topic and refused (1 of them)
@@ -376,7 +376,7 @@ decodes the payee's balance out of that transaction's own committed post-state �
 `getAccount` cannot answer it, because this chain has no historical-state RPC —
 and refuses to write anything unless it rose by exactly the price. For this run:
 `hash_ok=1`, block 9389, `recipient_balance=2` where it held 1, and the anchored
-ledger `6FscNXjN…` at `window_start=9000, spent=2`. The per-period total on chain
+ledger `C7DFFFvv…` at `window_start=9000, spent=2`. The per-period total on chain
 moved by the price, which is the part that says the policy program ran rather
 than that a transfer happened beside it.
 
@@ -426,7 +426,7 @@ repository rather than to the chain: their owners anchored while still
 *unclaimed*, so they can never sign `approve_spend` again and for these agents
 the wait could not succeed. An owner claimed before it anchors signs
 indefinitely, and the approved path has run end to end on the public testnet —
-`approve_spend` in block 10776, `spend_approved` in block 10786. Wiring
+`approve_spend` in block 2819, `spend_approved` in block 2851. Wiring
 `agent.task` to it is open work, not an impossibility.
 
 **6. And the OWNER is a loaded module too**
@@ -1483,10 +1483,10 @@ agent app                                     owner app
 12:53:26.699 <- delivery node: ready          12:53:30.201 <- delivery node: ready
                                               12:53:44.068 → invoke(owner.watch, {})
                                               12:53:44.101 <- owner.watch: {"channel":
-                                                 "/lp-0008/1/owner-channel/BzYks91a…/5Sa13NyN…",
-                                                 "topic":"/lp-0008/1/owner-BzYks91a…/json","ok":true}
+                                                 "/lp-0008/1/owner-channel/94VUZEyE…/2KyfEaAu…",
+                                                 "topic":"/lp-0008/1/owner-94VUZEyE…/json","ok":true}
 12:53:57.627 → invoke(wallet.send,
-   {"recipient":"Public/Dxh7…","amount":"250"})
+   {"recipient":"Public/FduQnojv…","amount":"250"})
                                               12:53:58.200 <= over Logos Messaging:
                                                  {"arrived":1,"frames":1,"pending":[{"id":
                                                  "spend-1786877637631","seed_verified":true,…}]}
@@ -1525,7 +1525,7 @@ nothing without watching it fail. The owner's app was killed — the process, no
 the window — and the same call made again:
 
 ```
-12:54:43.333 → invoke(wallet.send, {"recipient":"Public/Dxh7…","amount":"250"})
+12:54:43.333 → invoke(wallet.send, {"recipient":"Public/FduQnojv…","amount":"250"})
 12:54:58.347 <- invoke(wallet.send): {"outcome":"owner_unreachable","attempts":2,
    "error":"the owner did not answer within 15000ms: 2 notification attempt(s),
     2 of which the channel accepted; the spend was not submitted",
@@ -1563,7 +1563,7 @@ it.** The first attempt at this exercise did it the other way round: the agent
 published two requests at 12:49:46 and 12:49:54, and the owner watched at
 12:50:14. The agent went on asking, the owner's node *received the frames* —
 its log carries `received relay message … contentTopic=/lp-0008/1/owner-
-BzYks91a…/json` at 12:50:23 and 12:50:38 — and the owner's module reported
+94VUZEyE…/json` at 12:50:23 and 12:50:38 — and the owner's module reported
 
 ```
 "delivery":{"frames":{"channel_decoded":0,"channel_seen":0,"relay_seen":2},"state":"ready"}

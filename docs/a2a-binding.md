@@ -119,7 +119,7 @@ status updates there (`agent.update`), and the client reads them back off it
 Two consequences a third party must understand before deploying this:
 
 - **A task topic is a public, cleartext string containing the peer's account id
-  and the task id.** Anyone on the network sees that agent `9Xpkkvos…` is running
+  and the task id.** Anyone on the network sees that agent `DE4jFQbN…` is running
   task `a1b2…` — and, from the card, what that agent charges. The *contents* are
   protected by whatever Delivery's entry layer provides; the *existence, timing
   and counterparty* of every task are not. This binding does not fix that, and
@@ -183,7 +183,7 @@ comfortable and not true. A worked example, the committed storage agent's card:
   "protocolVersion": "0.3.0",
   "name": "logos-storage-agent",
   "description": "Encrypts and stores a file on Logos Storage, returns its content address",
-  "url": "logos-messaging://9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
+  "url": "logos-messaging://DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1",
   "preferredTransport": "logos-messaging",
   "version": "0.1.0",
   "provider": {
@@ -213,8 +213,8 @@ comfortable and not true. A worked example, the committed storage agent's card:
     }
   ],
   "x-logos": {
-    "lezAccount": "9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE",
-    "paymentAccount": "Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ",
+    "lezAccount": "DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1",
+    "paymentAccount": "Public/2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o",
     "shieldedPaymentKeys": { "npk": "c10c15ac…", "vpk": "3d367795…" },
     "pricePerTask": 1,
     "settlement": "lez-chained-authenticated-transfer"
@@ -465,7 +465,7 @@ A verifier MUST:
 defect in the binding as shipped, and it was found by trying it:
 
 - `kid` is the base58 **account id**. It is not the public key, and it is not
-  derived from it. For the published card, `kid = 5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ`
+  derived from it. For the published card, `kid = 2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o`
   decodes to `41fb94fa…`, while the key that signed is `87447003…`. They are
   unrelated, and no hash of the key (SHA-256, SHA3-256, BLAKE2b/2s) produces the
   account id either.
@@ -1223,8 +1223,8 @@ agent asks the owner about and changes nothing about what the chain will let it
 spend.
 
 A task priced above the envelope needs owner approval. That path **works and
-has run on the public testnet** — `approve_spend` in block 10776 and
-`spend_approved` in block 10786, the payee going 4 to 6 — against an agent whose
+has run on the public testnet** — `approve_spend` in block 2819 and
+`spend_approved` in block 2851, the payee going 0 to 2 — against an agent whose
 owner was *claimed before it anchored*. What is unreachable is narrower and is
 the shipped three: their owners anchored while still unclaimed, so they can never
 sign again, which is irreversible for them and an ordering requirement for anyone

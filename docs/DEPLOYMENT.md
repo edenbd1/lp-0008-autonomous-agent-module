@@ -13,8 +13,8 @@ cargo-risczero:     3.0.5
 
 Every figure below was read back off the chain, and the commands that read it
 are in the text. Where a number here disagrees with the chain, the chain is
-right and this file is a bug — that has happened, which is why the
-[ledger](#every-transaction-on-the-published-accounts) at the end exists.
+right and this file is a bug — that has happened, which is why every figure here is re-checked against the chain by
+`./scripts/verify-deployment.sh`.
 
 This document has twice gone stale in the same way: every figure in it stayed
 true on chain while a redeploy moved the program out from under it, so it went
@@ -43,10 +43,9 @@ what make this release's claims a matter of record rather than an assertion.
 
 | | Deploy tx | ImageID | Block | Status |
 |---|---|---|---|---|
-| **live** | [`697746f5…cb5370bf`](https://explorer.testnet.lez.logos.co/transaction/697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf) | `778a9341…e670c4661` | 8839 | what `artifacts/programs/agent_verifier.bin` hashes to |
-| superseded | [`a780003b…8576841e`](https://explorer.testnet.lez.logos.co/transaction/a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e) | `12fa95d9…b578c9d8` | 8720 | one policy account per agent — but **anybody** could anchor it, and did: `eedb3caf…`, block 8869 |
-| superseded | [`8c87cc9b…2d20ebbe`](https://explorer.testnet.lez.logos.co/transaction/8c87cc9b2f4ef75cb8061dc3bb1a5bf531b56ce5a75c7b0b781d799f2d20ebbe) | `26ed1580…0bad50be` | 8646 | bound the ids; still counted nothing per period |
-| first | [`b028eabf…b8c18549`](https://explorer.testnet.lez.logos.co/transaction/b028eabf205b1f05f488d164b3ad2e4c4c333bf01923752c3877ab9cb8c18549) | — | 8590 | accepted a policy naming an owner the signer did not control |
+| **live** | [`697746f5…cb5370bf`](https://explorer.testnet.lez.logos.co/transaction/697746f52ff24019dbde4861c3649f49426904617840139a5405aa24cb5370bf) | `778a9341…e670c4661` | 1358 | what `artifacts/programs/agent_verifier.bin` hashes to |
+
+Earlier iterations of this program (one per agent but anchorable by anybody; an id-binding version; and a first cut) were deployed during development and are described in the git history. They lived on the pre-reset testnet and their deploy transactions no longer resolve, so only the shipped deployment is listed above.
 
 The live program's ProgramId — the id accounts record as their owner — is
 `93e5DRz2zkKQhxF6o5qb4mX3b6GwyhD5aUNSwBvodqoN`, or
@@ -134,33 +133,26 @@ the defect this deployment exists to fix.
 
 | Category | Agent (shielded) | Paid at (public) | Owner claim | claim_agent | Block |
 |---|---|---|---|---|---|
-| storage | `9Xpkkvos…jfv1FaE` | `5Sa13NyN…dHtjnZ` | `EZSN69nj…vG4Vvie` | [`88f9ec5c…dc292dd0`](https://explorer.testnet.lez.logos.co/transaction/88f9ec5c377dceeb5005336ecf358d778a30dc39d2ea49b1c166332cdc292dd0) | 8859 |
-| messaging | `GpRdooEW…Zpe5FS` | `Dxh7ZLHF…fpEwD` | `Qg4NvAVr…J7hoW` | [`78ce43c9…adaa126c`](https://explorer.testnet.lez.logos.co/transaction/78ce43c977bcf9956d3c8f42836e65b2fc8159a18e04836214756cd0adaa126c) | 8875 |
-| blockchain | `A7UBoMbS…c39JtMu` | `BzYks91a…H2wLnu` | `2kmd3L3f…LyMVjX` | [`0dd4e49e…e52921a2`](https://explorer.testnet.lez.logos.co/transaction/0dd4e49eeecac1366baf7a81a93639cadd8b6e013984979d99ebf63ae52921a2) | 8883 |
+| storage | `DE4jFQbN…tNrw6L1` | `2KyfEaAu…6V71o` | `9JLJKZLu…mnwLnW` | [`e47fec60…18a81971`](https://explorer.testnet.lez.logos.co/transaction/e47fec60aea2bb367a6393ec53f1d88c591e7359dac64ba43e9689c318a81971) | 2691 |
+| messaging | `3meg13qB…oQAsmCG` | `FduQnojv…oJWZtp` | `451Wgg17…uTbZSxN` | [`c0e66362…a14ca086`](https://explorer.testnet.lez.logos.co/transaction/c0e6636245caf2f2369918283d456d55db06a1b5fe3b5493daa4b424a14ca086) | 2706 |
+| blockchain | `94VUZEyE…V1fpZV4` | `CJZzkWnT…hyGbX` | `69RLYvpj…ifeoWx` | [`e676bf87…d23339b9`](https://explorer.testnet.lez.logos.co/transaction/e676bf870bfc87448071a5315be6bc4c9019c1b0d385a7ec4bae350ad23339b9) | 2721 |
 
 | Category | Policy account | Limits | Owner (signed create_policy) | create_policy | Block |
 |---|---|---|---|---|---|
-| storage | `6FscNXjN…Nj3ipSe` | 50 / 500 per 1000 blocks | `2dA9APZg…knWoZd` | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4) | 8868 |
-| messaging | `7HH46tXh…K1dA7bp` | 25 / 250 per 1000 blocks | `H3VSrUkv…A9yaTZ` | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918) | 8876 |
-| blockchain | `2RK4dPwz…W3Wusvc9` | 200 / 1000 per 1000 blocks | `G64pMjF9…ih9uvCc` | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda) | 8884 |
+| storage | `C7DFFFvv…V4NRZgi` | 50 / 500 per 1000 blocks | `4AD8jMUy…av98qWn` | [`1868f89e…d566c22c`](https://explorer.testnet.lez.logos.co/transaction/1868f89e19a6725c384af8d0c42a44e686d2473c7a68e985953318b2d566c22c) | 2692 |
+| messaging | `Eqpqkr9V…1AZHz59` | 25 / 250 per 1000 blocks | `Gf26xFak…ez5Sdt` | [`d2f2822c…c104de4e`](https://explorer.testnet.lez.logos.co/transaction/d2f2822c692963a9e1afbe4021382eacbb398eeb649712c41fd2bf0ac104de4e) | 2707 |
+| blockchain | `4vtZYSdi…SubkjVx` | 200 / 1000 per 1000 blocks | `6ePxXkXn…iQ5fQRP` | [`1a99ab3e…6fa17cc4`](https://explorer.testnet.lez.logos.co/transaction/1a99ab3e2ef2398acdeecb7e3b305a9fcb12c90b4ccd21b1d32b1d556fa17cc4) | 2722 |
 
 Manifest, with the full ids and the account that anchored each policy:
 [`artifacts/agents.tsv`](../artifacts/agents.tsv).
 
-The **storage agent is a different identity** from the one the superseded
-deployment used: `7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6` became
-`9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE`. That was forced rather than
-chosen. `claim_agent` is signed by the agent's **shielded** account, so that
-account must hold a live note, and the storage agent's balance had been recycled
-to zero — an agent with no note cannot sign anything. Moving 10 LEZ back to it
-from its own public pay account (`6563e8d1…`) is what made it able to claim, and
-a shielded transfer mints a **new note with a new account id** rather than
-crediting the old one. Its public receiving account `5Sa13NyN…` is unchanged, so
-the payment history below is continuous.
-
-The blockchain agent is likewise a different identity from the one *two*
-deployments ago — `9KdQSJ2t…VXicNe` became `A7UBoMbS…c39JtMu`, for the same
-reason. The messaging agent has kept its identity throughout.
+An agent's **shielded** account id is whichever note it holds: `claim_agent` is signed
+by that account, and a shielded transfer mints a *new* note with a new id rather than
+crediting an old one, so re-funding an agent between deployments changes its shielded
+identity. That is why the three shielded ids above (`DE4jFQbN…`, `3meg13qB…`,
+`94VUZEyE…`) are forced by which note each held when it signed `claim_agent`, not chosen.
+Each agent's **public** receiving account is separate from that shielded identity and is
+the one listed in the table above.
 
 Every anchor has its **own** signer, and each of those was made by
 `wallet account new public` and had never signed anything. The reason is that a
@@ -215,7 +207,7 @@ Resolve the address with the seed the IDL actually declares — the argument is
 `--agent-id`, and it takes the agent's 32 raw bytes as hex:
 
 ```bash
-AGENT=GpRdooEWJjX4JmRyT2n5KzMnDKtCM2HrvZ8iwMZpe5FS
+AGENT=3meg13qBn2Xg7AC2TXzkvxA5BDCA6ezrN1WCJoQAsmCG
 AGENT_HEX=$(python3 -c "
 import sys
 A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -225,12 +217,12 @@ print(n.to_bytes(32,'big').hex())" "$AGENT")
 
 spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
   pda policy --agent-id "$AGENT_HEX"
-# 7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp
+# Eqpqkr9VjqqE2GEHonZAF5cQbTs7TVpwECDuh1AZHz59
 
 # and the claim account, whose seed the IDL declares as the signing account
 spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
   pda claim --agent "$AGENT"
-# Qg4NvAVrZ4fMwTAomeX7q8sbvnTHmuF9BvBsxUJ7hoW
+# 451Wgg17bUPmxki4rxH9WcfgBq2FbmCK1XiRSuTbZSxN
 ```
 
 Agent keys live outside the repository, under `~/.lp0008-agents/`. An agent
@@ -256,7 +248,7 @@ account to read is the messaging agent's — it is the payer in
 
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp"]}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["Eqpqkr9VjqqE2GEHonZAF5cQbTs7TVpwECDuh1AZHz59"]}' \
 | python3 -c "
 import json,sys
 r=json.load(sys.stdin)['result']
@@ -280,7 +272,7 @@ which prints the shape below. **The two numbers at the bottom are deliberately
 left as `<…>`, and that is the correction this block needed:**
 
 ```
-owner         H3VSrUkvPRqU1ruS2bpqrhETE9364hfeapXQReA9yaTZ
+owner         Gf26xFakbQEN7DxaDsNiLVtu2TN1KjvniUyGa5ez5Sdt
 per_tx        25
 per_period    250
 period_blocks 1000
@@ -305,7 +297,7 @@ figure here.
 
 `owner` is the account that signed `create_policy`, and it is the account the
 messaging agent itself named in `claim_agent` before any policy existed: read
-`Qg4NvAVrZ4fMwTAomeX7q8sbvnTHmuF9BvBsxUJ7hoW` and compare. The storage and
+`451Wgg17bUPmxki4rxH9WcfgBq2FbmCK1XiRSuTbZSxN` and compare. The storage and
 blockchain agents' policies are the same 97-byte shape. The blockchain agent's
 has never been spent under (`window_start 0, spent 0`); **the storage agent's
 has**, since it began buying tasks from the blockchain agent — which is another
@@ -337,47 +329,20 @@ own account was never declared, never read and never asked to sign, and
 
 So the only thing an attacker needed was the agent's **public id**, which this
 repository prints in `artifacts/agents.tsv` and inside every signed Agent Card.
-Here is that transaction, against `a780003b…`:
+On the superseded program `a780003b…` this attack was **accepted** on the pre-reset
+testnet: a `create_policy` with `per_tx = per_period = u128::MAX` over the storage agent,
+signed by an account created for the purpose that had never held the agent's key, took
+ownership of that agent's only policy account. Those transactions were cleared by the
+testnet reset and no longer resolve.
 
-```bash
-curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7"]}'
-# [ "<the transaction>", 8869 ]
-```
-
-`eedb3caf…` is a `create_policy` with `per_tx = per_period = u128::MAX` over the
-storage agent `9Xpkkvos…`, signed by `RZmSLJAB…` — an account created for the
-purpose, which has never held that agent's key. Accepted, block 8869. It is not
-an argument from absence either: the account it created is still there and still
-says so.
-
-```bash
-curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["5QAVJAMHkpLnAMht3bonFijyApPZfAccHAFbzByNq8VV"]}' \
-| python3 -c "
-import json,sys
-d=bytes(json.load(sys.stdin)['result']['data'])
-print('owner ', d[1:33].hex())
-print('per_tx', int.from_bytes(d[33:49],'little'))"
-# owner  064afcfc304a27f737331a4105b8dc967ae892403449ae80023811405344aa4e
-# per_tx 340282366920938463463374607431768211455
-```
-
-Under that program a stranger owns that agent's only policy account, for the
-life of the identity, and the honest owner's own anchor would then have been
-refused `AccountAlreadyInitialized` — permanently, because LEZ rule 4 forbids
-changing an account's program owner, so no `close` can exist. `per_tx = 0`
-instead of `u128::MAX` is the same call as a denial of service.
-
-The identical call to the program deployed here is `60de3fc6…`, and
-`getTransaction` answers `null` for it: submitted, never included, error 6020.
-The honest owner's anchor for that agent is `6857ba23…` in block 8868 — one
-block *earlier* than the accepted attack, and at a different address: a policy
-account is a PDA of its program, and the attack was accepted by the program this
-one replaced, so the two cannot name one account. An earlier revision of this
-paragraph said "afterwards, at the same address", and both halves were wrong;
-`scripts/demo.sh` now fetches both heights and compares them rather than
-narrating an order.
+The program deployed here **refuses** the identical call: `getTransaction` answers `null`
+for it — submitted, never included, guest error 6020, `create_policy` refusing any signer
+the agent's own `claim_agent` did not name. `crates/agent-verifier-adversarial` runs
+exactly this attack against the deployed binary and asserts that halt, and `demo.sh`
+replays it on the public chain. The honest owner's anchor for the storage agent is a live
+`create_policy`, [`1868f89e…d566c22c`](https://explorer.testnet.lez.logos.co/transaction/1868f89e19a6725c384af8d0c42a44e686d2473c7a68e985953318b2d566c22c)
+in block 2692, at the PDA the live program derives — a different program from the one that
+accepted the attack, so the two can never name one account.
 
 **The fix is a second signature.** Anchoring is now two transactions from two
 wallets: `claim_agent`, signed by the agent, writes the id of the one account
@@ -460,14 +425,14 @@ repository could not produce before.
 | | first | second |
 |---|---|---|
 | task | `d31ded5a…480cecd5` | `13191d7c…214dea97` |
-| client (pays, shielded) | `GpRdooEW…Zpe5FS` | same |
-| server (paid, public) | `5Sa13NyN…dHtjnZ` | same |
-| skill / price | `storage.upload` at 25 LEZ | same |
-| settlement | [`e691f593…26631047`](https://explorer.testnet.lez.logos.co/transaction/e691f593cf7c393d0eee21054a05bb1584abc78d81308efd2cbf60d326631047) | [`aef14146…8bcb70b8`](https://explorer.testnet.lez.logos.co/transaction/aef1414608761c70545a8eb9f20a0301e14c0d316a6318ab0e38bc5b8bcb70b8) |
-| block | 8892 | 8901 |
-| period declared | 8000, valid in blocks 8000–8999 | same |
-| server balance | 45 → 70 | 70 → 95 |
-| policy ledger after | 25 spent in period 8000 | 50 spent in period 8000 |
+| client (pays, shielded) | `3meg13qB…oQAsmCG` | same |
+| server (paid, public) | `2KyfEaAu…6V71o` | same |
+| skill / price | `storage.upload` at 1 LEZ | same |
+| settlement | [`ed60240d…03f7910d`](https://explorer.testnet.lez.logos.co/transaction/ed60240d22e8aa11fe85c06edb893b9eb9b17d9fedacdcf9f745b8bf03f7910d) | [`a6e4e1f6…1e880824`](https://explorer.testnet.lez.logos.co/transaction/a6e4e1f6be39f13c54b445012db45988453c34e287a379cda5c3391e1e880824) |
+| block | 2735 | 2759 |
+| period declared | 2000, valid in blocks 2000–2999 | same |
+| server balance | 0 → 1 | 1 → 2 |
+| policy ledger after | 1 spent in period 2000 | 2 spent in period 2000 |
 
 The **payer is the messaging agent**, not the blockchain agent as in earlier
 deployments. An envelope is a ceiling, not a balance: the blockchain agent's
@@ -481,10 +446,9 @@ Manifest: [`artifacts/a2a-task.tsv`](../artifacts/a2a-task.tsv). The two above
 are its first two rows under the live program; it has since accumulated more,
 and `./scripts/verify-deployment.sh` prints every row with the block and the
 program the chain attributes it to rather than the one the file claims. Rows
-under superseded programs are marked as such there, and the settlements made
-before this manifest existed are in the
-[ledger](#every-transaction-on-the-published-accounts) below, which is the only
-place in this repository that accounts for them.
+under superseded programs are marked as such there, and the settlements made under
+superseded programs are marked as such there; the pre-reset per-account histories
+that once listed them have been cleared, as the reset cleared the transactions.
 
 ### A settlement whose payee is shielded too
 
@@ -495,14 +459,14 @@ there is no public balance to move.
 
 | | |
 |---|---|
-| client (pays, shielded) | `GpRdooEW…Zpe5FS` |
+| client (pays, shielded) | `3meg13qB…oQAsmCG` |
 | server (paid, **shielded**) | storage agent, by its `npk` `c10c15ac…` — no account id was named |
 | price | 1 LEZ |
-| settlement | [`5942d6cd…d53a03d61`](https://explorer.testnet.lez.logos.co/transaction/5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61) |
+| settlement | shielded `spend` (pre-reset; `PrivateForeign` recipient) |
 | block | 9360 |
 | period declared | 9000, valid in blocks 9000–9999 |
 | note minted | `Private/Bs8N2TXE…jRNbZb`, holding 1 |
-| the payee then spent it | [`e82a81f6…e39f9308`](https://explorer.testnet.lez.logos.co/transaction/e82a81f6076d3fd2e846e77223435658a31c9c9eabcbbf6b2fefa3f1e39f9308), block 9379 |
+| the payee then spent it | pre-reset; the shielded path is the same `spend` instruction, covered by the CI e2e lifecycle |
 
 The last row is the one that makes this a receipt rather than a commitment. A
 note nobody can spend is not money; the storage agent spent that exact note, on
@@ -518,7 +482,7 @@ what the payee checks, and only the payee, is the amount:
 ```bash
 LEE_WALLET_HOME_DIR=~/.lp0008-agents/storage \
   tools/shielded-receipt/target/release/shielded-receipt \
-  --payee 9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE \
+  --payee DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1 \
   --tx 5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61 \
   --expect-amount 1
 ```
@@ -538,7 +502,7 @@ Balances read from the chain, not from the script's own output:
 
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ"]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o"]}'
 ```
 
 **This will not print any of the balances quoted on this page.** It prints
@@ -569,140 +533,44 @@ transaction confirms **and** the recipient's balance moved by exactly the price,
 because an earlier version of this instruction produced confirmed, on-chain
 proofs that a policy permitted 25 LEZ and moved nothing at all.
 
-## Every transaction on the published accounts
+## The settlement ledger
 
-The three public accounts above are published as payment evidence. An account
-offered as evidence has to account for **everything** on it, not just the
-transactions that flatter the claim — otherwise a reviewer who reads the chain
-finds traffic the repository does not mention and has no way to tell an
-experiment from a mistake.
+Every settlement the three agents have made, decoded from the chain by
+`./scripts/verify-deployment.sh` and recorded in `artifacts/a2a-task.tsv`. All nine are
+under the shipped program `697746f5…`: seven autonomous (the messaging agent paying the
+storage agent's public account, signed by its own shielded key, no owner in the loop),
+and two paid **from inside a loaded module** (the messaging agent paying the blockchain
+agent's public account).
 
-These accounts were also used as working wallets during development: they funded
-a deployment, they carried experiments against superseded programs, and they
-moved balance between themselves. None of that is hidden here. Every transaction
-that has ever touched any of the three is listed below in block order, with what
-it was.
+| # | settlement | block | path | public payee balance after |
+|---|---|---|---|---|
+| 1 | [`ed60240d…03f7910d`](https://explorer.testnet.lez.logos.co/transaction/ed60240d22e8aa11fe85c06edb893b9eb9b17d9fedacdcf9f745b8bf03f7910d) | 2735 | autonomous | `2KyfEaAu…` 0 → 1 |
+| 2 | [`a6e4e1f6…1e880824`](https://explorer.testnet.lez.logos.co/transaction/a6e4e1f6be39f13c54b445012db45988453c34e287a379cda5c3391e1e880824) | 2759 | autonomous | 1 → 2 |
+| 3 | [`b734b46f…968e0030`](https://explorer.testnet.lez.logos.co/transaction/b734b46f9b47eec197ff0ce9e804553358883b203a2b813fb3b3737f968e0030) | 2767 | autonomous | 2 → 3 |
+| 4 | [`00ba48a5…121e91ae`](https://explorer.testnet.lez.logos.co/transaction/00ba48a5c08216894c120a993652aff17fe3416cc2ff980225d9a07c121e91ae) | 2776 | autonomous | 3 → 4 |
+| 5 | [`31702b6a…2e83715b`](https://explorer.testnet.lez.logos.co/transaction/31702b6ab92c9772d8970bab67a8fa006b30fc3137262efbc9ac236d2e83715b) | 2785 | autonomous | 4 → 5 |
+| 6 | [`cf9ac8bc…92626351`](https://explorer.testnet.lez.logos.co/transaction/cf9ac8bc506600db1ffc00bfef1815931879e94135a3c56528f9981992626351) | 2792 | autonomous | 5 → 6 |
+| 7 | [`86f49935…263f4d4b`](https://explorer.testnet.lez.logos.co/transaction/86f4993527b66a03a7d0f52efe29efee0f9a8d4f05d7899639093db0263f4d4b) | 2802 | autonomous | 6 → 7 |
+| 8 | [`59e3086e…929849b1`](https://explorer.testnet.lez.logos.co/transaction/59e3086e5febf3051bbeaff7b80634f8c41ab26ef43e63b0dfcef7a4929849b1) | 2863 | loaded module | `CJZzkWnT…` 0 → 1 |
+| 9 | [`0ef0f3f9…1a3f88f9`](https://explorer.testnet.lez.logos.co/transaction/0ef0f3f9d1ac987e08ff9d7a265ebb94df6570b5ad15dbe44cca49d41a3f88f9) | 2874 | loaded module | 1 → 2 |
 
-This was produced by scanning every block from 8000 to the chain head for the
-accounts' raw 32-byte ids and hashing each block's transactions, then confirming
-every hash with `getTransaction`; all of them resolve, and no other block in
-that range touches these accounts.
+Each is confirmed by `getTransaction`, its bytes hash to the cited hash, and the public
+payee balance moved by exactly the price. The payer is a shielded account, so only the
+credit side is publicly readable. No count is fixed in the prose — settlements are
+appended by `scripts/a2a-task.sh`, so `verify-deployment.sh` is the live source of the
+list and marks any row under a superseded program.
 
-**The scan has to be re-run, and this section has already been caught out by not
-re-running it.** A sweep of blocks 9478–14304 on 2026-08-19 found six blocks
-touching these accounts and **two of them were missing from the tables below** —
-the funding at 10765 and the approved payment at 10786, both from the
-owner-approval demonstration. A ledger that promises to account for *everything*
-is falsified by one absent row, and this one was falsified by two. The command is
-in this repository's history; the honest form of the promise is that it holds as
-far as block 14304, checked on that date. The three accounts' first transactions are
-their own initialisations, so nothing precedes the table.
+### Shielded settlements (pre-reset)
 
-### storage, `5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ`
-
-| Block | Transaction | What it is | Balance after |
-|---|---|---|---|
-| 8580 | `9ae7834d…834c1f06` | `auth-transfer init` — the agent claims its own receiving account | 0 |
-| 8605 | `c45d3f24…94cf7275` | settlement, **first** program `b028eabf…` | 25 |
-| 8624 | `8d7aba60…bb7502fb` | settlement, **first** program | 50 |
-| 8677 | `5a488f28…aa00c554` | settlement, **superseded** program `8c87cc9b…` | 75 |
-| 8686 | `f780df62…54ae8969` | settlement, **superseded** program | 100 |
-| 8727 | `1d983952…b3651f4d` | **spends 55 into shielded notes — this is what funded the live deployment** | 45 |
-| 8740 | `4e3a3454…a490ddb1` | settlement, program `a780003b…` — first row of `a2a-task.tsv` | 70 |
-| 8747 | `7cad4fbd…7168f019` | settlement, program `a780003b…` — second row of `a2a-task.tsv` | 95 |
-| 8749 | `d7498d65…1fbdd09b` | `create_policy` against the **superseded** program, `per_tx = per_period = u128::MAX`, creating `BP8zhGto…` — step 1 of the anchoring-bypass demonstration in [`artifacts/adversarial.tsv`](../artifacts/adversarial.tsv) | 95 |
-| 8774 | `483dbe55…2304a164` | `authenticated_transfer` of **40** to the messaging pay account | 55 |
-| 8794 | `7fc6c9af…9a022228` | receives **65** — step 2 of the bypass against the messaging agent: it moves its whole balance under the unlimited policy anchored at 8785, and this account is the recipient ([`adversarial.tsv`](../artifacts/adversarial.tsv)) | 120 |
-| 8803 | `a7987634…42a1f493` | `authenticated_transfer` of **65** to the messaging pay account | 55 |
-| 8847 | `6563e8d1…5f9a96e3` | spends **10** into shielded notes — **this is what let the storage agent claim an owner** under the live program. Its shielded balance had been recycled to zero, and `claim_agent` is signed by that account, so it had no note to spend. A shielded transfer mints a new note with a new id, which is why the storage agent is now `9Xpkkvos…` | 45 |
-| 8892 | `e691f593…26631047` | settlement, **live** program `697746f5…` — third row of `a2a-task.tsv` | 70 |
-| 8901 | `aef14146…8bcb70b8` | settlement, **live** program — fourth row of `a2a-task.tsv` | 95 |
-| 8939 | `16df5055…a1ff9dde` | settlement, **live** program, 5 LEZ | 100 |
-| 8964 | `ffafd2b0…721bb2da` | settlement, **live** program, 5 LEZ | 105 |
-| 9938 | `52ef56ad…4ed873e6` | settlement, **live** program, 1 LEZ | 106 |
-| 10081 | `071d25d7…1412057a` | settlement, **live** program, 1 LEZ | 107 |
-| 10102 | `54f85182…e2f47115` | settlement, **live** program, 1 LEZ — the one filmed for the video | 108 |
-| 10639 | `c8ff670b…80dc3028` | settlement, **live** program, 1 LEZ — paid by the **blockchain** agent, the first settlement under a payer other than `messaging`. Off-camera rehearsal of the film-2 scene command after the payer became selectable | 109 |
-| 10765 | `c33f9a56…22685ec1` | spends **3** into shielded notes — funding the fourth agent provisioned for the owner-approval demonstration, the one whose owner was claimed *before* it anchored | 106 |
-
-Seven of these were signed by the account itself — the initialisation, the 55
-spend, the `create_policy`, the two transfers, the 10 that re-funded the storage
-agent and the 3 that funded the approval demonstration's agent — which is exactly
-the nonce `getAccount` reports for it. The rest are credits, which do not move a
-nonce.
-
-### messaging, `Dxh7ZLHFmhKdNVE69XWayqLrquMk9iLfFVpmiJdfpEwD`
-
-| Block | Transaction | What it is | Balance after |
-|---|---|---|---|
-| 8593 | `edcd794a…e2114e77` | `auth-transfer init` | 0 |
-| 8614 | `e325c390…e20c9fa5` | receives **5** under the **first** program, via policy `872DUkRX…` | 5 |
-| 8757 | `0a9ac12c…15b0e170` | receives **10** — step 2 of the bypass against the storage agent: a `spend` under the **superseded** program using `BP8zhGto…`, the unlimited policy anchored at 8749 ([`adversarial.tsv`](../artifacts/adversarial.tsv)) | 15 |
-| 8772 | `8e2ec0d7…8100b544` | spends **15** into shielded notes | 0 |
-| 8774 | `483dbe55…2304a164` | receives **40** from the storage pay account | 40 |
-| 8783 | `83df9249…191443e5` | spends **40** into shielded notes | 0 |
-| 8785 | `e530e0ba…399d462d` | `create_policy` against the **superseded** program, `per_tx = per_period = u128::MAX`, creating `AsvAU2Lf…` — the same bypass, against the messaging agent ([`adversarial.tsv`](../artifacts/adversarial.tsv)) | 0 |
-| 8803 | `a7987634…42a1f493` | receives **65** from the storage pay account | 65 |
-| 8820 | `d4d4d0a7…40c69fef` | spends **65** into shielded notes | 0 |
-
-### blockchain, `BzYks91aGenEmpDoowdi3UUUjjyww1eMPMzibhH2wLnu`
-
-| Block | Transaction | What it is | Balance after |
-|---|---|---|---|
-| 8595 | `d97d6346…eaee9cd4` | `auth-transfer init` | 0 |
-| 9373 | `e2c59e8a…c61ef3be` | settlement, **live** program — a loaded module pays for the task it was served, 1 LEZ | 1 |
-| 9389 | `23046b54…ce6ca3fc` | settlement, **live** program, 1 LEZ | 2 |
-| 9456 | `31b185e2…19942531` | settlement, **live** program, 1 LEZ | 3 |
-| 9477 | `ed8c3514…374b8cb3` | settlement, **live** program, 1 LEZ | 4 |
-| 10786 | [`c243eaed…68169597`](https://explorer.testnet.lez.logos.co/transaction/c243eaedfcbba87dc11d5ad28aad4f8424916d087adf8c811747169668169597) | **`spend_approved`** — the above-threshold payment, 2 LEZ, released by an owner approval this account did not sign. The demonstration in [`limitations.md`](limitations.md) | 6 |
-
-**This account has now been paid, and this section used to say it never had
-been.** It read "nothing else, ever … balance 0, nonce 1", on the reasoning that
-the blockchain agent is the client in every settlement and so only ever pays.
-That stopped being true when the storage agent started buying from it: the four
-rows above are `./scripts/delivery-in-plugin.sh settle` runs, in which a **loaded
-module** discovers this agent's card, opens a task and pays the advertised 1 LEZ
-into this account. `getAccount` reports balance **6**, nonce 1 — the nonce is still 1
-because every one of the five is a credit, and a credit does not move a nonce.
-So "Paid at" in the agents table now means "has been paid at" for all three
-agents.
-
-**The fifth is not a settlement**, and it is the reason this account is worth
-re-reading: it is `spend_approved`, the branch an owner approval unlocks, paying
-2 LEZ over a ceiling of 1. It is the only above-threshold payment on this chain
-made by anything in this repository.
-
-### What the ledger says about the evidence
-
-- **Every settlement in `artifacts/a2a-task.tsv` is on chain and moved the
-  balance by exactly the price.** The count and the blocks are deliberately not
-  written here: settlements are added by `scripts/a2a-task.sh`, so any number on
-  this line is wrong the next time one lands — and this line did go stale, saying
-  "the two settlements … at blocks 8740 and 8747" after four more had landed, at
-  which point the two it named were the ones made under a **superseded** program.
-  `./scripts/verify-deployment.sh` prints the current list with each block, and
-  marks which rows are under the shipped program and which are earlier history.
-- Earlier settlements, under earlier programs, are also on chain. They are why
-  the storage account had a balance before this deployment started, and they are
-  real transactions rather than evidence for what ships.
-- The four transactions at 8749, 8757, 8785 and 8794 are the anchoring-bypass
-  demonstration, and they are evidence rather than debris:
-  [`artifacts/adversarial.tsv`](../artifacts/adversarial.tsv) records each one
-  with the step it plays. They are anchored against the **superseded** program,
-  whose ProgramId is `3cxAuaA7…`, and cannot be replayed against the live
-  program — a policy account is a PDA of the program, so the live program never
-  looks at those addresses, and the identical calls to it are refused
-  `AccountAlreadyInitialized`. That is why they were run where they were run.
-- The transfers at 8774 and 8803 moved balance between two accounts this
-  repository publishes. They are not payments for any task and no manifest
-  claims they are.
-
-Reproducing the deployment on **fresh** accounts — so that every transaction on
-a published account is one this document describes, with nothing to explain
-away — is the right way to close this, and it is not affordable on this testnet
-today: the funding wallet `DumJ4LCB…` holds **10 LEZ**, and the three agents
-alone need 50 before a single settlement. That is also why block 8727 exists at
-all. Until a faucet refills it, this ledger is the honest form of the evidence.
+Two further settlements paid a **shielded** payee — the messaging agent paying the
+storage agent at its shielded keys under the shipped `spend` instruction, and the payee
+then spending what it received — recorded in `artifacts/shielded-settlement.tsv`:
+`5942d6cd…53a03d61` (block ~9360) and `e82a81f6…e39f9308` (block ~9379). These predate
+the testnet reset — they were anchored on the prior chain state and **no longer resolve**,
+so they carry no explorer link. They are retained because the manifest records them and
+the shielded-payment path — paying a foreign shielded account through the same `spend`
+instruction, differing only in a `PrivateForeign` recipient — is exercised by the module
+and on every CI e2e lifecycle.
 
 ## A note on the explorer
 

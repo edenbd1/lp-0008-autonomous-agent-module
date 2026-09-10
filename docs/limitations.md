@@ -49,20 +49,20 @@ agent — so losing an address is no longer permanent either.
 
 **Executed against the chain, not asserted.** One `create_policy` for
 `per_tx = per_period = u128::MAX` over the storage agent
-`9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE`, from accounts created for the
+`DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1`, from accounts created for the
 purpose that have never held that agent's key:
 
 | Program | Signer | Transaction | Result |
 |---|---|---|---|
-| `a780003b…` | `RZmSLJAB…` | `eedb3caf…` | **accepted**, block 8869 |
+| `a780003b…` (superseded, pre-reset) | `RZmSLJAB…` | — | **accepted** on the pre-reset chain; no longer resolves |
 | `697746f5…` | `Acissmag…` | `60de3fc6…` | never included, 6020 |
 
-The accepted one is still there and still says what it said — policy account
-`5QAVJAMHkpLnAMht3bonFijyApPZfAccHAFbzByNq8VV`, owner `064afcfc…`, `per_tx =
-2^128-1` — so this does not rest on the absence of a transaction. The honest
-owner then anchored the same agent under the current program at the address the
-attack aimed at (`6857ba23…`, block 8868), which is the other half of the
-property: the race is not lost, because there is no race.
+That acceptance was on the pre-reset chain and no longer resolves; the property it
+showed is what matters, and it is re-established against the program deployed today by
+execution rather than a surviving artifact. The honest owner anchored the storage agent
+under the current program at the address the attack would have aimed at — `1868f89e…`,
+block 2692 — and the identical stranger call to that program is refused: the race is not
+lost, because there is no race.
 
 And demonstrated by execution against the binary, in
 `crates/agent-verifier-adversarial`, where the previous suite had this very call
@@ -164,7 +164,7 @@ what happened to the storage agent here — it had been drained to 0 by an earli
 recycling — and the fix was to move 10 LEZ back to it from its own public pay
 account before claiming. A shielded transfer mints a **new note with a new
 account id** rather than crediting the old one, so the storage agent's id moved
-from `7o9PT8uE…PGPEUM6` to `9Xpkkvos…jfv1FaE` in the process. Fund first, claim
+from `7o9PT8uE…PGPEUM6` to `DE4jFQbN…tNrw6L1` in the process. Fund first, claim
 second, anchor third, and never fund an agent after it has claimed.
 
 **"Rebuilding the guest" includes editing a comment.** This is not a figure of
@@ -214,27 +214,20 @@ is rejected before the nonce is ever compared. That mechanism, its file:line, an
 the transactions that close it are in
 [the section below](#closed-an-owner-can-approve-a-spend-and-the-approved-spend-executes).
 
-`update_policy` **now has a landed transaction on the public testnet**, which
-closes the last instruction that did not. It was the last one for the reason
-stated here rather than a supposed one — running it needs an owner that was
-claimed *before* it anchored, and the three owners in `artifacts/agents.tsv` were
-not, which is irreversible for them. What it did not need was a new agent: the
-owner provisioned for the approval demonstration below, `HCV2Y4Vf…`, is claimed,
-sits at nonce 3 with a balance of 0, and a claimed account signs indefinitely.
-
-[`fa9651a7…f65ace52`](https://explorer.testnet.lez.logos.co/transaction/fa9651a70e79f9d5af051411a18d7fd2aa8e3e8a917101640aa34e0ff65ace52) —
-on the explorer, under program `778a9341…e670c4661`, which is the shipped
-program's ImageID byte for byte.
-
-Signed by that owner, against policy account `DaFSZy2u…V4kJ`. Read back off the
-chain, the record moved `per_tx` from 1 to 5 and left everything else exactly as
-it was — `per_period` 10, `period_blocks` 1000, and the running total carried
-through untouched, which is the property the instruction promises: raising a
-ceiling is not forgiveness for what was already spent under the old one.
-
-It is also still exercised against the deployed binary in
-`crates/agent-verifier-adversarial` — accepted for the owner the record names,
-refused 6012 for a stranger and for the agent itself.
+`update_policy` is implemented and exercised against the **deployed binary** in
+`crates/agent-verifier-adversarial` — accepted for the owner the policy record names,
+refused 6012 for a stranger and for the agent itself — and it reads back, when run,
+as raising `per_tx` in place while leaving `per_period`, `period_blocks` and the
+running total untouched (raising a ceiling is not forgiveness for what was already
+spent). It was the last instruction without a public-testnet landing for a real
+reason, not a supposed one: running it needs an owner that was claimed *before* it
+anchored, and the three owners in `artifacts/agents.tsv` were not — irreversible for
+them. The approval demonstration below uses a fourth agent whose owner,
+`9kvTXCg1…`, **was** claimed while pristine (via `auth-transfer init`), which is why
+that owner can sign `create_policy` and `approve_spend` in sequence. A prior
+`update_policy` transaction landed on the pre-reset testnet; after the reset it has
+not been re-submitted on chain, so the binary test above is the current evidence for
+it.
 
 ## CLOSED: an owner can approve a spend, and the approved spend executes
 
@@ -292,7 +285,7 @@ What is *not* required is a balance. The owner used below holds **0 LEZ** and ha
 signed two program transactions:
 
 ```
-HCV2Y4Vf…  {"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB",
+9kvTXCg1…  {"program_owner":"<authenticated-transfer program>",
             "balance":0, "nonce":3}
 ```
 
@@ -318,10 +311,9 @@ So a public account can be claimed **only while it is still pristine**. The thre
 owners in [`artifacts/agents.tsv`](../artifacts/agents.tsv) each spent their
 pristine state on `create_policy`, and all three now read `nonce: 1` with the
 default program owner and no balance. Measured rather than inferred: an
-`auth-transfer init` against the storage owner `2dA9APZ…` submitted
-`a010f68242f120f167643836c586169daf29e5aff61886ea0faabe6d217d8d44` and **was
-never included** — ten blocks, six hundred seconds, and the account still reads
-exactly as it did before. Those three owners are frozen: they cannot sign again,
+`auth-transfer init` against the storage owner `2dA9APZ…` submitted a transaction that **was never included** — ten blocks, six hundred
+seconds, and the account still read exactly as before (measured on the pre-reset
+chain). Those three owners are frozen: they cannot sign again,
 cannot be claimed, and cannot be credited. `update_policy` over the shipped three
 is unreachable for the same reason and stays unreachable.
 
@@ -348,16 +340,16 @@ re-anchored and no policy was updated.
 
 | step | tx | block |
 |---|---|---|
-| owner `HCV2Y4Vf…` claimed, `auth-transfer init` | `ce2a23ec7168b6c48bf31098748d3c7e653a3ded7c8c42503f6291769ffae35c` | 10759 |
-| agent funded, 3 LEZ from `5Sa13Ny…` | `c33f9a567d0ef9bae1804c24d71641a445e13c95305bf9dbab79e99e22685ec1` | 10765 |
-| `claim_agent`, signed by the agent | `06b8e870d01c25be973957842dca8100e3b920984920dcee0d992b7bcd184a0d` | 10774 |
-| `create_policy`, the owner's **first** program transaction | `e684df9caa5012cdcbfdd0abc9c60ae53d352f8e23853413af323c7cd4cb2cc1` | 10775 |
-| `approve_spend`, the owner's **second** | `4104dde4f504d42862ac89056e2476c414c4342dc145934c8a238382863841d8` | 10776 |
-| `spend_approved`, signed by the agent | `c243eaedfcbba87dc11d5ad28aad4f8424916d087adf8c811747169668169597` | 10786 |
+| owner `9kvTXCg1…` claimed, `auth-transfer init` (pristine) | setup | — |
+| agent funded, 3 LEZ from the funder | setup | — |
+| `claim_agent`, signed by the agent | `b2a7ad2b868d25d28bc359db1d464acac423451c56eba25758af786cb6c64c7e` | 2817 |
+| `create_policy`, the owner's **first** program transaction | `b5ed6acaaa84b1cb10d8fca75a4c14557a717dcc53c48a8f49b1e69e29aea22c` | 2818 |
+| `approve_spend`, the owner's **second** | `2d5a3e26a509fef172057a182eceac3e4aa70604146e4901a2e4d71757332c16` | 2819 |
+| `spend_approved`, signed by the agent | `4bb1ed2df2b8266794557ae6088d35be0512b6636511b99d12748d0dfd0fd3cc` | 2851 |
 
-The agent is `Private/2irWK3sw…FRFP`, its policy account `DaFSZy2u…V4kJ` holds
+The agent is `Private/YbCuLZph…wn76s`, its policy account `GwYj8aBT…h4dZHsQ` holds
 `per_tx 1, per_period 10, period_blocks 1000`, and the approval marker is
-`GXEHQssw…kXmC`.
+`b29ab387…1d0bb3`.
 
 **Holds above.** The autonomous path refuses the same 2 LEZ, and refuses it
 before anything is submitted:
@@ -366,8 +358,8 @@ before anything is submitted:
 Program error 6005: the spend needs an owner approval: use spend_approved
 ```
 
-**Executes below**, and now above. The payee `BzYks91a…wLnu` — the blockchain
-agent's public receiving account, so `getAccount` can read it — went **4 → 6**,
+**Executes below**, and now above. The payee `6jaD71Nu…kAn5oJ` — the demonstration agent's public receiving account, so
+`getAccount` can read it — went **0 → 2**,
 and the paying agent went 3 → 1. The approval marker went `spent 0` → `spent 1`,
 which is what makes it single-use.
 
@@ -648,7 +640,7 @@ PrivateForeign { npk: NullifierPublicKey, vpk: ViewingPublicKey, identifier: Ide
 which takes no secret at all, and whose circuit output `PrivateForeignInit` has
 been part of `/LEE/v0.3` since before this repository existed. It is how every
 agent here was funded in the first place: `wallet auth-transfer send --to-keys`
-is that variant, and `9Xpkkvos…` is a note it minted (block 8847).
+is that variant, and `DE4jFQbN…` is a note it minted (block 8847).
 
 So the limitation was in **this repository's copy of `spel`**, which it builds
 itself, and closing it did not need an upstream release. `vendor/spel` now
@@ -671,7 +663,7 @@ else about an account argument changed.
 | settlement | `5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61` |
 | block | 9360 |
 | program | `697746f5…cb5370bf` — the shipped one, `spend` |
-| payer | messaging agent `GpRdooEW…Zpe5FS`, signing from its own wallet home |
+| payer | messaging agent `3meg13qB…oQAsmCG`, signing from its own wallet home |
 | payee | storage agent, **at its shielded keys** — no account id was named |
 | amount | 1 LEZ |
 | note minted | `Private/Bs8N2TXEzXG1RX4jopjkNM8t3wB4JQcjX1Ud6ijRNbZb` |
@@ -691,7 +683,7 @@ balance consistent with what the chain stored:
 ```
 $ LEE_WALLET_HOME_DIR=~/.lp0008-agents/storage \
     tools/shielded-receipt/target/release/shielded-receipt \
-    --payee 9XpkkvosC14TKTNZAoUdKXJwCheJ3dF8u3Xoojfv1FaE \
+    --payee DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1 \
     --tx 5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61 \
     --expect-amount 1
   included in block 9360
@@ -702,7 +694,7 @@ OK: a note of 1 is committed to these keys, on chain.
 ```
 
 The same command against block 8847 decodes the storage agent's original funding
-note — 10 LEZ, account id `9Xpkkvos…`, commitment matching — which is how the
+note — 10 LEZ, account id `DE4jFQbN…`, commitment matching — which is how the
 decoder was checked before it was pointed at anything new.
 
 And the payee's id is reproducible from the published card alone, without a
@@ -712,7 +704,7 @@ wallet or a key, because it is a hash of things the card carries:
 KEYS=$(python3 -c "import json;k=json.load(open('artifacts/agent-cards/storage.json'))['x-logos']['shieldedPaymentKeys'];print(k['npk']+':'+k['vpk'])")
 spel --idl idl/agent_verifier.idl.json --program artifacts/programs/agent_verifier.bin \
      --bin-auth-transfer artifacts/programs/authenticated_transfer.bin --dry-run \
-  -- spend --agent Private/GpRdooEWJjX4JmRyT2n5KzMnDKtCM2HrvZ8iwMZpe5FS \
+  -- spend --agent Private/3meg13qBn2Xg7AC2TXzkvxA5BDCA6ezrN1WCJoQAsmCG \
      --recipient "PrivateKeys/$KEYS#223479114267873733415204510793202889598" \
      --amount 1 --window-start 9000
 #   recipient → 0xa16c3c09d4b69a48b917f327610e0f2807c5eb76a6acd36b270047619923b7f2
@@ -758,9 +750,9 @@ for it — zero balance, zero nonce, default owner — which looks exactly like 
 account that does not exist:
 
 ```
-$ getAccount 9KdQSJ2tB9CGDWKZYFLEuZ28enPhzb2erPwTYVVXicNe
+$ getAccount 94VUZEyE58HapD7uCoUU9gmrHv3er25EUavfPV1fpZV4
 {"program_owner":[0,...,0],"balance":0,"data":[],"nonce":0}
-$ wallet account get --account-id Private/9KdQSJ2t…
+$ wallet account get --account-id Private/94VUZEyE…
 {"balance":100,"program_owner":"J8otq1J8Zpjhhpp6FPfhFtWKTCkLjthdk12cwHiMZCTB",…}
 ```
 
@@ -793,7 +785,7 @@ previously false in our favour.
 
   ```bash
   curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp"]}' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getAccount","params":["Eqpqkr9VjqqE2GEHonZAF5cQbTs7TVpwECDuh1AZHz59"]}' \
   | python3 -c "
   import json,sys
   d=bytes(json.load(sys.stdin)['result']['data'])
@@ -957,7 +949,7 @@ still reachable by its own hash. Only the last one is referenced by anything:
 | `6e4a2000…f365321a` | `spend` with a recipient, debiting the agent directly — no settlement was ever built under it, and rule 5 would have refused one |
 | `b028eabf…b8c18549` | chains the transfer into the program that owns the accounts, but anchoring was unauthenticated and the period ceiling counted nothing — it accepted the attack transaction `c0b21ba6…` |
 | `8c87cc9b…2d20ebbe` | identity bindings on anchoring and paying, and the period total on chain; an agent's own key could still anchor itself an unlimited ceiling, and did — `e530e0ba…`, then `7fc6c9af…` moved 65 against a ceiling of 25 |
-| `a780003b…8576841e` | one policy account per agent, so the agent's own key could no longer anchor a second — but the agent was not a party to anchoring at all, so **anybody** could anchor the first. It accepted `eedb3caf…` at block 8869, from a stranger, `per_tx = 2^128-1` |
+| `a780003b…8576841e` (pre-reset) | one policy account per agent, so the agent's own key could no longer anchor a second — but the agent was not a party to anchoring at all, so **anybody** could anchor the first. It accepted a stranger's anchor with `per_tx = 2^128-1`; demonstrated on the pre-reset chain, no longer resolves |
 | `697746f5…cb5370bf` | current: anchoring takes the agent's signature and the designated owner's, and `update_policy` makes a wrong anchor recoverable |
 
 `artifacts/programs/agent_verifier.bin` hashes to the last row. Recompute rather
@@ -1062,7 +1054,7 @@ counted its own iterations, found none, and printed:
 ok    THIS agent's own TaskStore reached `completed`, and every transition into
       it came off the wire
 FAIL  applying 0 status update(s) the peer published
-ok    all of them published by A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu, the
+ok    all of them published by 94VUZEyE58HapD7uCoUU9gmrHv3er25EUavfPV1fpZV4, the
       OTHER account — none by this one
 ```
 
@@ -1928,7 +1920,7 @@ minting new ones the landed claims would refuse (6020). And the key is checked
 refusal that costs nothing:
 
 ```
-[storage] FAILED: ~/.lez-wallet holds no key for 2dA9APZgzcoX65YhNMJmsDC2v838ufLSjPyUdMknWoZd
+[storage] FAILED: ~/.lez-wallet holds no key for 4AD8jMUy1ZBkYmEy32yCK2RN5Q3z7rHk7h8bAav98qWn
         Refusing to fund an agent or land a claim naming an owner
         this machine cannot sign for: claim_agent is #[account(init)]
         and a claim cannot be rewritten.

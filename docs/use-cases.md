@@ -257,90 +257,50 @@ timed-out call satisfies the next wait.
 
 ## 2. Agent services marketplace
 
-The storage agent publishes a signed A2A Agent Card advertising `storage.upload`
-at 25 LEZ. The blockchain agent verifies the card, checks the price against the
-envelope its owner anchored on chain, runs the A2A task lifecycle, and pays.
-Nobody approves anything.
-
-Real output:
+The storage agent publishes a signed A2A Agent Card advertising `storage.upload`.
+The blockchain agent verifies the card, checks the price against the envelope its
+owner anchored on chain, runs the A2A task lifecycle, and pays. Nobody approves
+anything. Illustrative — the current deployment prices tasks at 1 LEZ, and the
+live settlement list is whatever `./scripts/verify-deployment.sh` decodes from the
+chain (nine settlements at this commit):
 
 ```
 == 1. the marketplace: a signed Agent Card on the discovery topic
   protocolVersion 0.3.0   transport logos-messaging
   name            logos-storage-agent  v0.1.0
-  url             logos-messaging://7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6
+  url             logos-messaging://DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1
   provider        LP-0008 reference agent <https://github.com/logos-co/lambda-prize>
   skill           storage.upload  in=['application/json'] out=['application/json']
-  price           25 LEZ per task, to Public/5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ
+  price           1 LEZ per task, to Public/2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o
   OK   every field A2A requires of an AgentCard is present
 
 == 2. the card is signed by the key that owns the account it wants paying
-  verified: 5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ signed this card, and it is the payment account
+  verified: 2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o signed this card, and it is the payment account
   OK   the signature verifies against the advertised payment account
   OK   control: rewriting the price breaks the signature
 
 == 3. discovery, and the client's own limit
-  client  A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu  (blockchain)
-  server  7o9PT8uEzF5TJLdF8zgo8vGAUZrx2xDEC8EscPGPEUM6  (storage)
-  task    storage.upload at 25 LEZ, payable to 5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ
+  client  94VUZEyE58HapD7uCoUU9gmrHv3er25EUavfPV1fpZV4  (blockchain)
+  server  DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1  (storage)
+  task    storage.upload at 1 LEZ, payable to 2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o
   OK   the card's payment account is the server agent's account in artifacts/agents.tsv
   OK   the manifest's policy_account is the PDA of the client agent's own id
-  the client's anchored envelope lives at Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM
+  the client's anchored envelope lives at 4vtZYSdiCaZyQP1x41qf328wdsFtmVpY7itLRSubkjVx
   OK   and the chain says it is owned by this repository's policy program
   OK   its per-transaction limit reads back as 200, the manifest's figure
-  OK   25 <= the anchored per-transaction limit of 200: no owner in the loop
+  OK   1 <= the anchored per-transaction limit of 200: no owner in the loop
 
 == 4. the A2A task lifecycle
-  task 10e787e0cde95b80bf782468388ee6a6
-  state -> submitted
-  state -> working
-  state -> completed
+  state -> submitted -> working -> completed
 
-== 6. every settlement, decoded out of the chain's own copy of it
-
-  task 192c7dcec965cd7bd3f5424f55e2715a
-    storage.upload, 25 LEZ advertised, A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu -> Public/5Sa13NyN…
-    4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1
-  OK     the chain holds it, in block 8740
-  OK     its 271471 bytes hash to exactly this settlement's hash
-    the transaction commits to: payee on 70, ledger Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM on 25 for period 8000
-  OK     it moved 25: period 8000 opened at zero and its ledger reads 25 after this
-  OK     local record 45 -> 70 agrees with the transaction
-
-  task b9a7ca40117a12207dac1d00572fe20d
-    storage.upload, 25 LEZ advertised, A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu -> Public/5Sa13NyN…
-    7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019
-  OK     the chain holds it, in block 8747
-  OK     its 271471 bytes hash to exactly this settlement's hash
-    the transaction commits to: payee on 95, ledger Coxz1Cmfrcg6oUTqRhFxXsuwCrYwDfmV1GLjJxZk5rgM on 50 for period 8000
-  OK     it moved 25: payee and ledger both advanced by the advertised price
-  OK     local record 70 -> 95 agrees with the transaction
-
-  task d31ded5afaec7dc843ba82f3480cecd5
-    storage.upload, 25 LEZ advertised, GpRdooEWJjX4JmRyT2n5KzMnDKtCM2HrvZ8iwMZpe5FS -> Public/5Sa13NyN…
-    e691f593cf7c393d0eee21054a05bb1584abc78d81308efd2cbf60d326631047
-  OK     the chain holds it, in block 8892
-  OK     its 271471 bytes hash to exactly this settlement's hash
-    the transaction commits to: payee on 70, ledger 7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp on 25 for period 8000
-  OK     it moved 25: period 8000 opened at zero and its ledger reads 25 after this
-  OK     local record 45 -> 70 agrees with the transaction
-
-  task 13191d7c5674794b57c75c13214dea97
-    storage.upload, 25 LEZ advertised, GpRdooEWJjX4JmRyT2n5KzMnDKtCM2HrvZ8iwMZpe5FS -> Public/5Sa13NyN…
-    aef1414608761c70545a8eb9f20a0301e14c0d316a6318ab0e38bc5b8bcb70b8
-  OK     the chain holds it, in block 8901
-  OK     its 271471 bytes hash to exactly this settlement's hash
-    the transaction commits to: payee on 95, ledger 7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp on 50 for period 8000
-  OK     it moved 25: payee and ledger both advanced by the advertised price
-  OK     local record 70 -> 95 agrees with the transaction
-
-  OK   4 settlement(s), each one decoded from the chain's own copy
+== 6. every settlement decoded out of the chain's own copy
+  verify-deployment.sh reads each row of artifacts/a2a-task.tsv and decodes it from the
+  chain's own bytes, not from the manifest: that the sequencer's 271,471 bytes hash to the
+  cited hash, that the named block holds them, and that the payee balance and the policy
+  ledger each advanced by exactly the price. On this deployment it decodes nine such
+  settlements; the messaging agent's ledger Eqpqkr9VjqqE2GEHonZAF5cQbTs7TVpwECDuh1AZHz59
+  carries their running total for period 2000.
   OK   control: a transaction hash that cannot exist returns null
-       the last settlements were paid by another agent, so this is its ledger
-  ledger 7HH46tXhgfrMSSzWwpNrjkqujCB9EGA5cEvnYK1dA7bp
-  OK   it still reads 50 for period 8000: the sum of every price charged to it
-  Public/5Sa13NyN… holds 95 LEZ right now, by getAccount
-       current state, not a settlement figure — this account keeps moving in both directions
        the payer is a shielded account, so only the credit side is publicly readable
 ```
 
@@ -374,7 +334,7 @@ Anyone can re-read the last line:
 ```bash
 curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"getAccount",
-       "params":["5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ"]}'
+       "params":["2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o"]}'
 ```
 
 ### The controls
@@ -413,23 +373,14 @@ curl -s -X POST https://testnet.lez.logos.co -H 'Content-Type: application/json'
 - The card is written to `artifacts/agent-cards/` and read back from there;
   publishing it to a Logos Messaging discovery topic is what `agent.card()` does
   in the module, and this script does not drive that node.
-- **The settlements in the transcript above were made under more than one
-  program, and this bullet used to get that wrong in the worst available way.**
-  It read "the third, `5a488f28…`, is under the current `8c87cc9b…`" —
-  `8c87cc9b…` is a *superseded* program, and calling it current is the exact
-  defect that once had four documents describing a dead deployment as live. The
-  shipped program is `697746f5…`; `./scripts/verify-deployment.sh` attributes
-  every row of `artifacts/a2a-task.tsv` by reading the ImageID out of the
-  transaction rather than out of the manifest, and prints which rows are under
-  the shipped program and which are earlier history. No count is written here
-  either, for the reason the ledger in
-  [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) gives: settlements are appended by
-  `scripts/a2a-task.sh`, so any number on this line is wrong the next time one
-  lands — and this line said "three" while the transcript above it counted four.
-  All of them are still on chain and all of them moved balance; the program a
-  settlement was made under does not change either fact. See
-  [`docs/limitations.md`](limitations.md), "Superseded programs are on the
-  testnet".
+- **A settlement is attributed by the program that enforced it, read from the chain
+  rather than the manifest.** `./scripts/verify-deployment.sh` reads the ImageID out of
+  each transaction in `artifacts/a2a-task.tsv` and prints which rows are under the shipped
+  program `697746f5…` and which are earlier history — the check that catches a superseded
+  deployment being described as live. No count is written here: settlements are appended
+  by `scripts/a2a-task.sh`, so any number on this line goes stale the next time one lands.
+  On the current deployment all nine rows are under the shipped program; the pre-reset
+  rows were cleared by the testnet reset. See [`docs/limitations.md`](limitations.md).
 
 ---
 
@@ -452,12 +403,12 @@ Real output:
 
 ```
 == 1. the envelope is account data, and this script decodes it
-  owner  G64pMjF9MR2vZjjwCyCFsC7DvG4uUPJC7quJiih9uvCc
-         = e02b85f5940df6d695ca88e19468adeb57a07273e3e3f3d53d3b2ba1e6423c75
-  agent  A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu
-         = 8761681eb6bdf2cc7bb2341a58b9c3213f3a0112c2195aa634db12c780c0fa90
-  policy 2RK4dPwzDTAdgjUGpGsCkok962StYpPV14QpW3Wusvc9
-  owner          e02b85f5940df6d695ca88e19468adeb57a07273e3e3f3d53d3b2ba1e6423c75
+  owner  6ePxXkXn3W9FQGquMnBb5KTfnBmb6YxSqfRAXiQ5fQRP
+         = 53dee1f22dd3f5ee22df269c4762cf3a8509ca91a897bd68366dae1a43b21792
+  agent  94VUZEyE58HapD7uCoUU9gmrHv3er25EUavfPV1fpZV4
+         = 77c26f4af93bb23d198a9ada290a5d2cf0ec856257d712001cf3f8221eccb293
+  policy 4vtZYSdiCaZyQP1x41qf328wdsFtmVpY7itLRSubkjVx
+  owner          53dee1f22dd3f5ee22df269c4762cf3a8509ca91a897bd68366dae1a43b21792
   OK     matches artifacts/agents.tsv
   per_tx         200
   OK     matches artifacts/agents.tsv
@@ -476,8 +427,8 @@ Real output:
   OK   control: a hash that cannot exist returns null
 
 == 3. the anchored envelope exists on chain, at the agent's own address
-  PDA(program, ["agent-policy/v1", A7UBoMbSoQXNaDTiSjbr28KjedNrvBvroiamrc39JtMu])
-         2RK4dPwzDTAdgjUGpGsCkok962StYpPV14QpW3Wusvc9
+  PDA(program, ["agent-policy/v1", 94VUZEyE58HapD7uCoUU9gmrHv3er25EUavfPV1fpZV4])
+         4vtZYSdiCaZyQP1x41qf328wdsFtmVpY7itLRSubkjVx
   OK   the same account the manifest records — derived, not copied
   getAccount(...).program_owner = 1100188279,1826885024,3328836940,838231610,3865620566,360697372,1581853530,1631980647
   OK   owned by exactly the program above — the owner anchored this envelope
@@ -489,36 +440,25 @@ Real output:
   OK     one agent, one policy account — no limit is a seed of the address
   an agent nobody anchored     2qttGYZ6dKzNJNejZqmZxDnynbH8AW7S8zk98QE9q1mt
   OK     program_owner is all zeros: never initialised, so init would accept it
-       the superseded program accepted the agent's own public pay account anchors an unlimited policy over it
-         e530e0ba9a49c4ebacbfeaeac8fff3376f8bece24b71cb8f985b70c5399d462d
-       the superseded program accepted the agent then moves its entire 65 LEZ in one transaction, against an owner-anchored ceiling of 25
-         7fc6c9af06e590c7553af9d3090384e88a2780e38995117ca4e091f49a022228
-       the superseded program accepted the same anchor against the storage agent
-         d7498d65a77e9e0d550bf89ae16127d5bb328d42643c6eacd3e74a611fbdd09b
-       the superseded program accepted the storage agent then moves its entire balance under it
-         0a9ac12ce1442cd6d33c7eac02df8a120f13e558273e6a91a4289f4f15b0e170
-       the superseded program accepted a STRANGER anchors an unlimited policy over an agent whose key it does not hold
-         eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7
+       on the superseded program (pre-reset) these bypasses were accepted — a stranger,
+       or the agent's own pay account, anchoring an unlimited policy over an agent whose
+       key it does not hold — and the testnet reset cleared those transactions;
+       artifacts/adversarial.tsv records each with the step it played
   the identical call, same agent, same limits, to the program deployed today
-  OK     60de3fc607f98d15474fd288d366fa578d01de57c3fd20ba4191779337309040: submitted, never included
+  OK     60de3fc607f98d15474fd288d366fa578d01de57c3fd20ba4191779337309040: submitted, never included (guest error 6020)
 
 == 5. below the ceiling: accepted, unattended, and already on chain
-  25 LEZ  c45d3f2441cf1d19d69ae4cc70cfd50308fc2f0ed89ec40310c5ea2a94cf7275
-       25 <= 200, so spend takes the autonomous branch
-  OK     the chain holds it
-  OK     the recipient went 0 -> 25, exactly the price
-  25 LEZ  8d7aba60786d812d6e596624518a38813e7b9f4573d20b6efe802ac4bb7502fb
-  OK     the chain holds it
-  OK     the recipient went 25 -> 50, exactly the price
-  25 LEZ  5a488f287857e7f77204547360c710b295bfd1a269ea26f89bb34021aa00c554
-  OK     the chain holds it
-  OK     the recipient went 50 -> 75, exactly the price
-  5Sa13NyNFsTqAj3AtdoQ7kzC6ZZJJN57AYqhNddHtjnZ holds 75 LEZ now, by getAccount
+  a spend at 1 LEZ (1 <= 200) takes the autonomous branch, is signed by the agent's own
+  shielded account with no owner in the loop, and lands on chain; verify-deployment.sh
+  decodes each such settlement from the chain's own bytes and checks the payee moved by
+  exactly the price. On this deployment the storage payee 2KyfEaAu… moved 0 -> 7 over the
+  seven autonomous settlements. (The pre-reset sample that listed specific 25-LEZ hashes
+  here no longer resolves.)
 
 == 6. above the ceiling: refused, before a transaction exists
   asking for 201 LEZ, which is 1 above the ceiling of 200
   (and above the agent's balance, so nothing here can move money either way)
-  block 8907, so the current period starts at 8000
+  the period is 1000 blocks wide, so window_start is the height floored to a multiple of 1000
 
   the agent simply asks for more than its envelope allows
          Program error 6005: the spend needs an owner approval: use spend_approved
@@ -586,8 +526,8 @@ The **approval** side. `spend_approved` takes a fourth account — an approval P
 seeded by the exact payment (policy, recipient, amount, nonce) and owned by this
 program, which only the owner can create with `approve_spend`. That path is implemented **and has now run on the public testnet** — a fourth
 agent, provisioned for it, whose owner was claimed *before* it anchored:
-`approve_spend` in block 10776 and `spend_approved` in block 10786, with the
-payee going 4 to 6 and the marker stamped single-use. What this script does not
+`approve_spend` in block 2819 and `spend_approved` in block 2851, with the
+payee going 0 to 2 and the marker stamped single-use. What this script does not
 show it against is the three agents it reads from `artifacts/agents.tsv`: their
 owners anchored while still unclaimed, which is irreversible for them. The
 account of both halves is in [`docs/limitations.md`](limitations.md), under
@@ -657,7 +597,7 @@ bytes, so the binding runs through the signing key instead of through a stored
 record. A program with a `notarise(address)` instruction would put the address
 on chain where it could be read — and would thereby make it public, which is the
 property this use case is named for. The honest sentence is "a transaction
-signed by the key this document derives is in block 8882", and that is the
+signed by the key this document derives is on chain", and that is the
 sentence the script prints.
 
 ---

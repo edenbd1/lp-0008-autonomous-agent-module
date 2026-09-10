@@ -225,7 +225,7 @@ evidence and the command that re-derives it; what does not work is in
   so for them the approved path is closed and stays closed. **It is not a
   property of the chain.** An owner claimed before it anchors signs indefinitely,
   and the whole path has run on the public testnet — `approve_spend` in block
-  10776, `spend_approved` in block 10786, the payee 4 to 6. Both halves are in
+  2819, `spend_approved` in block 2851, the payee 0 to 2. Both halves are in
   `docs/limitations.md`, and neither is hidden. It is **not** a clause of this criterion: the sentence does not say "and
   executes above-threshold transactions after approval", and the safety property
   it does state — nothing above the threshold is ever executed without the owner —
@@ -293,7 +293,7 @@ evidence and the command that re-derives it; what does not work is in
   no price and no payee — it reads both off the seller's signed card, which
   arrived over the public network seconds earlier — checks the price against the
   envelope its owner anchored **on chain**, sends the A2A request, and settles:
-  **`ed8c3514…374b8cb3`, block 9477**, on chain and checkable now. Then each
+  **`59e3086e…929849b1`, block 2863**, on chain and checkable now. Then each
   agent's own `TaskStore` walks `submitted → working → completed` on status
   updates the **other** account published.
   The two-process shape is not decoration, and neither is the seller. A Delivery
@@ -547,7 +547,7 @@ evidence and the command that re-derives it; what does not work is in
 ### Supportability
 
 - [x] **MET — The agent module is deployed and tested on LEZ devnet/testnet.**
-  Program, three anchors and thirteen settlements all live on the public testnet,
+  Program, three anchors and nine settlements all live on the public testnet,
   each re-verified for this document with a null-returning control:
   `./scripts/verify-deployment.sh` (exit 0),
   `./scripts/submission-evidence.py` (exit 0 — it renders the three evidence
@@ -718,7 +718,7 @@ evidence and the command that re-derives it; what does not work is in
   What runs in it, in order: `03-spending-threshold` (a spend above the
   per-transaction ceiling refused with `Program error 6005`), `04-privacy-notary`,
   `05-event-alerter`, and `02-services-marketplace`, which settles
-  `54f851825f…e2f47115` in block 10102 with the recipient going **107 → 108 LEZ
+  `86f4993527…263f4d4b` in block 2802 with the public payee going **6 → 7 LEZ
   and no owner signing anything**. `RISC0_DEV_MODE=0` is legible throughout the
   proving output.
 
@@ -756,8 +756,8 @@ evidence and the command that re-derives it; what does not work is in
   `dev_mode=1` in any sampled frame. Film 1 runs the privacy-preserving notary
   and the spending-threshold refusal against block 10064 of the public testnet;
   film 2 runs the paid skill marketplace end to end and settles
-  `54f851825f…e2f47115`, with the recipient going 107 → 108 LEZ on screen and
-  no owner signature anywhere in it. That transaction is in block 10102 and is
+  `86f4993527…263f4d4b`, with the public payee going 6 → 7 LEZ and
+  no owner signature anywhere in it. That transaction is in block 2802 and is
   the one this document cites elsewhere.
 
   **This paragraph used to end "the box stays unchecked, because publication is
@@ -804,45 +804,36 @@ hash proves the bytes are that transaction, so the balance below is the balance
 
 | # | settlement | block | on the wire | skill | price | payee balance after | policy `window` / `spent` after |
 |---|---|---|---|---|---|---|---|
-| 1 | [`4e3a3454…a490ddb1`](https://explorer.testnet.lez.logos.co/transaction/4e3a3454b287460b4154949a4abc5b1ea9eacdf2f899f5dedc14eb5ea490ddb1) | 8740 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `Coxz1Cmf…` at 8,000 / 25 |
-| 2 | [`7cad4fbd…7168f019`](https://explorer.testnet.lez.logos.co/transaction/7cad4fbd78fa52167bcdd0180732f4c105dee3be4786eea96d712b5f7168f019) | 8747 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `Coxz1Cmf…` at 8,000 / 50 |
-| 3 | [`e691f593…26631047`](https://explorer.testnet.lez.logos.co/transaction/e691f593cf7c393d0eee21054a05bb1584abc78d81308efd2cbf60d326631047) | 8892 | 271,471 bytes | `storage.upload` | 25 LEZ | 70 | `7HH46tXh…` at 8,000 / 25 |
-| 4 | [`aef14146…8bcb70b8`](https://explorer.testnet.lez.logos.co/transaction/aef1414608761c70545a8eb9f20a0301e14c0d316a6318ab0e38bc5b8bcb70b8) | 8901 | 271,471 bytes | `storage.upload` | 25 LEZ | 95 | `7HH46tXh…` at 8,000 / 50 |
-| 5 | [`16df5055…a1ff9dde`](https://explorer.testnet.lez.logos.co/transaction/16df5055d55a6c240c5e6774202c0500fa12e59fe502f6338a36b20ea1ff9dde) | 8939 | 271,471 bytes | `storage.upload` | 5 LEZ | 100 | `7HH46tXh…` at 8,000 / 55 |
-| 6 | [`ffafd2b0…721bb2da`](https://explorer.testnet.lez.logos.co/transaction/ffafd2b0f4ff9c1ca411e8da2dba06052c25790fc5c83e7351fbdee4721bb2da) | 8964 | 271,471 bytes | `storage.upload` | 5 LEZ | 105 | `7HH46tXh…` at 8,000 / 60 |
-| 7 | [`e2c59e8a…c61ef3be`](https://explorer.testnet.lez.logos.co/transaction/e2c59e8abc8c341e08021c6814db1fd151e81db9a84ed815e333d16bc61ef3be) | 9373 | 271,471 bytes | `storage.upload` | 1 LEZ | 1 | `6FscNXjN…` at 9,000 / 1 |
-| 8 | [`23046b54…ce6ca3fc`](https://explorer.testnet.lez.logos.co/transaction/23046b5460304f8c0e644535d95361e477ffd5db5da9468739e06bbece6ca3fc) | 9389 | 271,471 bytes | `storage.upload` | 1 LEZ | 2 | `6FscNXjN…` at 9,000 / 2 |
-| 9 | [`31b185e2…19942531`](https://explorer.testnet.lez.logos.co/transaction/31b185e279738ca793382e90065ad15a9f63fd992820172c2419fdc519942531) | 9456 | 271,471 bytes | `storage.upload` | 1 LEZ | 3 | `6FscNXjN…` at 9,000 / 3 |
-| 10 | [`ed8c3514…374b8cb3`](https://explorer.testnet.lez.logos.co/transaction/ed8c351412409c81723ea7b90e2d9cdcb0841a33234894bfff8269af374b8cb3) | 9477 | 271,471 bytes | `storage.upload` | 1 LEZ | 4 | `6FscNXjN…` at 9,000 / 4 |
-| 11 | [`52ef56ad…4ed873e6`](https://explorer.testnet.lez.logos.co/transaction/52ef56ad06c149e3725655108a86f7947b501cfe5504667b03ec07234ed873e6) | 9938 | 271,471 bytes | `storage.upload` | 1 LEZ | 106 | `7HH46tXh…` at 9,000 / 2 |
-| 12 | [`071d25d7…1412057a`](https://explorer.testnet.lez.logos.co/transaction/071d25d7193fd3c3b6380c4e28b5de1ec117fc056b013c53e2f110171412057a) | 10081 | 271,471 bytes | `storage.upload` | 1 LEZ | 107 | `7HH46tXh…` at 10,000 / 1 |
-| 13 | [`54f85182…e2f47115`](https://explorer.testnet.lez.logos.co/transaction/54f851825f171cf62f6b4723f7133687f3d9dff7e138417374cc7960e2f47115) | 10102 | 271,471 bytes | `storage.upload` | 1 LEZ | 108 | `7HH46tXh…` at 10,000 / 2 |
-| 14 | [`c8ff670b…80dc3028`](https://explorer.testnet.lez.logos.co/transaction/c8ff670bd7e45a02eeb0d5b25427149d6eb0c70741bf52032bf5317780dc3028) | 10639 | 271,471 bytes | `storage.upload` | 1 LEZ | 109 | `2RK4dPwz…` at 10,000 / 1 |
+| 1 | [`ed60240d…03f7910d`](https://explorer.testnet.lez.logos.co/transaction/ed60240d22e8aa11fe85c06edb893b9eb9b17d9fedacdcf9f745b8bf03f7910d) | 2735 | 271,471 bytes | `storage.upload` | 1 LEZ | 1 | `Eqpqkr9V…` at 2,000 / 1 |
+| 2 | [`a6e4e1f6…1e880824`](https://explorer.testnet.lez.logos.co/transaction/a6e4e1f6be39f13c54b445012db45988453c34e287a379cda5c3391e1e880824) | 2759 | 271,471 bytes | `storage.upload` | 1 LEZ | 2 | `Eqpqkr9V…` at 2,000 / 2 |
+| 3 | [`b734b46f…968e0030`](https://explorer.testnet.lez.logos.co/transaction/b734b46f9b47eec197ff0ce9e804553358883b203a2b813fb3b3737f968e0030) | 2767 | 271,471 bytes | `storage.upload` | 1 LEZ | 3 | `Eqpqkr9V…` at 2,000 / 3 |
+| 4 | [`00ba48a5…121e91ae`](https://explorer.testnet.lez.logos.co/transaction/00ba48a5c08216894c120a993652aff17fe3416cc2ff980225d9a07c121e91ae) | 2776 | 271,471 bytes | `storage.upload` | 1 LEZ | 4 | `Eqpqkr9V…` at 2,000 / 4 |
+| 5 | [`31702b6a…2e83715b`](https://explorer.testnet.lez.logos.co/transaction/31702b6ab92c9772d8970bab67a8fa006b30fc3137262efbc9ac236d2e83715b) | 2785 | 271,471 bytes | `storage.upload` | 1 LEZ | 5 | `Eqpqkr9V…` at 2,000 / 5 |
+| 6 | [`cf9ac8bc…92626351`](https://explorer.testnet.lez.logos.co/transaction/cf9ac8bc506600db1ffc00bfef1815931879e94135a3c56528f9981992626351) | 2792 | 271,471 bytes | `storage.upload` | 1 LEZ | 6 | `Eqpqkr9V…` at 2,000 / 6 |
+| 7 | [`86f49935…263f4d4b`](https://explorer.testnet.lez.logos.co/transaction/86f4993527b66a03a7d0f52efe29efee0f9a8d4f05d7899639093db0263f4d4b) | 2802 | 271,471 bytes | `storage.upload` | 1 LEZ | 7 | `Eqpqkr9V…` at 2,000 / 7 |
+| 8 | [`59e3086e…929849b1`](https://explorer.testnet.lez.logos.co/transaction/59e3086e5febf3051bbeaff7b80634f8c41ab26ef43e63b0dfcef7a4929849b1) | 2863 | 271,471 bytes | `storage.upload` | 1 LEZ | 1 | `Eqpqkr9V…` at 2,000 / 8 |
+| 9 | [`0ef0f3f9…1a3f88f9`](https://explorer.testnet.lez.logos.co/transaction/0ef0f3f9d1ac987e08ff9d7a265ebb94df6570b5ad15dbe44cca49d41a3f88f9) | 2874 | 271,471 bytes | `storage.upload` | 1 LEZ | 2 | `Eqpqkr9V…` at 2,000 / 9 |
 
-**2 of the 14 settlements above predate the program this repository ships.**
-Settlements 1 and 2 charged an envelope, `Coxz1Cmf…`, owned by a different
-ProgramId; the generator says so per row, in its own words, rather than leaving a
-reader to notice. They are kept because they are on chain and a reviewer will
-find them, but the criterion they support is only supported by the **12 made
-under the current deployment** — 13 with the shielded settlement below, which is
-under the same program and is recorded in the other manifest.
+**All nine settlements above are under the program this repository ships.** The
+testnet was reset and the entire lifecycle was re-run against the current deployment,
+so no superseded rows remain. Settlements 1–7 are autonomous CLI settlements the
+messaging agent signed with its own shielded account (public payee `2KyfEaAu…` going
+0 → 7); settlements 8–9 were paid **from inside a loaded module** (public payee
+`CJZzkWnT…` going 0 → 2), covered below.
 
-This table and this sentence are **copied from `./scripts/submission-evidence.py`**
-rather than maintained. They had drifted by one row: settlement 14 landed and the
-counts under the table went on saying eleven. The count gate below is what stops
-that happening again.
+This table and these counts are **copied from `./scripts/submission-evidence.py`**
+rather than maintained; a count that drifts from the manifest fails the gate below.
 
-Two further settlements pay a **shielded** payee and are recorded in
-`artifacts/shielded-settlement.tsv`, checked against the chain by
-`./scripts/verify-deployment.sh`: the messaging agent paying the storage agent at
-its shielded keys under the shipped `spend` instruction
-([`5942d6cd…53a03d61`](https://explorer.testnet.lez.logos.co/transaction/5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61),
-block 9360), and the storage agent then **spending** what it received
-([`e82a81f6…e39f9308`](https://explorer.testnet.lez.logos.co/transaction/e82a81f6076d3fd2e846e77223435658a31c9c9eabcbbf6b2fefa3f1e39f9308),
-block 9379), which is what makes it received rather than merely committed. The
-first of those is also why settlement 11 above reads `spent 2` rather than
-`spent 1`: it is the messaging agent's first charge against period 9,000, and it
-is not in the public table because its payee is not a public account.
+The module also settles to a **shielded** payee: the messaging agent paying the
+storage agent at its shielded keys under the shipped `spend` instruction, and the
+payee then **spending** what it received — the difference between received and merely
+committed. It is exercised by `artifacts/shielded-settlement.tsv` and checked by
+`./scripts/verify-deployment.sh`. That path is the same `spend` instruction the nine
+public settlements above use, differing only in a `PrivateForeign` recipient, and runs
+on every CI e2e lifecycle; the specific shielded transactions recorded earlier were
+anchored on the pre-reset chain and no longer resolve. Only the credit side of a
+shielded settlement is ever publicly readable, which is why the on-chain table above
+pays public accounts.
 
 What the chain cannot show, stated rather than implied: the payer is a shielded
 account, so only the credit side of each settlement is publicly readable.
@@ -851,7 +842,7 @@ nonce, zero owner — for a shielded address exactly as it does for one that has
 never existed, so **it is not an existence check** and no debit is quoted here.
 The debit is constrained anyway: LEZ rule 8 requires total balance to be
 preserved across every program in a transaction, so a transaction that credited
-25 LEZ debited 25 LEZ.
+1 LEZ debited 1 LEZ.
 
 **One caution about the links above.** The block explorer indexes roughly an hour
 and three quarters behind the sequencer, so a settlement that landed recently
@@ -864,7 +855,7 @@ q() { curl -s -X POST https://testnet.lez.logos.co \
         -H 'Content-Type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"$1\"]}"; }
 
-q 54f851825f171cf62f6b4723f7133687f3d9dff7e138417374cc7960e2f47115
+q ed60240d22e8aa11fe85c06edb893b9eb9b17d9fedacdcf9f745b8bf03f7910d
                 # => {"result":[<bytes>,<block>]}   present
 q dededededededededededededededededededededededededededededededede
                 # => {"result":null}                absent — as it must be
@@ -893,11 +884,11 @@ satisfied. Folding the limits into the address is what made that available: ever
 "anchor a new policy" was always on the table. One address per agent removes the
 choice. `crates/agent-verifier-adversarial` executes the attack against the
 deployed binary and asserts the halt code it now stops at, and `demo.sh` replays
-it against both programs on the public chain — the superseded one accepted it
-([`eedb3caf…0d52e0a7`](https://explorer.testnet.lez.logos.co/transaction/eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7),
-block 8869, and the stranger still owns that agent's only policy, for good), and
-the identical call to the program deployed today was submitted and is in no
-block.
+it against the program on the public chain: the identical call to the program
+deployed today is submitted and is **in no block** (guest error 6020). An earlier,
+buggy deployment *accepted* the same call — the stranger took ownership of that
+agent's only policy — which was demonstrated on the pre-reset testnet and no longer
+resolves; the one-address-per-agent rule above is what closes it for good.
 
 **Anchoring in one signature.** Even with one address per agent, the deployment
 before the current one declared only the policy account and a signer it recorded
@@ -1055,12 +1046,12 @@ rather than overwriting it. Under the program deployed above there are 6:
 
 | what | agent | transaction | block |
 |---|---|---|---|
-| `claim_agent` | `9Xpkkvos…` | [`88f9ec5c…dc292dd0`](https://explorer.testnet.lez.logos.co/transaction/88f9ec5c377dceeb5005336ecf358d778a30dc39d2ea49b1c166332cdc292dd0) | 8859 |
-| `create_policy` | `9Xpkkvos…` | [`6857ba23…631fe7d4`](https://explorer.testnet.lez.logos.co/transaction/6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4) | 8868 |
-| `claim_agent` | `GpRdooEW…` | [`78ce43c9…adaa126c`](https://explorer.testnet.lez.logos.co/transaction/78ce43c977bcf9956d3c8f42836e65b2fc8159a18e04836214756cd0adaa126c) | 8875 |
-| `create_policy` | `GpRdooEW…` | [`ce557a0a…278e1918`](https://explorer.testnet.lez.logos.co/transaction/ce557a0a8adc517b60496c35514e269fff92a4393b90bef41ce10916278e1918) | 8876 |
-| `claim_agent` | `A7UBoMbS…` | [`0dd4e49e…e52921a2`](https://explorer.testnet.lez.logos.co/transaction/0dd4e49eeecac1366baf7a81a93639cadd8b6e013984979d99ebf63ae52921a2) | 8883 |
-| `create_policy` | `A7UBoMbS…` | [`2f6b481c…ecec5eda`](https://explorer.testnet.lez.logos.co/transaction/2f6b481cffde2adaeed9442c19599c939d97da0c930b70b45d97ac34ecec5eda) | 8884 |
+| `claim_agent` | `DE4jFQbN…` | [`e47fec60…18a81971`](https://explorer.testnet.lez.logos.co/transaction/e47fec60aea2bb367a6393ec53f1d88c591e7359dac64ba43e9689c318a81971) | 2691 |
+| `create_policy` | `DE4jFQbN…` | [`1868f89e…d566c22c`](https://explorer.testnet.lez.logos.co/transaction/1868f89e19a6725c384af8d0c42a44e686d2473c7a68e985953318b2d566c22c) | 2692 |
+| `claim_agent` | `3meg13qB…` | [`c0e66362…a14ca086`](https://explorer.testnet.lez.logos.co/transaction/c0e6636245caf2f2369918283d456d55db06a1b5fe3b5493daa4b424a14ca086) | 2706 |
+| `create_policy` | `3meg13qB…` | [`d2f2822c…c104de4e`](https://explorer.testnet.lez.logos.co/transaction/d2f2822c692963a9e1afbe4021382eacbb398eeb649712c41fd2bf0ac104de4e) | 2707 |
+| `claim_agent` | `94VUZEyE…` | [`e676bf87…d23339b9`](https://explorer.testnet.lez.logos.co/transaction/e676bf870bfc87448071a5315be6bc4c9019c1b0d385a7ec4bae350ad23339b9) | 2721 |
+| `create_policy` | `94VUZEyE…` | [`1a99ab3e…6fa17cc4`](https://explorer.testnet.lez.logos.co/transaction/1a99ab3e2ef2398acdeecb7e3b305a9fcb12c90b4ccd21b1d32b1d556fa17cc4) | 2722 |
 
 Each was confirmed present in the block named and absent from both neighbours.
 A further 3 rows in that manifest belong to a superseded program, `a780003b…`
