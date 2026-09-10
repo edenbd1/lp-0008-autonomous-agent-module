@@ -133,15 +133,15 @@ the defect this deployment exists to fix.
 
 | Category | Agent (shielded) | Paid at (public) | Owner claim | claim_agent | Block |
 |---|---|---|---|---|---|
-| storage | `DE4jFQbN…tNrw6L1` | `2KyfEaAu…6V71o` | `9JLJKZLu…mnwLnW` | [`e47fec60…18a81971`](https://explorer.testnet.lez.logos.co/transaction/e47fec60aea2bb367a6393ec53f1d88c591e7359dac64ba43e9689c318a81971) | 2691 |
-| messaging | `3meg13qB…oQAsmCG` | `FduQnojv…oJWZtp` | `451Wgg17…uTbZSxN` | [`c0e66362…a14ca086`](https://explorer.testnet.lez.logos.co/transaction/c0e6636245caf2f2369918283d456d55db06a1b5fe3b5493daa4b424a14ca086) | 2706 |
-| blockchain | `94VUZEyE…V1fpZV4` | `CJZzkWnT…hyGbX` | `69RLYvpj…ifeoWx` | [`e676bf87…d23339b9`](https://explorer.testnet.lez.logos.co/transaction/e676bf870bfc87448071a5315be6bc4c9019c1b0d385a7ec4bae350ad23339b9) | 2721 |
+| storage | `DE4jFQbN…tNrw6L1` | [`2KyfEaAu…6V71o`](https://explorer.testnet.lez.logos.co/account/2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o) | [`9JLJKZLu…mnwLnW`](https://explorer.testnet.lez.logos.co/account/9JLJKZLukYQbX1k4efUUkbj4Ux9D93Wsoe95yxmnwLnW) | [`e47fec60…18a81971`](https://explorer.testnet.lez.logos.co/transaction/e47fec60aea2bb367a6393ec53f1d88c591e7359dac64ba43e9689c318a81971) | 2691 |
+| messaging | `3meg13qB…oQAsmCG` | [`FduQnojv…oJWZtp`](https://explorer.testnet.lez.logos.co/account/FduQnojvAkyD55j7cmVycr5VB44vMsK7bDd6x1oJWZtp) | [`451Wgg17…uTbZSxN`](https://explorer.testnet.lez.logos.co/account/451Wgg17bUPmxki4rxH9WcfgBq2FbmCK1XiRSuTbZSxN) | [`c0e66362…a14ca086`](https://explorer.testnet.lez.logos.co/transaction/c0e6636245caf2f2369918283d456d55db06a1b5fe3b5493daa4b424a14ca086) | 2706 |
+| blockchain | `94VUZEyE…V1fpZV4` | [`CJZzkWnT…hyGbX`](https://explorer.testnet.lez.logos.co/account/CJZzkWnTEE7MSRbdbA1pxD8EfRbNt1bPFgjxkuYhyGbX) | [`69RLYvpj…ifeoWx`](https://explorer.testnet.lez.logos.co/account/69RLYvpjhz98rr2wmRqf6hLsAmE14mGFSi65R4ifeoWx) | [`e676bf87…d23339b9`](https://explorer.testnet.lez.logos.co/transaction/e676bf870bfc87448071a5315be6bc4c9019c1b0d385a7ec4bae350ad23339b9) | 2721 |
 
 | Category | Policy account | Limits | Owner (signed create_policy) | create_policy | Block |
 |---|---|---|---|---|---|
-| storage | `C7DFFFvv…V4NRZgi` | 50 / 500 per 1000 blocks | `4AD8jMUy…av98qWn` | [`1868f89e…d566c22c`](https://explorer.testnet.lez.logos.co/transaction/1868f89e19a6725c384af8d0c42a44e686d2473c7a68e985953318b2d566c22c) | 2692 |
-| messaging | `Eqpqkr9V…1AZHz59` | 25 / 250 per 1000 blocks | `Gf26xFak…ez5Sdt` | [`d2f2822c…c104de4e`](https://explorer.testnet.lez.logos.co/transaction/d2f2822c692963a9e1afbe4021382eacbb398eeb649712c41fd2bf0ac104de4e) | 2707 |
-| blockchain | `4vtZYSdi…SubkjVx` | 200 / 1000 per 1000 blocks | `6ePxXkXn…iQ5fQRP` | [`1a99ab3e…6fa17cc4`](https://explorer.testnet.lez.logos.co/transaction/1a99ab3e2ef2398acdeecb7e3b305a9fcb12c90b4ccd21b1d32b1d556fa17cc4) | 2722 |
+| storage | [`C7DFFFvv…V4NRZgi`](https://explorer.testnet.lez.logos.co/account/C7DFFFvvQvFWkWczQTyBP2q9PsBGQmeFACTvSV4NRZgi) | 50 / 500 per 1000 blocks | [`4AD8jMUy…av98qWn`](https://explorer.testnet.lez.logos.co/account/4AD8jMUy1ZBkYmEy32yCK2RN5Q3z7rHk7h8bAav98qWn) | [`1868f89e…d566c22c`](https://explorer.testnet.lez.logos.co/transaction/1868f89e19a6725c384af8d0c42a44e686d2473c7a68e985953318b2d566c22c) | 2692 |
+| messaging | [`Eqpqkr9V…1AZHz59`](https://explorer.testnet.lez.logos.co/account/Eqpqkr9VjqqE2GEHonZAF5cQbTs7TVpwECDuh1AZHz59) | 25 / 250 per 1000 blocks | [`Gf26xFak…ez5Sdt`](https://explorer.testnet.lez.logos.co/account/Gf26xFakbQEN7DxaDsNiLVtu2TN1KjvniUyGa5ez5Sdt) | [`d2f2822c…c104de4e`](https://explorer.testnet.lez.logos.co/transaction/d2f2822c692963a9e1afbe4021382eacbb398eeb649712c41fd2bf0ac104de4e) | 2707 |
+| blockchain | [`4vtZYSdi…SubkjVx`](https://explorer.testnet.lez.logos.co/account/4vtZYSdiCaZyQP1x41qf328wdsFtmVpY7itLRSubkjVx) | 200 / 1000 per 1000 blocks | [`6ePxXkXn…iQ5fQRP`](https://explorer.testnet.lez.logos.co/account/6ePxXkXn3W9FQGquMnBb5KTfnBmb6YxSqfRAXiQ5fQRP) | [`1a99ab3e…6fa17cc4`](https://explorer.testnet.lez.logos.co/transaction/1a99ab3e2ef2398acdeecb7e3b305a9fcb12c90b4ccd21b1d32b1d556fa17cc4) | 2722 |
 
 Manifest, with the full ids and the account that anchored each policy:
 [`artifacts/agents.tsv`](../artifacts/agents.tsv).
@@ -426,7 +426,7 @@ repository could not produce before.
 |---|---|---|
 | task | `d31ded5a…480cecd5` | `13191d7c…214dea97` |
 | client (pays, shielded) | `3meg13qB…oQAsmCG` | same |
-| server (paid, public) | `2KyfEaAu…6V71o` | same |
+| server (paid, public) | [`2KyfEaAu…6V71o`](https://explorer.testnet.lez.logos.co/account/2KyfEaAuKw442zbRviJ2XeA9BWoBpFxNz8RGfWV6V71o) | same |
 | skill / price | `storage.upload` at 1 LEZ | same |
 | settlement | [`ed60240d…03f7910d`](https://explorer.testnet.lez.logos.co/transaction/ed60240d22e8aa11fe85c06edb893b9eb9b17d9fedacdcf9f745b8bf03f7910d) | [`a6e4e1f6…1e880824`](https://explorer.testnet.lez.logos.co/transaction/a6e4e1f6be39f13c54b445012db45988453c34e287a379cda5c3391e1e880824) |
 | block | 2735 | 2759 |

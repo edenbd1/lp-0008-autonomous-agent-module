@@ -340,14 +340,14 @@ re-anchored and no policy was updated.
 
 | step | tx | block |
 |---|---|---|
-| owner `9kvTXCg1…` claimed, `auth-transfer init` (pristine) | setup | — |
+| owner [`9kvTXCg1…`](https://explorer.testnet.lez.logos.co/account/9kvTXCg1NiTAsFZNDr5LAWJEL1Nt8HYgWCharjrEZzsW) claimed, `auth-transfer init` (pristine) | setup | — |
 | agent funded, 3 LEZ from the funder | setup | — |
-| `claim_agent`, signed by the agent | `b2a7ad2b868d25d28bc359db1d464acac423451c56eba25758af786cb6c64c7e` | 2817 |
-| `create_policy`, the owner's **first** program transaction | `b5ed6acaaa84b1cb10d8fca75a4c14557a717dcc53c48a8f49b1e69e29aea22c` | 2818 |
-| `approve_spend`, the owner's **second** | `2d5a3e26a509fef172057a182eceac3e4aa70604146e4901a2e4d71757332c16` | 2819 |
-| `spend_approved`, signed by the agent | `4bb1ed2df2b8266794557ae6088d35be0512b6636511b99d12748d0dfd0fd3cc` | 2851 |
+| `claim_agent`, signed by the agent | [`b2a7ad2b…b6c64c7e`](https://explorer.testnet.lez.logos.co/transaction/b2a7ad2b868d25d28bc359db1d464acac423451c56eba25758af786cb6c64c7e) | 2817 |
+| `create_policy`, the owner's **first** program transaction | [`b5ed6aca…29aea22c`](https://explorer.testnet.lez.logos.co/transaction/b5ed6acaaa84b1cb10d8fca75a4c14557a717dcc53c48a8f49b1e69e29aea22c) | 2818 |
+| `approve_spend`, the owner's **second** | [`2d5a3e26…57332c16`](https://explorer.testnet.lez.logos.co/transaction/2d5a3e26a509fef172057a182eceac3e4aa70604146e4901a2e4d71757332c16) | 2819 |
+| `spend_approved`, signed by the agent | [`4bb1ed2d…0d0fd3cc`](https://explorer.testnet.lez.logos.co/transaction/4bb1ed2df2b8266794557ae6088d35be0512b6636511b99d12748d0dfd0fd3cc) | 2851 |
 
-The agent is `Private/YbCuLZph…wn76s`, its policy account `GwYj8aBT…h4dZHsQ` holds
+The agent is `Private/YbCuLZph…wn76s`, its policy account [`GwYj8aBT…h4dZHsQ`](https://explorer.testnet.lez.logos.co/account/GwYj8aBTqxJJJ4RoT33yBfirvYhoTD6X6frj6h4dZHsQ) holds
 `per_tx 1, per_period 10, period_blocks 1000`, and the approval marker is
 `b29ab387…1d0bb3`.
 
@@ -358,7 +358,7 @@ before anything is submitted:
 Program error 6005: the spend needs an owner approval: use spend_approved
 ```
 
-**Executes below**, and now above. The payee `6jaD71Nu…kAn5oJ` — the demonstration agent's public receiving account, so
+**Executes below**, and now above. The payee [`6jaD71Nu…kAn5oJ`](https://explorer.testnet.lez.logos.co/account/6jaD71Nu2tZcFkxKxpwkoWXiPgzXHr2tVcLsL7kAn5oJ) — the demonstration agent's public receiving account, so
 `getAccount` can read it — went **0 → 2**,
 and the paying agent went 3 → 1. The approval marker went `spent 0` → `spent 1`,
 which is what makes it single-use.
