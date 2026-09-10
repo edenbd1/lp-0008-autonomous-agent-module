@@ -180,7 +180,7 @@ is what the literals silently did to every reader who was not the author. See
 
 Each agent has **two** accounts, and the split is a choice with a reason rather
 than a constraint. The shielded account is the agent: it holds the balance,
-signs its own payments, and — since `5942d6cd…d53a03d61` in block 9360 — can be
+signs its own payments, and — since `d04f5e46…1e675cd1` in block 3018 — can be
 paid at directly, by keys rather than by id. The public account exists because
 `getAccount` reads the public state only, so a credit into it is checkable by a
 stranger and a credit into the shielded one is not. Which of the two a payer
@@ -460,18 +460,18 @@ there is no public balance to move.
 | | |
 |---|---|
 | client (pays, shielded) | `3meg13qB…oQAsmCG` |
-| server (paid, **shielded**) | storage agent, by its `npk` `c10c15ac…` — no account id was named |
+| server (paid, **shielded**) | storage agent, by its `npk` `5ec166cf…` — no account id was named |
 | price | 1 LEZ |
-| settlement | shielded `spend` (pre-reset; `PrivateForeign` recipient) |
-| block | 9360 |
-| period declared | 9000, valid in blocks 9000–9999 |
-| note minted | `Private/Bs8N2TXE…jRNbZb`, holding 1 |
-| the payee then spent it | pre-reset; the shielded path is the same `spend` instruction, covered by the CI e2e lifecycle |
+| settlement | [`d04f5e46…1e675cd1`](https://explorer.testnet.lez.logos.co/transaction/d04f5e46792a8c0114f8cc2e89b7d2c30441a16b8ed7ce80b8f72deb1e675cd1), shielded `spend`, `PrivateForeign` recipient |
+| block | 3018 |
+| period declared | 3000, valid in blocks 3000–3999 |
+| note minted | `6cDcWhcW…8k8Y4`, holding 1 |
+| read back by the payee | storage decodes the note with its own viewing key: balance 1 |
 
-The last row is the one that makes this a receipt rather than a commitment. A
-note nobody can spend is not money; the storage agent spent that exact note, on
-its own, and the 1 LEZ went back to the messaging agent's shielded keys — so the
-pair is net-zero across the two agents and demonstrates both directions.
+The last row is what makes this a receipt rather than a commitment. The storage agent
+decodes the note it was paid — with its own viewing key, the only key that can — and
+reads exactly 1 LEZ; a credit no one can read is not a receipt, and a stranger, lacking
+that key, cannot read it at all.
 
 The amount cannot be read with `getAccount`, and this is not a gap to be
 apologised for — it is what paying a shielded payee buys. What a stranger checks
@@ -483,7 +483,7 @@ what the payee checks, and only the payee, is the amount:
 LEE_WALLET_HOME_DIR=~/.lp0008-agents/storage \
   tools/shielded-receipt/target/release/shielded-receipt \
   --payee DE4jFQbNVrjS5hGEVCE1txDfkdySvrgbGde8EtNrw6L1 \
-  --tx 5942d6cd6d223fd5bc7b5abd3bf34a1c1fc8e540e508232411e60e4d53a03d61 \
+  --tx d04f5e46792a8c0114f8cc2e89b7d2c30441a16b8ed7ce80b8f72deb1e675cd1 \
   --expect-amount 1
 ```
 
@@ -535,12 +535,14 @@ proofs that a policy permitted 25 LEZ and moved nothing at all.
 
 ## The settlement ledger
 
-Every settlement the three agents have made, decoded from the chain by
-`./scripts/verify-deployment.sh` and recorded in `artifacts/a2a-task.tsv`. All nine are
-under the shipped program `697746f5…`: seven autonomous (the messaging agent paying the
-storage agent's public account, signed by its own shielded key, no owner in the loop),
-and two paid **from inside a loaded module** (the messaging agent paying the blockchain
-agent's public account).
+The **seven autonomous marketplace settlements** — the messaging agent paying the storage
+agent's public account, signed by its own shielded key with no owner in the loop — are
+recorded in `artifacts/a2a-task.tsv` (rows 1–7, the single-payee `0 → 7` sequence
+`scripts/use-cases/02-services-marketplace.sh` verifies). Rows 8–9 are **two settlements
+paid from inside a loaded module** (the `./scripts/delivery-in-plugin.sh settle` flow),
+the messaging agent paying the *blockchain* agent's public account; they are cited here as
+on-chain evidence rather than carried in the marketplace manifest, since their payee
+differs. All nine are under the shipped program `697746f5…` and resolve on chain.
 
 | # | settlement | block | path | public payee balance after |
 |---|---|---|---|---|
@@ -560,17 +562,17 @@ credit side is publicly readable. No count is fixed in the prose — settlements
 appended by `scripts/a2a-task.sh`, so `verify-deployment.sh` is the live source of the
 list and marks any row under a superseded program.
 
-### Shielded settlements (pre-reset)
+### A shielded settlement, live on the current deployment
 
-Two further settlements paid a **shielded** payee — the messaging agent paying the
-storage agent at its shielded keys under the shipped `spend` instruction, and the payee
-then spending what it received — recorded in `artifacts/shielded-settlement.tsv`:
-`5942d6cd…53a03d61` (block ~9360) and `e82a81f6…e39f9308` (block ~9379). These predate
-the testnet reset — they were anchored on the prior chain state and **no longer resolve**,
-so they carry no explorer link. They are retained because the manifest records them and
-the shielded-payment path — paying a foreign shielded account through the same `spend`
-instruction, differing only in a `PrivateForeign` recipient — is exercised by the module
-and on every CI e2e lifecycle.
+The module also pays a **shielded** payee — the messaging agent paying the storage agent
+at its foreign shielded keys under the shipped `spend` instruction, so neither the payee
+nor the amount is publicly readable. It is live on the current deployment:
+[`d04f5e46…1e675cd1`](https://explorer.testnet.lez.logos.co/transaction/d04f5e46792a8c0114f8cc2e89b7d2c30441a16b8ed7ce80b8f72deb1e675cd1), block 3018, amount 1, minting note `6cDcWhcW…8k8Y4` — recorded
+in `artifacts/shielded-settlement.tsv` and recognised by `verify-deployment.sh`. There is
+no public account to credit, so `getAccount` shows nothing; the storage agent reads the
+received note's balance (1) with its own viewing key. This is the same `spend` instruction
+the public settlements above use, differing only in a `PrivateForeign` recipient built
+from the payee's Agent Card.
 
 ## A note on the explorer
 

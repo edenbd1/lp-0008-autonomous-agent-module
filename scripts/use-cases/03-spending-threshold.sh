@@ -287,8 +287,17 @@ fi
 # closed port.
 if [ "$ADV_ON_CHAIN" -ge 1 ]; then
   ok "  control: the same getTransaction finds $ADV_ON_CHAIN recorded attack(s) that WERE accepted, so its silence above is a reading"
+elif tx_live "$DEPLOY_TX"; then
+  # The accepted-under-superseded attacks that used to serve as this control were
+  # on chain state this testnet reset has cleared — their programs are no longer
+  # deployed here — so the control falls back to a transaction the chain
+  # certainly holds: this program's own deploy. If getTransaction returns it the
+  # RPC is answering, which is all the control needs to make the refused attack's
+  # "not on chain" above a reading rather than a dead port. The refusal is also
+  # proven offline and deterministically by the agent-verifier-adversarial suite.
+  ok "  control: getTransaction returns this program's deploy ($DEPLOY_TX), so the RPC answers and the refusal above is a reading; the pre-reset accepted-attack rows no longer resolve, and the offline agent-verifier-adversarial suite carries the refusal proof"
 else
-  bad "  control: no recorded attack could be found on chain, so 'not on chain' above is indistinguishable from a chain that is not answering"
+  bad "  control: neither a recorded accepted attack nor this program's deploy transaction resolves, so the RPC may not be answering"
 fi
 
 rule "5. below the ceiling: accepted, unattended, and already on chain"
