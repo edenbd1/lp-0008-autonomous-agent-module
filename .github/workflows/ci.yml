@@ -3053,11 +3053,18 @@ jobs:
           # chain" is equally true of a chain that is answering nothing at all.
           for want in \
             "control: a hash that cannot exist returns null" \
-            "program_owner is all zeros: never initialised, so init would accept it" \
-            "control: the same getTransaction finds"; do
+            "program_owner is all zeros: never initialised, so init would accept it"; do
             printf '%s\n' "$clean" | grep -qF "$want" \
               || { echo "03's control did not run: $want"; exit 1; }
           done
+          # The RPC-liveness control has two honest forms. It points at a recorded
+          # accepted attack when one is on chain; and since the testnet reset
+          # cleared the superseded-program acceptances, it otherwise falls back to
+          # this program's own deploy transaction, which the chain certainly holds.
+          # Either proves the "not on chain" above is a reading, not a dead port.
+          printf '%s\n' "$clean" \
+            | grep -qE 'control: (the same getTransaction finds|getTransaction returns this program.s deploy)' \
+            || { echo "03's RPC-liveness control did not run"; exit 1; }
           printf '%s\n' "$clean" \
             | grep -qE 'recorded attack\(s\) on the live program, none of them on chain' \
             || { echo "03 checked no recorded attack against the live program"; exit 1; }

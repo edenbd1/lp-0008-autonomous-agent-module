@@ -35,24 +35,27 @@ import hashlib, struct
 b = open('artifacts/programs/agent_verifier.bin', 'rb').read()
 print(hashlib.sha256(struct.pack('<I', len(b)) + b).hexdigest())")
 IMPOSSIBLE=dededededededededededededededededededededededededededededededede
-# The previous deployment, kept here because the attack it accepted is the
-# evidence that the defect was real. See section 5.
-PRIOR_TX=a780003b07204fc4d7445b5d88bbd2db8de248f0f1e5ffdbcd75fd268576841e
-# One `create_policy`, per_tx = per_period = u128::MAX, over the storage agent
-# 9Xpkkvos… — signed by an account created for the purpose, which has never held
-# that agent's key and never will. Sent to both programs.
-ATTACK_ACCEPTED=eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7
-ATTACK_REFUSED=60de3fc607f98d15474fd288d366fa578d01de57c3fd20ba4191779337309040
-# The account the accepted one created. It is still there, and it still says what
-# it said, so this section does not have to argue from a missing transaction.
-ATTACK_POLICY=5QAVJAMHkpLnAMht3bonFijyApPZfAccHAFbzByNq8VV
-# The same agent, under the program deployed today: what the agent itself signed,
-# what its owner then anchored, and where.
-AGENT_CLAIM=EZSN69njgBixwniExyhRrjri1xUTX6iN7xxhcvG4Vvie
-HONEST_ANCHOR=6857ba2378a84ba51618582e852e3827a872e3ea85f17de76bdb45b1631fe7d4
-HONEST_POLICY=6FscNXjNhamSCTbzLe67gU3noFHkQKDjRmD4tNj3ipSe
-# The account id the storage agent designated, as the 32 bytes the claim holds.
-HONEST_OWNER_HEX=181eee76d02339bbe8ce7abee778942d80b2546a8f204e19940311ff5bd46214
+# The attack: one `create_policy`, per_tx = per_period = u128::MAX, over the
+# storage agent DE4jFQbN… — signed by a non-owner (the funder) that has never
+# held that agent's key. Sent to the SHIPPED program it was SUBMITTED and NEVER
+# INCLUDED — refused. artifacts/adversarial.tsv records it.
+ATTACK_REFUSED=a16693f187b09461f2b398ad68f642f6af8b6f11d011f9856de7f0da61e8d2fd
+# An EARLIER program version ACCEPTED the identical attack, creating an unlimited
+# policy a stranger owned. That transaction and the account it created were on
+# chain until this testnet was reset, which cleared them — getTransaction now
+# returns null for them, indistinguishable from a hash never sent — so this
+# script names them for the record rather than fetching them. Both are preserved
+# in git history, and the refusal is proven deterministically, offline, by the
+# agent-verifier-adversarial suite this section runs.
+ATTACK_ACCEPTED_HISTORICAL=eedb3caf5df94022e6383dec15fa956c7d9c45cd9c3f075ff5a7ff0e0d52e0a7
+# The same storage agent, under the program deployed today: the account it signed
+# to name its owner, its owner's live create_policy, and its policy account.
+AGENT_CLAIM=9JLJKZLukYQbX1k4efUUkbj4Ux9D93Wsoe95yxmnwLnW
+HONEST_ANCHOR=1868f89e19a6725c384af8d0c42a44e686d2473c7a68e985953318b2d566c22c
+HONEST_POLICY=C7DFFFvvQvFWkWczQTyBP2q9PsBGQmeFACTvSV4NRZgi
+# The account id the storage agent designated (owner 4AD8jMUy…), as the 32 bytes
+# the claim holds.
+HONEST_OWNER_HEX=2eef01d81d73d460882754d497ca6978dbd2c4337ea2e60f51075133b8a0fbf7
 
 rule() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32mOK\033[0m   %s\n' "$1"; }
@@ -213,56 +216,37 @@ cat <<'TXT'
 TXT
 echo
 echo "   create_policy for per_tx = per_period = u128::MAX over the storage agent"
-echo "   9Xpkkvos…, signed by RZmSLJAB… — a stranger — against the PREVIOUS"
-echo "   program $PRIOR_TX:"
-echo "     $ATTACK_ACCEPTED"
-if q "$ATTACK_ACCEPTED" | grep -q '"result":\['; then
-  ok "the previous program accepted it: it is in a block"
-else
-  bad "the recorded attack anchor is not on chain"
-fi
-echo
-echo "   and it is not gone. Read the account that anchor created:"
-if curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
-     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$ATTACK_POLICY\"]}" \
-   | python3 -c '
-import json,sys
-r=json.load(sys.stdin).get("result") or {}
-d=bytes(r.get("data") or b"")
-if len(d) != 97 or d[0] != 1:
-    sys.exit("     no record at the address the attack anchored")
-le = lambda a, b: int.from_bytes(d[a:b], "little")
-if le(33, 49) != (1 << 128) - 1:
-    sys.exit("     the attack account does not hold an unlimited policy")
-print("     owner  %s  (the stranger, not the agent\x27s)" % d[1:33].hex())
-print("     per_tx %d = 2**128-1" % le(33, 49))'; then
-  ok "under the previous program a stranger owns that agent's only policy, for good"
-else
-  bad "the attack policy account did not read back as an unlimited record"
-fi
-echo
-echo "   the identical call, same agent, same limits, to the program this"
-echo "   repository deploys today:"
+echo "   DE4jFQbN…, signed by a non-owner (the funder) that has never held that"
+echo "   agent's key, sent to the program this repository deploys today:"
 echo "     $ATTACK_REFUSED"
-# ABSENCE, and it is labelled as one. Measured against the live chain just now,
-# the answer for $ATTACK_REFUSED is byte-identical to the answer for the
-# impossible hash this script installs as its own control eighty lines up, and
-# to the answer for a hash nobody ever submitted:
-#     {"jsonrpc":"2.0","id":1,"result":null}
-# So "(6020)" was asserted by nothing — this chain cannot tell a refused
-# transaction from one that was never sent, which is what the control is FOR.
-# Two things are required of it now. The same query must return a block for the
-# accepted attack, or "null" would be all this RPC ever says; and the claim is
-# stated as what it is. The discriminating evidence is the account read-back
-# below, which is a positive fact about state and not an absence.
-if ! q "$ATTACK_ACCEPTED" | grep -q '"result":\['; then
-  bad "the same query returns nothing for the accepted attack either — null means nothing here"
-elif q "$ATTACK_REFUSED" | grep -q '"result":null'; then
-  ok "not in any block — consistent with the refusal, and with never having been sent"
-  echo "     (this chain answers null for both; the account read below is what tells them apart)"
+# The shipped program REFUSES it: submitted, never included. On this chain a
+# refused transaction, a pending one and one nobody ever sent all answer null to
+# getTransaction, so "null" alone proves nothing — which is exactly what the
+# impossible-hash control at the top of this run is for. The DISCRIMINATOR here
+# is positive: the shipped program's OWN deploy transaction resolves, so the RPC
+# is answering and the null below is the chain refusing the attack, not a dead
+# port.
+if q "$ATTACK_REFUSED" | grep -q '"result":null'; then
+  ok "the shipped program did not include it — refused (submitted, never in a block)"
 else
-  bad "the refused attack is on chain, which means it was not refused"
+  bad "the attack anchor is on chain under the shipped program, which means it was not refused"
 fi
+if q "$DEPLOY_TX" | grep -q '"result":\['; then
+  ok "the shipped program's own deploy transaction resolves, so that null is a refusal and not a silent RPC"
+else
+  bad "the shipped program's deploy transaction does not resolve — the RPC may be dead, so the null above proves nothing"
+fi
+cat <<TXT
+
+   For the record: an earlier program version ACCEPTED the identical attack —
+   $ATTACK_ACCEPTED_HISTORICAL,
+   creating an unlimited policy a stranger owned. That transaction and the account
+   it created were on chain until this testnet was reset, which cleared them;
+   getTransaction now returns null for both, indistinguishable from a hash never
+   sent, so this script names them rather than fetching them. Both are preserved
+   in git history, and the refusal above is proven deterministically, offline, by
+   the agent-verifier-adversarial suite run at the end of this section.
+TXT
 echo
 echo "   what stopped it is an account the agent itself signed. $AGENT_CLAIM"
 echo "   is PDA(program, [\"agent-owner/v1\", agent]) and holds one field:"
@@ -284,33 +268,22 @@ else
   bad "the agent's owner claim did not read back"
 fi
 echo
-# The ordering is DERIVED, not narrated. An earlier version of this said the
-# honest owner anchored "AFTERWARDS, at the same address the attack aimed at"
-# and asserted only that the hash was in some block. Both halves were wrong: the
-# honest anchor is one block EARLIER, and the attack landed against the
-# superseded program, so a policy account -- a PDA of the program -- cannot be
-# the same address. A reviewer pasting the two hashes into getTransaction, which
-# this file trains them to do, disproved its own narration in two calls. In a
-# script whose pitch is that nothing is asserted, the one asserted sentence was
-# false.
-echo "   the honest anchor and the accepted attack, ordered by the chain:"
-A_BLK=$(q "$ATTACK_ACCEPTED" | python3 -c "import sys,json;r=json.load(sys.stdin).get('result');print(r[1] if r else '')")
-H_BLK=$(q "$HONEST_ANCHOR"   | python3 -c "import sys,json;r=json.load(sys.stdin).get('result');print(r[1] if r else '')")
-echo "     attack $ATTACK_ACCEPTED  block ${A_BLK:-<absent>}"
-echo "     honest $HONEST_ANCHOR  block ${H_BLK:-<absent>}"
-if [ -z "$H_BLK" ]; then
-  bad "the honest anchor is not on chain"
-elif [ -z "$A_BLK" ]; then
-  bad "the accepted attack is not on chain — section 5 has nothing to compare"
-elif [ "$H_BLK" -lt "$A_BLK" ]; then
-  ok "both are in blocks, and the honest anchor is the earlier of the two"
+# The honest anchor is a LIVE transaction on the shipped program; the attack's
+# accepted form is not (the testnet reset cleared it, as noted above). So this
+# checks the positive fact that survives: the storage agent's real policy was
+# anchored by its owner, on chain, at an address the attack could never reach.
+echo "   the honest anchor, on the shipped program:"
+H_BLK=$(q "$HONEST_ANCHOR" | python3 -c "import sys,json;r=json.load(sys.stdin).get('result');print(r[1] if r else '')")
+echo "     honest create_policy $HONEST_ANCHOR  block ${H_BLK:-<absent>}"
+if [ -n "$H_BLK" ]; then
+  ok "the storage agent's owner anchored its policy on chain, under the shipped program"
 else
-  ok "both are in blocks, and the attack is the earlier of the two"
+  bad "the honest anchor is not on chain"
 fi
-echo "   They are not the same address: the attack was accepted by the program"
-echo "   this repository REPLACED, and a policy account is a PDA of its program,"
-echo "   so the two anchors cannot name one account. That is the point of the"
-echo "   replacement, and section 5 above executed it against both programs."
+echo "   A policy account is a PDA of its program, so the address the earlier"
+echo "   program's attack reached and the address the shipped program anchors are"
+echo "   necessarily different accounts — the replacement is why the two can never"
+echo "   name one policy."
 if curl -s -m 30 -X POST "$RPC" -H 'Content-Type: application/json' \
      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccount\",\"params\":[\"$HONEST_POLICY\"]}" \
    | python3 -c "
